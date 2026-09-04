@@ -119,7 +119,7 @@ body{margin:0;background:var(--surface);color:var(--ink);font-family:Inter,syste
 main{max-width:1180px;margin:0 auto;padding:12px 12px 30px}
 .pill{font-size:11px;font-weight:500;padding:2px 8px;border-radius:8px;display:inline-block;white-space:nowrap}
 .t-self{background:var(--ok-soft);color:var(--ok)}
-.t-library{background:var(--accent-soft);color:var(--accent)}
+.t-library,.t-meme{background:var(--accent-soft);color:var(--accent)}
 .t-youtube,.t-social,.t-retry,.t-vision{background:var(--warn-soft);color:var(--warn)}
 .s-Clipsready{background:var(--ok-soft);color:var(--ok)}
 .s-Linksonly{background:var(--warn-soft);color:var(--warn)}
@@ -181,7 +181,7 @@ function tierOf(row, clipName){
   return m?m[1]:null;
 }
 function tierPill(t){
-  const label={self:'from the reel',library:'from your library',youtube:'from YouTube',social:'from TikTok/IG',retry:'retry search',vision:'vision-verified'}[t]||t;
+  const label={self:'from the reel',library:'from your library',meme:'from Giphy/Tenor',youtube:'from YouTube',social:'from TikTok/IG',retry:'retry search',vision:'vision-verified'}[t]||t;
   return t?`<span class="pill t-${t}">${label}</span>`:'';
 }
 function statusPill(s){return `<span class="pill s-${(s||'').replace(/ /g,'')}">${esc(s)}</span>`}
