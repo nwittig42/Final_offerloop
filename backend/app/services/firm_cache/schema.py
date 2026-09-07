@@ -499,7 +499,7 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
     last = (contact.get("LastName") or contact.get("lastName") or "").strip()
     name = f"{first} {last}".strip()
 
-    return {
+    doc = {
         "linkedin_id":     slug,
         "linkedin_url":    canon_url,
         "pdl_id":          (contact.get("pdlId") or "").strip(),
@@ -524,6 +524,44 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
         "photo_url":       (contact.get("PhotoUrl") or contact.get("photo_url") or "").strip(),
         # last_seen_at is stamped by writer.py with SERVER_TIMESTAMP
     }
+
+    # Verified work email (2026-09-07). Until now only the app's reveal step
+    # wrote work_email onto the shared doc; the website Find, the MCP server
+    # and the extension found addresses and dropped them here, so every
+    # surface re-paid FullEnrich for the same person. The reseller agreement
+    # allows serving a cached verified address to later students for 90 days,
+    # and the nightly purge removes anything older. Only VERIFIED addresses
+    # are shared (never guesses), and the keys are added only when present so
+    # the merge=True upsert never blanks a fresher value already on the doc.
+    verified_email = _verified_work_email(contact)
+    if verified_email:
+        doc["work_email"] = verified_email
+        doc["work_email_source"] = (contact.get("EmailSource") or "verified").strip()
+        doc["work_email_verified_at"] = _utc_now_iso()
+    return doc
+
+
+# Email sources whose addresses are verified before they reach a contact
+# dict. Anything else (pattern guesses, Hunter risky, catch-alls) stays
+# per-user and never lands on the shared shelf.
+_VERIFIED_EMAIL_SOURCES = frozenset({
+    "fullenrich_backfill", "fullenrich", "fullenrich_prefetch", "warehouse",
+})
+
+
+def _verified_work_email(contact: dict) -> str:
+    email = (contact.get("WorkEmail") or contact.get("Email") or "").strip().lower()
+    if not email or "@" not in email or email == "not available":
+        return ""
+    source = (contact.get("EmailSource") or "").strip().lower()
+    if contact.get("EmailVerified") is True or source in _VERIFIED_EMAIL_SOURCES:
+        return email
+    return ""
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 # Two-letter US state postal codes + DC. Anything else → treat as non-US

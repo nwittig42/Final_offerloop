@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.extensions import get_db
@@ -146,12 +147,45 @@ def _snap_to_dict(snap) -> dict:
 # ── App-shape contact conversion ─────────────────────────────────────────
 
 
+# Shared verified work emails live on the doc for this long (the app's reveal
+# step and the nightly purge use the same number). Same env knob as ranker.py.
+_EMAIL_TTL_DAYS = int(os.environ.get("WAREHOUSE_EMAIL_TTL_DAYS", "90"))
+
+
+def _warehouse_email(doc: dict) -> str:
+    """The doc's shared verified work email if it is still inside the TTL,
+    else "". Timestamps arrive as ISO strings (ranker.py, schema.py) or as
+    Firestore datetimes; anything unparseable counts as expired."""
+    email = (doc.get("work_email") or "").strip().lower()
+    if not email or "@" not in email:
+        return ""
+    stamp = doc.get("work_email_verified_at")
+    ts = None
+    if isinstance(stamp, datetime):
+        ts = stamp
+    elif isinstance(stamp, str) and stamp:
+        try:
+            ts = datetime.fromisoformat(stamp.rstrip("Z"))
+        except ValueError:
+            ts = None
+    if ts is None:
+        return ""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - ts).total_seconds()
+    return email if 0 <= age <= _EMAIL_TTL_DAYS * 86400 else ""
+
+
 def firm_employee_doc_to_app_contact(doc: dict) -> dict:
     """Convert a firm_employees doc back into the App-shape contact dict
     that runs.py + downstream email/draft/save code expects.
 
-    Fields the cache doesn't carry get sane defaults:
-      - Email: ""             (cache doesn't store PII we can recompute)
+    Email (2026-09-07): when the doc carries a shared verified work_email
+    inside the TTL, it rides out as Email/WorkEmail with
+    EmailSource="warehouse" and EmailVerified=True, so every surface's
+    email pass skips this person instead of paying FullEnrich again.
+    Otherwise the old defaults hold:
+      - Email: ""
       - EmailSource: "cache_no_email"
       - EmailVerified: False
       - EmailConfidenceScore: 0
@@ -163,12 +197,13 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
     company_display = doc.get("company_display") or ""
     title_display = doc.get("headline") or ""
     schools_display = doc.get("schools_display") or []
+    wh_email = _warehouse_email(doc)
     return {
         "pdlId":              doc.get("pdl_id") or "",
         "FirstName":          doc.get("first_name") or "",
         "LastName":           doc.get("last_name") or "",
         "LinkedIn":           doc.get("linkedin_url") or "",
-        "Email":              "",
+        "Email":              wh_email,
         "Title":              title_display,
         "Company":            company_display,
         "City":               doc.get("city") or "",
@@ -176,7 +211,7 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
         "College":            schools_display[0] if schools_display else "",
         "Phone":              "",
         "PersonalEmail":      "",
-        "WorkEmail":          "",
+        "WorkEmail":          wh_email,
         "SocialProfiles":     f"LinkedIn: {doc.get('linkedin_url') or ''}" if doc.get("linkedin_url") else "Not available",
         "EducationTop":       "; ".join(schools_display) if schools_display else "Not available",
         "VolunteerHistory":   "Not available",
@@ -184,9 +219,9 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
         "Group":              f"{company_display} {title_display.split()[0] if title_display else 'Professional'} Team",
         "LinkedInConnections": 0,
         "DataVersion":        "firm_cache",
-        "EmailSource":        "cache_no_email",
-        "EmailVerified":      False,
-        "EmailConfidenceScore": 0,
+        "EmailSource":        "warehouse" if wh_email else "cache_no_email",
+        "EmailVerified":      bool(wh_email),
+        "EmailConfidenceScore": 95 if wh_email else 0,
         "IsCurrentlyAtTarget": True,  # We only cached them as current — safe default
         # Provenance / observability
         "source":             "firm_cache",
