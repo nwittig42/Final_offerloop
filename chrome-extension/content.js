@@ -20,6 +20,37 @@ function getLinkedInProfileUrl() {
   return match ? match[0] : url.split('?')[0].split('#')[0];
 }
 
+// Current company from the profile page DOM. Best effort, never throws.
+function getProfileCurrentCompany() {
+  try {
+    const btn = document.querySelector('button[aria-label^="Current company"]');
+    if (btn) {
+      const fromLabel = (btn.getAttribute('aria-label') || '').split(':').slice(1).join(':').trim();
+      const clean = fromLabel.replace(/\.\s*Click to skip to experience section$/i, '').trim();
+      if (clean) return clean;
+      const txt = (btn.textContent || '').trim();
+      if (txt) return txt;
+    }
+    const exp = document.querySelector('#experience');
+    const section = exp ? exp.closest('section') : null;
+    if (section) {
+      // First experience entry: the company is the second visible line, or
+      // the first when the entry groups several roles under one company.
+      const lines = Array.from(section.querySelectorAll('li span[aria-hidden="true"]'))
+        .map((s) => (s.textContent || '').trim())
+        .filter(Boolean);
+      if (lines.length >= 2) {
+        const second = lines[1].split(/\s+[·•]\s+/)[0].trim();
+        if (second && !/^\d/.test(second)) return second;
+      }
+      if (lines.length) return lines[0];
+    }
+  } catch (e) {
+    console.warn('[Offerloop] company scrape failed:', e);
+  }
+  return '';
+}
+
 // Show toast notification
 function showToast(message, type = 'info') {
   // Remove existing toast
@@ -773,6 +804,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   
+  // Current company of the profile on screen, for the panel's "Also at
+  // this company" list. LinkedIn's top card carries it as a button whose
+  // aria-label reads "Current company: Hallmark Media"; the first entry of
+  // the Experience section is the fallback. Empty string when neither is
+  // present (the panel then simply shows nothing extra).
+  if (request.action === 'getProfileCompany') {
+    sendResponse({ company: isLinkedInProfilePage() ? getProfileCurrentCompany() : '' });
+    return true;
+  }
+
   // Handle job description scraping (for Cover Letter)
   if (request.action === 'scrapeJobDescription') {
     const description = scrapeJobDescription();

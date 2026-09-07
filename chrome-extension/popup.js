@@ -12,7 +12,7 @@ const DEV_BYPASS_AUTH = false;
 // ⚠️ DEV ONLY — paste a fresh Firebase ID token here to authenticate without OAuth.
 // Grab it from www.offerloop.ai (Network tab → any /api request → Authorization: Bearer <token>).
 // Expires ~1 hour; replace it when API calls start returning 401. Set to '' to disable.
-const DEV_TOKEN = '';
+const DEV_TOKEN = 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImIyNDg2Mzc0OTVjYjM4N2U0OWViNmRlMThkZjk5N2VlOGU1YWUyOTciLCJ0eXAiOiJKV1QifQ.eyJuYW1lIjoiU2lkIEJhbmRpIiwicGljdHVyZSI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xGWXVmZEt3ZXRDZGxIcnhzbm5jMjcxNllfUUVhb3Z4T1p4R1oxQUI4QWgtaHVEUT1zOTYtYyIsImlzcyI6Imh0dHBzOi8vc2VjdXJldG9rZW4uZ29vZ2xlLmNvbS9vZmZlcmxvb3AtbmF0aXZlIiwiYXVkIjoib2ZmZXJsb29wLW5hdGl2ZSIsImF1dGhfdGltZSI6MTc4NDE1NTkwMSwidXNlcl9pZCI6IlFBSzRIcHZiZ05TV3lPMHhhZDRDYUhrNUZrWDIiLCJzdWIiOiJRQUs0SHB2YmdOU1d5TzB4YWQ0Q2FIazVGa1gyIiwiaWF0IjoxNzg0NzU2NzYyLCJleHAiOjE3ODQ3NjAzNjIsImVtYWlsIjoic2lkQG9mZmVybG9vcC5haSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJmaXJlYmFzZSI6eyJpZGVudGl0aWVzIjp7Imdvb2dsZS5jb20iOlsiMTExMTE4Mzc0NTAyOTU2OTc0MDkxIl0sImVtYWlsIjpbInNpZEBvZmZlcmxvb3AuYWkiXX0sInNpZ25faW5fcHJvdmlkZXIiOiJnb29nbGUuY29tIn19.gjf45o7FvLSMcccik8jzqat8LnRW74MiGl68x4xDQv6NXy3xdYvakP0yrpS991tPgqN233k4KaM1Nh7crZ7yg9tl_ZPypJIlKZTV-S8cy0U80tTGBU1DzHFMhdjh26c8AuEcmMO4NUAdiPrsottebQvHSZbQ3XXtX3-7ENqTraPIDktXShHKSJbtCCl0dcz3SQPRI8h55XIa6l62CQUhVoiRNveiAa8088p0DtXrjJgXNsVo5mNSd_yCeZCVa7pSY2ngI6xNk2cTwjs9i-gyGhWzkq_m29baeyiIFQ-YmLP5WvG7zuV5IrC2bXuSjPRLW4HxabKRbeK50CzlQ7Jvmg';
 
 // Shared job URL patterns — used by detectMode() and isJobUrl()
 const JOB_URL_PATTERNS = [
@@ -740,6 +740,7 @@ function initJobTabListeners() {
 const elements = {
   loginSection: null,
   noProfileSection: null,
+  companySection: null,
   profileSection: null,
   loginBtn: null,
   signOutBtn: null,
@@ -774,6 +775,7 @@ let currentState = {
 function initElements() {
   elements.loginSection = document.getElementById('loginSection');
   elements.noProfileSection = document.getElementById('noProfileSection');
+  elements.companySection = document.getElementById('companySection');
   elements.profileSection = document.getElementById('profileSection');
   elements.loginBtn = document.getElementById('loginBtn');
   elements.signOutBtn = document.getElementById('signOutBtn');
@@ -1167,8 +1169,9 @@ async function handleRetry() {
 function showSection(sectionName) {
   elements.loginSection?.classList.add('hidden');
   elements.noProfileSection?.classList.add('hidden');
+  elements.companySection?.classList.add('hidden');
   elements.profileSection?.classList.add('hidden');
-  
+
   switch (sectionName) {
     case 'login':
       elements.loginSection?.classList.remove('hidden');
@@ -1176,6 +1179,10 @@ function showSection(sectionName) {
       break;
     case 'noProfile':
       elements.noProfileSection?.classList.remove('hidden');
+      elements.signOutBtn?.classList.remove('hidden');
+      break;
+    case 'company':
+      elements.companySection?.classList.remove('hidden');
       elements.signOutBtn?.classList.remove('hidden');
       break;
     case 'profile':
@@ -1237,6 +1244,13 @@ function showResults(contact) {
 
   // Show success links section
   elements.successLinksSection?.classList.remove('hidden');
+
+  // Point Open Email Draft at the actual draft URL the backend returned,
+  // not the generic /#drafts folder that was hardcoded in sidepanel.html.
+  const draftUrl = contact.gmail_draft_url || contact.gmailDraftUrl || contact.draft_url;
+  if (elements.openDraftLink && draftUrl) {
+    elements.openDraftLink.href = draftUrl;
+  }
 
   // Capture source for the "Find similar" disclosure and reset its state on
   // every new result so an old company's rows never bleed across contacts.
@@ -1450,6 +1464,7 @@ async function handleFindEmail() {
       company: contact.company,
       jobTitle: contact.jobTitle || contact.title,
       draft_url: response.draft_url || contact.draft_url,
+      gmail_draft_url: response.gmail_draft_url || contact.gmail_draft_url,
       gmailDraftUrl: response.gmailDraftUrl,
     });
     
@@ -1493,14 +1508,42 @@ async function checkLinkedInProfile() {
   return { isProfilePage: false, linkedInUrl: null };
 }
 
+// A LinkedIn company page (linkedin.com/company/<slug>/...). The display
+// name comes from the tab title ("Hallmark Media: Overview | LinkedIn",
+// sometimes prefixed with a "(3)" notification count); the slug is the
+// fallback when the title has not settled yet.
+function parseCompanyFromTab(tab) {
+  const url = (tab && tab.url) || '';
+  const m = url.match(/linkedin\.com\/company\/([^/?#]+)/i);
+  if (!m) return null;
+  const slug = decodeURIComponent(m[1]);
+  let name = (tab.title || '')
+    .replace(/^\(\d+\)\s*/, '')
+    .replace(/\s*\|\s*LinkedIn\s*$/i, '')
+    .split(':')[0]
+    .trim();
+  if (!name || /^linkedin$/i.test(name)) {
+    name = slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return { slug, name };
+}
+
 // Check auth state and show appropriate content
 async function checkAndShowContent() {
   // Check if on LinkedIn profile
   const { isProfilePage, linkedInUrl } = await checkLinkedInProfile();
   currentState.isProfilePage = isProfilePage;
   currentState.linkedInUrl = linkedInUrl;
-  
+
   if (!isProfilePage) {
+    // Company page: list the people first, email on demand per row.
+    const company = parseCompanyFromTab(await getCurrentTab());
+    if (company) {
+      console.log('[Offerloop Popup] On LinkedIn company page:', company.name);
+      showSection('company');
+      await loadCompanyPeople(company);
+      return;
+    }
     console.log('[Offerloop Popup] Not on LinkedIn profile');
     showSection('noProfile');
     return;
@@ -1508,12 +1551,16 @@ async function checkAndShowContent() {
   
   console.log('[Offerloop Popup] On LinkedIn profile:', linkedInUrl);
   showSection('profile');
-  
+
   // Update UI with LinkedIn URL
   if (elements.profileUrl && linkedInUrl) {
     const displayUrl = linkedInUrl.replace('https://www.linkedin.com', 'linkedin.com').replace('https://linkedin.com', 'linkedin.com');
     elements.profileUrl.textContent = displayUrl;
   }
+
+  // People at this person's company, listed before any email is bought.
+  // Fire and forget: the credits fetch below must not wait on it.
+  getCurrentTab().then((tab) => loadProfileCompanyPeople(tab)).catch(() => {});
   
   // Fetch credits from backend (with cache to avoid redundant calls)
   if (currentState.authToken) {
@@ -1879,9 +1926,13 @@ function buildSimilarRowEl(row) {
 
   el.append(avatar, who);
 
-  // Action: existing email → pill link; otherwise lazy "Find email" button
+  // Action: existing email → pill link + draft button; otherwise lazy "Find email"
   if (row.email) {
-    el.appendChild(buildEmailPill(row.email));
+    const actions = document.createElement('div');
+    actions.className = 'similar-row__actions';
+    actions.appendChild(buildEmailPill(row.email));
+    actions.appendChild(buildDraftBtn(row));
+    el.appendChild(actions);
   } else {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -1892,6 +1943,77 @@ function buildSimilarRowEl(row) {
   }
 
   return el;
+}
+
+function buildDraftBtn(row) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'similar-row__action similar-row__action--draft';
+  btn.textContent = 'Draft';
+  btn.addEventListener('click', () => draftForRow(row, btn));
+  return btn;
+}
+
+function normalizeLinkedInUrl(raw) {
+  if (!raw) return '';
+  let u = String(raw).trim();
+  // Bare slug like "michael-foster" → wrap into full URL
+  if (!u.includes('/') && !u.includes('.')) {
+    u = 'https://www.linkedin.com/in/' + u;
+  }
+  // Strip protocol-relative "//"
+  u = u.replace(/^\/\//, 'https://');
+  // Add protocol if missing
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  // Ensure www. prefix on linkedin.com
+  u = u.replace(/^(https?:\/\/)(?!www\.)linkedin\.com/i, '$1www.linkedin.com');
+  // Drop query + fragment
+  u = u.split('?')[0].split('#')[0];
+  // Drop trailing slash
+  u = u.replace(/\/+$/, '');
+  return u;
+}
+
+async function draftForRow(row, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Drafting…';
+  const rawUrl = row.linkedinUrl || row.linkedin_url || row.profileUrl || row.profile_url || '';
+  const linkedInUrl = normalizeLinkedInUrl(rawUrl);
+  console.log('[Offerloop Popup] Draft click — row:', row, 'raw URL:', rawUrl, 'normalized:', linkedInUrl);
+  if (!linkedInUrl || !/linkedin\.com\/in\//i.test(linkedInUrl)) {
+    console.warn('[Offerloop Popup] Draft click — no usable LinkedIn URL:', row);
+    btn.disabled = false;
+    btn.textContent = 'No URL';
+    btn.title = `Row has no usable LinkedIn URL (raw: ${JSON.stringify(rawUrl)})`;
+    return;
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'importLinkedIn',
+      linkedInUrl,
+      authToken: currentState.authToken,
+    });
+    console.log('[Offerloop Popup] Draft response:', response);
+    if (!response || response.error) {
+      throw new Error((response && response.error) || 'Draft failed (empty response)');
+    }
+    if (response.credits_remaining !== undefined) {
+      updateCredits(response.credits_remaining);
+      currentState.credits = response.credits_remaining;
+      chrome.storage.local.set({ credits: response.credits_remaining });
+    }
+    const draftUrl = response.gmail_draft_url || 'https://mail.google.com/mail/u/0/#drafts';
+    chrome.tabs.create({ url: draftUrl });
+    btn.textContent = 'Opened ✓';
+    setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 2000);
+  } catch (e) {
+    console.error('[Offerloop Popup] per-row draft error:', e);
+    btn.disabled = false;
+    btn.textContent = 'Failed';
+    btn.title = e.message || String(e);
+    setTimeout(() => { btn.textContent = original; btn.removeAttribute('title'); }, 5000);
+  }
 }
 
 function buildEmailPill(email) {
@@ -1953,6 +2075,150 @@ async function findEmailForRow(row, btn, rowEl) {
 document.addEventListener('DOMContentLoaded', () => {
   const toggle = _getSimilarEl('similarToggleBtn');
   toggle?.addEventListener('click', toggleSimilarSection);
+});
+
+// ============================================
+// COMPANY MODE: people first, email on demand
+// ============================================
+// On a LinkedIn company page the panel lists people at that company before
+// anyone pays for an email. Browsing is free (the backend serves the
+// warehouse first); each row's Find email button runs the same
+// import-linkedin path the profile page uses, charged only when an address
+// lands. Rows reuse the similar-row renderer, so Draft appears as soon as a
+// row has an email.
+
+// Two lists share this code: the company page ("company" prefix, ids
+// companyName / companyLoading / ...) and the profile page's "Also at"
+// block ("profileCompany" prefix). State is kept per prefix.
+const companyState = {
+  company: { key: null, rows: [] },
+  profileCompany: { key: null, rows: [] },
+};
+
+function _companyEl(prefix, suffix) {
+  return document.getElementById(prefix + suffix);
+}
+
+async function loadCompanyPeople(company, prefix = 'company') {
+  const state = companyState[prefix] || (companyState[prefix] = { key: null, rows: [] });
+  const nameEl = _companyEl(prefix, 'Name');
+  const loading = _companyEl(prefix, 'Loading');
+  const results = _companyEl(prefix, 'Results');
+  const empty = _companyEl(prefix, 'Empty');
+  const error = _companyEl(prefix, 'Error');
+  const footer = _companyEl(prefix, 'FooterLink');
+  const key = company.slug || company.name;
+
+  if (nameEl) nameEl.textContent = company.name;
+  const emptyCompanyEl = empty?.querySelector('span');
+  if (emptyCompanyEl) emptyCompanyEl.textContent = company.name;
+  if (footer) {
+    footer.href = `https://www.offerloop.ai/find?tab=people&company=${encodeURIComponent(company.name)}`;
+    const footerCompanyEl = footer.querySelector('.similar-footer-link__company');
+    if (footerCompanyEl) footerCompanyEl.textContent = company.name;
+  }
+
+  // Same company, rows already loaded (the user moved between the About,
+  // Posts and People tabs): keep what we have, no second request.
+  if (state.key === key && state.rows.length) {
+    renderCompanyRows(state.rows, prefix);
+    return;
+  }
+
+  state.key = key;
+  state.rows = [];
+  results?.classList.add('hidden');
+  empty?.classList.add('hidden');
+  error?.classList.add('hidden');
+  if (results) results.innerHTML = '';
+  loading?.classList.remove('hidden');
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'companyPeople',
+      company: company.name,
+      authToken: currentState.authToken,
+    });
+    loading?.classList.add('hidden');
+    if (state.key !== key) return; // the user moved on
+
+    if (!response || response.error) {
+      if (error) {
+        error.textContent = (response && response.error) || 'Could not load people here. Try again.';
+        error.classList.remove('hidden');
+      }
+      return;
+    }
+    if (response.credits_remaining !== undefined && response.credits_remaining !== null) {
+      updateCredits(response.credits_remaining);
+      chrome.storage.local.set({ credits: response.credits_remaining });
+    }
+    state.rows = response.contacts || [];
+    if (state.rows.length === 0) {
+      empty?.classList.remove('hidden');
+      return;
+    }
+    renderCompanyRows(state.rows, prefix);
+  } catch (e) {
+    console.error('[Offerloop Popup] company-people error:', e);
+    loading?.classList.add('hidden');
+    if (error) {
+      error.textContent = e.message || 'Could not load people here. Try again.';
+      error.classList.remove('hidden');
+    }
+  }
+}
+
+function renderCompanyRows(rows, prefix = 'company') {
+  const results = _companyEl(prefix, 'Results');
+  if (!results) return;
+  results.innerHTML = '';
+  // No bucket caption on company rows: the header already says where they work.
+  rows.forEach((row) => results.appendChild(buildSimilarRowEl({ ...row, category: '' })));
+  results.classList.remove('hidden');
+}
+
+// Profile page: ask the content script which company the person works at,
+// then list their colleagues under the action buttons. The person on screen
+// is excluded server-side once they are in the tracker; before that they may
+// appear in their own list, which is harmless. Quiet on any failure.
+async function loadProfileCompanyPeople(tab) {
+  const block = document.getElementById('profileCompanySection');
+  if (!block) return;
+  block.classList.add('hidden');
+  if (!tab?.id || !currentState.authToken) return;
+  let company = '';
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileCompany' });
+    company = ((res && res.company) || '').trim();
+  } catch (e) {
+    // Content script not ready on this page yet; nothing to show.
+    return;
+  }
+  if (!company) return;
+  block.classList.remove('hidden');
+  await loadCompanyPeople({ slug: company.toLowerCase(), name: company }, 'profileCompany');
+}
+
+// Side panel stays open across tab switches — unlike a popup which reinits every
+// open — so we have to actively re-detect the active tab when the user navigates.
+async function reactToActiveTabChange() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.url) {
+      switchTab(detectMode(tab.url));
+    }
+    if (currentState.isLoggedIn) {
+      await checkAndShowContent();
+    }
+  } catch (error) {
+    console.error('[Offerloop Popup] Tab change handler error:', error);
+  }
+}
+
+chrome.tabs.onActivated.addListener(reactToActiveTabChange);
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (changeInfo.url && tab.active) reactToActiveTabChange();
 });
 
 // Start initialization when DOM is ready

@@ -38,20 +38,22 @@
   --card-edge: #E8E1D5;
   --card-edge-strong: #D4CEC7;
 
-  /* Navy "popup chrome" — the dark deck the white cards float on */
-  --chrome: #1E2D4D;
-  --chrome-strong: #16223D;
-  --chrome-soft: #2B3A6B;
-  --chrome-edge: rgba(255, 255, 255, 0.10);
-  --chrome-ink: rgba(255, 255, 255, 0.94);
-  --chrome-ink-muted: rgba(255, 255, 255, 0.62);
+  /* Vibrant blue "popup chrome" — the bright deck the white cards float on */
+  --chrome: #2E6BE6;
+  --chrome-strong: #2C5BD6;
+  --chrome-soft: #5A93F2;
+  --chrome-gradient: linear-gradient(105deg, #2150C8 0%, #2E6BE6 48%, #5A8FF0 100%);
+  --chrome-gradient-strong: linear-gradient(105deg, #1C46AE 0%, #285FD0 48%, #4C82E8 100%);
+  --chrome-edge: rgba(255, 255, 255, 0.18);
+  --chrome-ink: rgba(255, 255, 255, 0.96);
+  --chrome-ink-muted: rgba(255, 255, 255, 0.72);
 
-  /* Ink */
-  --ink: #16181F;
-  --ink-muted: #4F5A6E;
-  --ink-soft: #7C8598;
-  --ink-faint: #AEB4C0;
-  --heading: #1E2D4D;            /* serif headline ink */
+  /* Ink — all text black per design */
+  --ink: #000000;
+  --ink-muted: #1A1A1A;
+  --ink-soft: #333333;
+  --ink-faint: #555555;
+  --heading: #000000;            /* serif headline ink */
 
   /* Slate-blue (the Offerloop brand) */
   --indigo-foam: #EEF1F9;
@@ -62,6 +64,11 @@
   --indigo-600: #3C4F8E;
   --indigo-700: #34457A;
   --indigo-800: #2B3A6B;
+
+  /* Light-blue button surface (all buttons share this) */
+  --btn-blue: #D3E4FC;
+  --btn-blue-hover: #C2D8FA;
+  --btn-blue-edge: #A9C7F0;
 
   /* Action accent — warm orange (the highest-intent CTA, e.g. "Find Email & Draft") */
   --action: #E07A3E;
@@ -125,13 +132,16 @@
 }
 
 html, body {
-  width: 350px;
+  width: 100%;
+  min-width: 320px;
+  height: 100%;
+  background: transparent;
 }
 
 body {
-  min-height: 440px;
+  min-height: 100vh;
   font-family: var(--font-body);
-  background: var(--chrome);
+  background: transparent;
   color: var(--ink);
   font-size: 14px;
   line-height: 1.45;
@@ -139,14 +149,22 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "ss01", "cv11", "kern";
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .container {
   display: flex;
   flex-direction: column;
-  min-height: 440px;
-  background: var(--chrome);
+  min-height: 100vh;
+  /* Watercolor wash (baby blue + lavender) with faint paper grain on top */
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E"),
+    radial-gradient(125% 80% at 12% 16%, rgba(173, 193, 234, 0.45) 0%, transparent 55%),
+    radial-gradient(110% 70% at 90% 10%, rgba(205, 199, 233, 0.40) 0%, transparent 55%),
+    radial-gradient(130% 95% at 50% 102%, rgba(188, 208, 238, 0.50) 0%, transparent 62%),
+    radial-gradient(95% 65% at 82% 78%, rgba(214, 226, 246, 0.45) 0%, transparent 60%),
+    #F2F6FD;
 }
 
 .hidden { display: none !important; }
@@ -157,10 +175,9 @@ body {
 
 .header {
   position: relative;
-  padding: 26px 20px 22px;
-  background: #FFFFFF;
-  border-bottom: 1px solid var(--silver-100);
-  color: var(--heading);
+  padding: 14px 18px;
+  background: var(--chrome-gradient);
+  color: #FFFFFF;
   overflow: hidden;
 }
 
@@ -196,13 +213,13 @@ body {
   justify-content: center;
 }
 
-.brand__wordmark {
-  height: 64px;
-  width: auto;
-  max-width: 100%;
+.brand__logo {
+  width: 210px;
+  max-width: 88%;
+  height: auto;
   object-fit: contain;
-  transform: scale(1.32);
-  transform-origin: center;
+  /* dark wordmark → render white so it reads on the blue header */
+  filter: brightness(0) invert(1);
 }
 
 /* ============================================================
@@ -211,9 +228,10 @@ body {
 
 .tab-switcher {
   display: flex;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--chrome-edge);
-  padding: 0 12px;
+  gap: 8px;
+  background: transparent;
+  border-bottom: 1px solid rgba(80, 100, 150, 0.10);
+  padding: 12px 14px;
   position: relative;
 }
 
@@ -223,43 +241,35 @@ body {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 13px 10px 11px;
-  background: none;
+  padding: 10px 10px;
+  background: transparent;
   border: none;
+  border-radius: 10px;
   font-family: var(--font-body);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.005em;
-  color: var(--chrome-ink-muted);
+  color: #5B6472;
   cursor: pointer;
   position: relative;
-  transition: color 180ms var(--ease-out);
+  transition: color 180ms var(--ease-out), background 180ms var(--ease-out);
 }
 
 .tab__icon {
   width: 15px;
   height: 15px;
-  opacity: 0.7;
+  opacity: 0.85;
   transition: opacity 180ms var(--ease-out);
 }
 
-.tab:hover { color: var(--chrome-ink); }
-.tab:hover .tab__icon { opacity: 0.95; }
+.tab:hover { color: #2B3340; }
+.tab:hover .tab__icon { opacity: 1; }
 
-.tab.active { color: var(--chrome-ink); }
-.tab.active .tab__icon { opacity: 1; }
-
-.tab.active::after {
-  content: '';
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: -1px;
-  height: 2px;
-  background: #FFFFFF;
-  border-radius: 2px 2px 0 0;
-  animation: tab-slide 240ms var(--ease-spring);
+.tab.active {
+  background: var(--chrome-gradient);
+  color: #FFFFFF;
 }
+.tab.active .tab__icon { opacity: 1; }
 
 @keyframes tab-slide {
   from { transform: scaleX(0); opacity: 0; }
@@ -275,7 +285,7 @@ body {
   padding: 18px 18px 22px;
   display: flex;
   flex-direction: column;
-  background: var(--chrome);
+  background: transparent;
 }
 
 .tab-content { display: block; }
@@ -306,8 +316,10 @@ body {
    ============================================================ */
 
 .state-card {
-  background: var(--card);
-  border: 1px solid var(--card-edge);
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
   border-radius: var(--radius-lg);
   padding: 28px 20px 22px;
   text-align: center;
@@ -382,7 +394,7 @@ body {
   position: relative;
   width: 34px;
   height: 34px;
-  color: var(--indigo-600);
+  color: #000000;
 }
 
 .state-card__icon--linkedin {
@@ -400,7 +412,7 @@ body {
 
 .state-card__title em {
   font-style: italic;
-  color: var(--indigo-500);
+  color: #000000;
   font-weight: 600;
 }
 
@@ -417,8 +429,10 @@ body {
    ============================================================ */
 
 .profile-card {
-  background: var(--card);
-  border: 1px solid var(--card-edge);
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
   border-radius: var(--radius-lg);
   padding: 11px 14px 12px;
   box-shadow: var(--shadow-rest);
@@ -484,7 +498,7 @@ body {
 
 .scout-strip__text em {
   font-style: italic;
-  color: var(--indigo-500);
+  color: #000000;
 }
 
 .profile-card__row {
@@ -573,67 +587,69 @@ body {
   transform: translateX(130%);
 }
 
-/* Primary — slate-blue brand */
+/* Primary — solid blue, white text */
 .btn-primary {
-  background: linear-gradient(135deg, var(--indigo-500) 0%, var(--indigo-700) 100%);
-  color: white;
-  box-shadow: var(--shadow-hero), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  background: var(--chrome-gradient);
+  color: #FFFFFF;
+  box-shadow: 0 4px 12px rgba(46, 107, 230, 0.28);
 }
 
 .btn-primary:hover:not(:disabled) {
+  background: var(--chrome-gradient-strong);
   transform: translateY(-2px);
-  box-shadow: var(--shadow-hero-hover), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 18px rgba(46, 107, 230, 0.34);
 }
 
-/* Action — the warm orange CTA, for the highest-intent move */
+/* Action — solid blue, white text (the "Find Email & Draft" CTA) */
 .btn-action {
-  background: linear-gradient(135deg, var(--action-light) 0%, var(--action) 52%, var(--action-dark) 100%);
-  color: white;
-  box-shadow: var(--shadow-action), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  background: var(--chrome-gradient);
+  color: #FFFFFF;
+  box-shadow: 0 4px 12px rgba(46, 107, 230, 0.28);
 }
 
 .btn-action:hover:not(:disabled) {
+  background: var(--chrome-gradient-strong);
   transform: translateY(-2px);
-  box-shadow: var(--shadow-action-hover), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+  box-shadow: 0 8px 18px rgba(46, 107, 230, 0.34);
 }
 
-/* Secondary — crisp white, elevated, clear slate edge so it reads as a real button */
+/* Secondary — white with blue text + blue outline (the "Coffee Chat Prep" button) */
 .btn-outline {
-  background: var(--card);
-  color: var(--indigo-700);
-  border: 1.5px solid var(--indigo-200);
-  box-shadow: 0 2px 8px rgba(74, 96, 168, 0.10), 0 1px 2px rgba(40, 34, 22, 0.04);
+  background: #FFFFFF;
+  color: var(--chrome);
+  border: 1.5px solid #CDDDF7;
+  box-shadow: 0 1px 3px rgba(46, 107, 230, 0.08);
 }
 
 .btn-outline:hover:not(:disabled) {
-  background: var(--indigo-foam);
-  border-color: var(--indigo-300);
+  background: #F4F8FF;
+  border-color: #B5CCF2;
   transform: translateY(-2px);
-  box-shadow: 0 8px 18px rgba(74, 96, 168, 0.18), 0 2px 5px rgba(74, 96, 168, 0.10);
+  box-shadow: 0 6px 14px rgba(46, 107, 230, 0.14);
 }
 
-/* Secondary — neutral */
+/* Secondary — white with blue outline */
 .btn-secondary {
-  background: var(--silver-50);
-  color: var(--ink);
-  border: 1px solid var(--card-edge);
+  background: #FFFFFF;
+  color: var(--chrome);
+  border: 1.5px solid #CDDDF7;
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: var(--silver-100);
-  border-color: var(--card-edge-strong);
+  background: #F4F8FF;
+  border-color: #B5CCF2;
 }
 
-/* Google sign-in */
+/* Google sign-in — solid blue, white text */
 .btn-google {
-  background: var(--card);
-  color: var(--ink);
-  border: 1.5px solid var(--card-edge);
+  background: var(--chrome-gradient);
+  color: #FFFFFF;
+  border: none;
   padding: 12px 16px;
 }
 
 .btn-google:hover:not(:disabled) {
-  border-color: var(--card-edge-strong);
+  background: var(--chrome-gradient-strong);
   box-shadow: var(--shadow-rise);
   transform: translateY(-1px);
 }
@@ -675,7 +691,7 @@ body {
 .btn-outline.loading::after,
 .btn-secondary.loading::after,
 .btn-google.loading::after {
-  border-color: var(--indigo-500);
+  border-color: #000000;
   border-top-color: transparent;
 }
 
@@ -804,7 +820,7 @@ body {
 .result-card__meta {
   font-size: 11.5px;
   font-weight: 500;
-  color: var(--indigo-600);
+  color: #000000;
   letter-spacing: 0.002em;
 }
 
@@ -918,7 +934,7 @@ body {
 .result-action__icon {
   width: 17px;
   height: 17px;
-  color: var(--indigo-600);
+  color: #000000;
   flex-shrink: 0;
 }
 
@@ -940,17 +956,17 @@ body {
 }
 
 .result-action:hover .result-action__chevron {
-  color: var(--indigo-600);
+  color: #000000;
   transform: translateX(2px);
 }
 
 /* Primary CTA inside a result card — the hero "Open Email Draft" */
 .result-action--primary {
   position: relative;
-  background: linear-gradient(135deg, var(--chrome-soft) 0%, var(--chrome) 100%);
-  color: white;
-  border-color: transparent;
-  box-shadow: 0 6px 18px rgba(30, 45, 77, 0.30), 0 2px 6px rgba(30, 45, 77, 0.18);
+  background: var(--chrome-gradient);
+  color: #FFFFFF;
+  border: 1px solid transparent;
+  box-shadow: 0 4px 12px rgba(46, 107, 230, 0.26);
   overflow: hidden;
 }
 
@@ -970,13 +986,13 @@ body {
 
 .result-action--primary .result-action__icon,
 .result-action--primary .result-action__chevron {
-  color: white;
+  color: #FFFFFF;
 }
 
 .result-action--primary:hover {
-  background: linear-gradient(135deg, var(--chrome) 0%, var(--chrome-strong) 100%);
+  background: var(--chrome-gradient-strong);
   transform: translateY(-1px);
-  box-shadow: 0 12px 26px rgba(30, 45, 77, 0.36), 0 3px 8px rgba(30, 45, 77, 0.22);
+  box-shadow: 0 8px 18px rgba(46, 107, 230, 0.32);
   border-color: transparent;
 }
 
@@ -1089,7 +1105,7 @@ body {
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, var(--indigo-100), var(--indigo-200));
-  color: var(--indigo-700);
+  color: #000000;
   font-family: var(--font-body);
   font-size: 10.5px;
   font-weight: 700;
@@ -1131,7 +1147,7 @@ body {
   font-family: var(--font-display);
   font-style: italic;
   font-size: 11px;
-  color: var(--indigo-600);
+  color: #000000;
   margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
@@ -1207,6 +1223,27 @@ body {
   border-color: var(--terra-100);
 }
 
+.similar-row__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.similar-row__action--draft {
+  background: var(--indigo-500);
+  color: #FFFFFF;
+  border-color: var(--indigo-600);
+  justify-content: center;
+}
+
+.similar-row__action--draft:hover {
+  background: var(--indigo-600);
+  border-color: var(--indigo-700);
+  color: #FFFFFF;
+}
+
 .similar-empty,
 .similar-error {
   font-size: 12.5px;
@@ -1232,7 +1269,7 @@ body {
   font-family: var(--font-body);
   font-size: 12px;
   font-weight: 600;
-  color: var(--indigo-600);
+  color: var(--chrome);
   text-decoration: none;
   text-align: center;
   transition: color 160ms var(--ease-out);
@@ -1244,7 +1281,7 @@ body {
   transition: transform 160ms var(--ease-out);
 }
 
-.similar-footer-link:hover { color: var(--indigo-700); }
+.similar-footer-link:hover { color: var(--chrome-strong); }
 .similar-footer-link:hover svg { transform: translateX(2px); }
 
 /* ============================================================
@@ -1368,7 +1405,7 @@ body {
 .job-status__text,
 .job-status .status-text {
   font-size: 12.5px;
-  color: var(--indigo-700);
+  color: #000000;
   font-weight: 500;
   margin: 0;
 }
@@ -1431,7 +1468,7 @@ body {
 .form-group input:focus,
 .form-group textarea:focus {
   outline: none;
-  border-color: var(--indigo-500);
+  border-color: #000000;
   background: var(--card);
   box-shadow: 0 0 0 3px var(--indigo-100);
 }
@@ -1456,38 +1493,36 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 16px 16px;
-  background: var(--chrome);
-  border-top: 1px solid var(--chrome-edge);
+  padding: 12px 16px 14px;
+  background: var(--chrome-gradient);
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
   gap: 10px;
 }
 
 .credits-pill {
   display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 5px 12px;
-  background: #FFFFFF;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: var(--radius-pill);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px;
+  background: transparent;
+  border: none;
   white-space: nowrap;
 }
 
 .credits-pill__label {
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .credits-pill__value {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: 13px;
   font-weight: 700;
-  color: var(--ink);
-  font-feature-settings: "tnum", "ss01";
+  color: #FFFFFF;
 }
 
 .footer-actions {
@@ -1508,11 +1543,14 @@ body {
 .footer-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 6px 11px;
+  padding: 7px 14px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: -0.005em;
+  line-height: 1;
+  white-space: nowrap;
   border-radius: var(--radius-pill);
   text-decoration: none;
   cursor: pointer;
@@ -1527,37 +1565,36 @@ body {
 }
 
 .footer-btn--primary {
-  background: var(--chrome-soft);
-  color: white;
+  background: #FFFFFF;
+  color: var(--chrome);
   padding: 7px 14px;
   font-size: 12.5px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  font-weight: 700;
+  border: 1px solid #FFFFFF;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
 }
 
 .footer-btn--primary:hover {
   transform: translateY(-1px);
-  background: #3A4D7E;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  background: #F1F5FF;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.22);
 }
 
 .footer-btn__logo {
-  width: 16px;
-  height: 16px;
-  object-fit: contain;
-  flex-shrink: 0;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+  display: none;
 }
 
 .footer-btn--ghost {
-  background: transparent;
-  color: var(--chrome-ink-muted);
-  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.10);
+  color: #FFFFFF;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
 }
 
 .footer-btn--ghost:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--chrome-ink);
+  background: rgba(255, 255, 255, 0.20);
+  border-color: rgba(255, 255, 255, 0.8);
+  color: #FFFFFF;
 }
 
 /* ============================================================
@@ -1570,4 +1607,66 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+
+/* Company mode.
+   People at a company, listed before any email is bought. Rows reuse
+   .similar-row; this block only frames them. */
+.company-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 14px 14px;
+  background: #FFFFFF;
+  border: 1px solid var(--card-edge);
+  border-radius: var(--radius-md);
+  animation: rise 280ms var(--ease-out);
+}
+
+.company-card--inline {
+  margin-top: 12px;
+  padding: 14px 12px 12px;
+}
+
+.company-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.company-card__eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.company-card__title {
+  margin: 0;
+  font-family: 'Lora', Georgia, serif;
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.company-card__title--sm {
+  font-size: 17px;
+}
+
+.company-card__body {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.company-card .similar-results {
+  margin-top: 2px;
+}
+
+.company-card .similar-footer-link {
+  margin-top: 4px;
 }
