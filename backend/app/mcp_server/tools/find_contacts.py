@@ -1,7 +1,7 @@
 """
 find_contacts MCP tool.
 
-Wraps pdl_client.search_contacts_from_prompt + warmth_scoring. Result count
+Runs the engine door (engine_search_contacts) + warmth_scoring. Result count
 is clamped per tier in tier_caps.find_contacts_cap (anonymous + free signed-in
 = 5, pro = 8, elite = 15). The schema permits up to 25 to avoid a migration
 when caps are raised.
@@ -9,6 +9,7 @@ when caps are raised.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -78,6 +79,10 @@ def handle(
 
     cache_args = parsed.model_dump()
     cache_args["count"] = effective_count  # cache by effective, not requested
+    # Signed-in callers get the FullEnrich email pass; anonymous callers get
+    # warehouse emails only. Key the cache on that so an anonymous, email-less
+    # result never serves a signed-in caller who paid for the pass.
+    cache_args["with_emails"] = bool(_signed_in_uid(user_ctx))
     args_hash = cache.key(TOOL_NAME, cache_args)
 
     # 3. Rate limit check.
@@ -178,9 +183,13 @@ def handle(
         )
         return out.model_dump()
 
-    # 6. Cold path: PDL search + warmth scoring.
+    # 6. Cold path: engine search (warehouse first, Coresignal for the rest),
+    # then the bounded FullEnrich email pass for signed-in callers, then
+    # warmth scoring.
     try:
         contacts = _run_pdl_search(parsed, effective_count)
+        if _signed_in_uid(user_ctx):
+            _fullenrich_pass(contacts, db)
         warmth = _score_warmth(parsed, contacts)
         # Stamp warmth metadata onto the raw PDL dicts so when we persist
         # to My Network the warmth fields land on the Firestore doc.
@@ -254,48 +263,37 @@ def handle(
 
 
 def _run_pdl_search(parsed: FindContactsInput, count: int) -> list[dict]:
-    """Synthesize a parsed_prompt and invoke pdl_client.search_contacts_from_prompt.
+    """Synthesize a parsed_prompt and walk the engine door.
 
     Routes through the same LLM-based prompt parser the website uses
-    (parse_search_prompt_structured) so PDL gets the rich, company-aware
-    title_variations list — not just the single literal role string the
-    MCP caller typed. Without this step, the MCP query landed only people
-    whose title contained the exact phrase the user used; with it, we get
-    the full role-family expansion the website's natural-language search
+    (parse_search_prompt_structured) so the search gets the rich,
+    company-aware title_variations list, not just the single literal role
+    string the MCP caller typed. Without this step, the MCP query landed only
+    people whose title contained the exact phrase the user used; with it, we
+    get the full role-family expansion the website's natural-language search
     already enjoys.
 
     Falls back to a manual parsed_prompt construction if the LLM parser
     is unavailable (no OPENAI_API_KEY, network error, low-confidence parse).
     """
-    # Engine-primary (2026-08-31): Coresignal's search_contacts_from_prompt
-    # is a declared drop-in for the PDL function this wrapped, and the PDL
-    # key is retired (401s on every call). The Hunter bridge covers a
-    # company-targeted miss, mirroring the website ladder.
-    from app.services import coresignal_client
+    # The engine door (2026-09-07): warehouse first, Coresignal for the
+    # remainder, spend mirrored, every vendor fill written back to the
+    # warehouse. Until now this tool called Coresignal directly, so every MCP
+    # search paid cold rates for people already on the shelf, and the people
+    # it bought were never saved for the next student. The Hunter bridge
+    # still covers a company-targeted miss, mirroring the website ladder.
+    from app.services.engine_search import engine_search_contacts
 
     parsed_prompt = _build_parsed_prompt(parsed)
     user_profile = _synthesize_user_profile(parsed)
 
-    contacts, _retry_level, _already_saved, _adjacency = coresignal_client.search_contacts_from_prompt(
+    contacts, _retry_level, _already_saved, _adjacency = engine_search_contacts(
         parsed_prompt,
         count,
         exclude_keys=None,
         user_profile=user_profile,
+        source="mcp_find_contacts",
     )
-    _collected = int(((_adjacency or {}).get("collected_count")) or 0)
-    if _collected:
-        try:
-            from google.cloud import firestore as _fs
-            from app.extensions import get_db as _get_db
-            _db = _get_db()
-            if _db is not None:
-                _db.collection("meta").document("coresignalTestBudget").set(
-                    {"spent_estimate": _fs.Increment(20.0 * _collected),
-                     "collect_count": _fs.Increment(_collected)}, merge=True)
-            from app.services.metering import log_provider_spend
-            log_provider_spend("coresignal", "member_collect", _collected, returned=_collected)
-        except Exception:
-            logger.warning("[MCP find_contacts] coresignal spend mirror failed")
     if not contacts and (parsed_prompt.get("companies") or []):
         try:
             from app.services.hunter_person_search import search_people_via_hunter
@@ -305,6 +303,63 @@ def _run_pdl_search(parsed: FindContactsInput, count: int) -> list[dict]:
         except Exception as e:
             logger.warning("[MCP find_contacts] hunter bridge failed: %s", e)
     return contacts or []
+
+
+# Same bound the website Find uses (runs.py): one FullEnrich bulk job for
+# whoever is still email-less, a bounded wait, misses stay email-less.
+_FE_PASS_CAP = 6
+
+
+def _fullenrich_pass(contacts: list[dict], db: Any) -> None:
+    """Earn work emails for email-less results, warehouse-fed on a hit.
+
+    Coresignal records carry no emails, so without this pass every MCP
+    result came back with email=None and draft_outreach had nothing to send
+    to. Signed-in callers only: they pay per contact, and the reseller
+    agreement lets a verified address be served to later students from the
+    warehouse at no re-charge. Never raises.
+    """
+    if not contacts:
+        return
+    missing = [
+        c for c in contacts
+        if not (c.get("WorkEmail") or c.get("Email") or "").strip()
+    ][:_FE_PASS_CAP]
+    if not missing:
+        return
+    try:
+        from app.services import fullenrich_client
+        people = [
+            (str(i),
+             (c.get("FirstName") or "").strip(),
+             (c.get("LastName") or "").strip(),
+             (c.get("Company") or "").strip(),
+             (c.get("LinkedIn") or "").strip())
+            for i, c in enumerate(missing)
+        ]
+        eid = fullenrich_client.start_bulk(people, db=db)
+        if not eid:
+            return
+        wait = int(os.environ.get("MCP_FE_WAIT_SECONDS", "30"))
+        ready, hits = fullenrich_client.fetch_bulk(eid, wait_seconds=wait, db=db)
+        gained = []
+        for i, hit in (hits or {}).items():
+            c = missing[int(i)]
+            c["Email"] = hit["email"]
+            c["WorkEmail"] = hit["email"]
+            c["EmailSource"] = "fullenrich_backfill"
+            c["EmailVerified"] = True
+            gained.append(c)
+        logger.info("[MCP find_contacts] FullEnrich pass: %d/%d found (ready=%s)",
+                    len(hits or {}), len(missing), ready)
+        if gained:
+            try:
+                from app.services.firm_cache.writer import cache_pdl_contacts
+                cache_pdl_contacts(gained, shape="app", async_write=True)
+            except Exception:
+                logger.warning("[MCP find_contacts] warehouse email feed failed")
+    except Exception as e:
+        logger.warning("[MCP find_contacts] FullEnrich pass failed: %s", e)
 
 
 def _build_parsed_prompt(parsed: FindContactsInput) -> dict:

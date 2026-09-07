@@ -4,6 +4,11 @@ console.log('[Offerloop Background] Service worker started');
 // Configuration
 const API_BASE_URL = 'https://www.offerloop.ai';
 
+// Clicking the toolbar icon opens the side panel (instead of a popup)
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((err) => console.error('[Offerloop Background] setPanelBehavior failed:', err));
+
 // Fetch wrapper with AbortController timeout (default 30s)
 async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   const controller = new AbortController();
@@ -115,7 +120,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     case 'findSimilarContacts':
       handleFindSimilarContacts(request, sendResponse);
       return true;
-      
+
+    case 'companyPeople':
+      handleCompanyPeople(request, sendResponse);
+      return true;
+
     case 'getCredits':
       handleGetCredits(request, sendResponse);
       return true;
@@ -306,6 +315,62 @@ async function findSimilarContacts(source, authToken, isRetry = false) {
     };
   } catch (error) {
     console.error('[Offerloop Background] find-similar API error:', error);
+    throw error;
+  }
+}
+
+// Handle company people (side panel on a LinkedIn company page)
+async function handleCompanyPeople(request, sendResponse) {
+  const { company, authToken } = request;
+  try {
+    if (!authToken) {
+      sendResponse({ error: 'Not authenticated' });
+      return;
+    }
+    if (!company) {
+      sendResponse({ error: 'Missing company' });
+      return;
+    }
+    const result = await fetchCompanyPeople(company, authToken);
+    sendResponse(result);
+  } catch (error) {
+    console.error('[Offerloop Background] Error in handleCompanyPeople:', error);
+    sendResponse({ error: error.message || 'Failed to load people at this company' });
+  }
+}
+
+// Call /api/contacts/company-people (with automatic token refresh on 401).
+// Zero credits: this is the browse step, the email step charges per row.
+async function fetchCompanyPeople(company, authToken, isRetry = false) {
+  console.log('[Offerloop Background] Loading people at:', company);
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/contacts/company-people`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ company, limit: 10 }),
+    }, 45000);
+
+    if (response.status === 401 && !isRetry) {
+      console.log('[Offerloop Background] company-people 401, refreshing token...');
+      const newToken = await refreshAuthToken();
+      if (newToken) return fetchCompanyPeople(company, newToken, true);
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || data.error || `API error: ${response.status}`);
+    }
+    return {
+      success: true,
+      contacts: data.contacts || [],
+      cap: data.cap,
+      credits_remaining: data.credits_remaining,
+    };
+  } catch (error) {
+    console.error('[Offerloop Background] company-people API error:', error);
     throw error;
   }
 }

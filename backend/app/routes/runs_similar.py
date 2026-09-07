@@ -381,3 +381,102 @@ def find_similar():
         print(f"⚠️ find-similar: unhandled error: {e}")
         traceback.print_exc()
         return jsonify({"error": "internal_error", "message": "Something went wrong."}), 500
+
+
+# ---------------------------------------------------------------------------
+# Company people (2026-09-07): the Chrome extension's people-first door.
+#
+# On a LinkedIn company page the side panel lists people at that company
+# BEFORE anyone pays for an email; each row then offers Find email (the
+# existing import-linkedin path, charged only when an address lands). Same
+# engine door as every other surface: warehouse first, Coresignal for the
+# remainder, every vendor fill written back to the shelf. Browsing costs the
+# student zero credits.
+# ---------------------------------------------------------------------------
+
+COMPANY_PEOPLE_CAP = 10
+
+
+@runs_similar_bp.route("/contacts/company-people", methods=["POST"])
+@require_firebase_auth
+def company_people():
+    """Return up to COMPANY_PEOPLE_CAP people at one company, no email pass.
+
+    Request body:  { "company": str, "limit"?: int, "role"?: str }
+    Response:      { "contacts": [row, ...], "cap": int, "credits_used": 0,
+                     "credits_remaining": int }
+    Rows use the same shape as find-similar so the panel renders them with
+    the same code (firstName, lastName, title, company, linkedinUrl, school,
+    email when the warehouse already holds a verified one).
+    """
+    try:
+        user_id = request.firebase_user["uid"]
+        db = get_db()
+
+        payload = request.get_json(silent=True) or {}
+        company = str(payload.get("company") or "").strip()
+        role = str(payload.get("role") or "").strip()
+        if not company:
+            return jsonify({
+                "error": "missing_company",
+                "message": "A company name is required.",
+            }), 400
+        try:
+            cap = int(payload.get("limit") or COMPANY_PEOPLE_CAP)
+        except (TypeError, ValueError):
+            cap = COMPANY_PEOPLE_CAP
+        cap = max(1, min(cap, COMPANY_PEOPLE_CAP))
+
+        user_data = None
+        credits_available = None
+        exclusion_keys: set = set()
+        if db and user_id:
+            try:
+                user_ref = db.collection("users").document(user_id)
+                user_doc = user_ref.get()
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    credits_available = check_and_reset_credits(user_ref, user_data)
+                    exclusion_data = _build_exclusion_data_from_firestore(db, user_id)
+                    exclusion_keys = set(exclusion_data["identity_set"])
+            except Exception as e:
+                print(f"[company-people] failed to load user profile for {user_id}: {e}")
+
+        # Same alias map the paid path uses (McKinsey, Goldman, etc). Rule 1
+        # from the app: no location means the US, not the planet.
+        try:
+            from app.services.pdl_client import clean_company_name
+            canonical = clean_company_name(company) or company
+        except Exception:
+            canonical = company
+        parsed = {
+            "companies": [{"name": canonical}],
+            "title_variations": [role] if role else [],
+            "locations": ["United States"],
+        }
+
+        contacts, _rl, _saved, meta = engine_search_contacts(
+            parsed, cap, exclude_keys=exclusion_keys, user_profile=user_data,
+            source="extension_company",
+        )
+        rows = []
+        for c in contacts or []:
+            first = (c.get("FirstName") or "").strip()
+            last = (c.get("LastName") or "").strip()
+            if not (first or last):
+                continue
+            rows.append(_shape_for_popup(c, CAT_ANY_ROLE_SAME_CO))
+            if len(rows) >= cap:
+                break
+
+        return jsonify({
+            "contacts": rows,
+            "company": company,
+            "cap": COMPANY_PEOPLE_CAP,
+            "credits_used": 0,
+            "credits_remaining": credits_available,
+            "provider": (meta or {}).get("provider"),
+        }), 200
+    except Exception as e:
+        print(f"[company-people] unhandled error: {e}")
+        return jsonify({"error": "Could not load people at this company. Please try again."}), 500

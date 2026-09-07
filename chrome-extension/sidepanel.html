@@ -11,10 +11,8 @@
 
     <!-- ============================ Header ============================ -->
     <header class="header">
-      <div class="header__orb header__orb--a" aria-hidden="true"></div>
-      <div class="header__orb header__orb--b" aria-hidden="true"></div>
       <div class="brand">
-        <img class="brand__wordmark" src="images/wordmark.png" alt="Offerloop">
+        <img class="brand__logo" src="images/offerloop_logo2_cropped.png" alt="Offerloop">
       </div>
     </header>
 
@@ -86,6 +84,30 @@
           </div>
         </section>
 
+        <!-- LinkedIn company page: people first, email on demand -->
+        <section id="companySection" class="section hidden">
+          <div class="company-card">
+            <div class="company-card__header">
+              <span class="company-card__eyebrow">People at</span>
+              <h2 id="companyName" class="company-card__title">this company</h2>
+              <p class="company-card__body">Browse for free. Find an email only for the people you want to reach.</p>
+            </div>
+            <div id="companyLoading" class="similar-loading hidden">
+              <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <p>Finding people…</p>
+            </div>
+            <div id="companyResults" class="similar-results hidden" role="list"></div>
+            <p id="companyEmpty" class="similar-empty hidden">No one on file yet at <span></span>. Open a profile here and we will start from that person.</p>
+            <p id="companyError" class="similar-error hidden"></p>
+            <a id="companyFooterLink" class="similar-footer-link" href="https://www.offerloop.ai/find?tab=people" target="_blank">
+              <span>Search more at <span class="similar-footer-link__company">this company</span></span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </a>
+          </div>
+        </section>
+
         <!-- LinkedIn Profile detected -->
         <section id="profileSection" class="section">
 
@@ -120,6 +142,27 @@
             </button>
 
             <p id="coffeeChatHint" class="coffee-chat-hint">Uses 15 credits · PDF saved to your library</p>
+          </div>
+
+          <!-- Also at this company: people first, before any email is bought -->
+          <div id="profileCompanySection" class="company-card company-card--inline hidden">
+            <div class="company-card__header">
+              <span class="company-card__eyebrow">Also at</span>
+              <h3 id="profileCompanyName" class="company-card__title company-card__title--sm">this company</h3>
+            </div>
+            <div id="profileCompanyLoading" class="similar-loading hidden">
+              <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <p>Finding people…</p>
+            </div>
+            <div id="profileCompanyResults" class="similar-results hidden" role="list"></div>
+            <p id="profileCompanyEmpty" class="similar-empty hidden">No one else on file yet at <span></span>.</p>
+            <p id="profileCompanyError" class="similar-error hidden"></p>
+            <a id="profileCompanyFooterLink" class="similar-footer-link" href="https://www.offerloop.ai/find?tab=people" target="_blank">
+              <span>Search more at <span class="similar-footer-link__company">this company</span></span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </a>
           </div>
 
           <!-- Meeting Prep loading -->
@@ -182,7 +225,7 @@
             <div class="result-card__header">
               <div class="result-card__heading">
                 <span class="result-card__scout-avatar" aria-hidden="true">
-                  <img src="images/scout-noprofile.png" alt="">
+                  <img src="images/yeti-mascot.png" alt="">
                 </span>
                 <span class="result-card__who">
                   <span id="resultName" class="result-card__title">Sarah Chen</span>
@@ -432,15 +475,9 @@
       </div>
       <div class="footer-actions">
         <button id="signOutBtn" class="footer-link footer-btn footer-btn--ghost hidden" aria-label="Sign out">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-            <polyline points="16 17 21 12 16 7"></polyline>
-            <line x1="21" y1="12" x2="9" y2="12"></line>
-          </svg>
           <span>Sign Out</span>
         </button>
         <a href="https://www.offerloop.ai" target="_blank" class="footer-link footer-btn footer-btn--primary">
-          <img class="footer-btn__logo" src="images/footer-mark.png" alt="">
           <span>Open Offerloop</span>
         </a>
       </div>
