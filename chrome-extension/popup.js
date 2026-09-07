@@ -1530,6 +1530,7 @@ async function handleFindEmail() {
     showError(error.message || 'Failed to find email. Please try again.');
   } finally {
     _actionInProgress = false;
+    settleTabChange();
   }
 }
 
@@ -2131,6 +2132,7 @@ async function handleDraftEmail() {
     if (label) label.textContent = 'Draft failed, try again';
   } finally {
     _actionInProgress = false;
+    settleTabChange();
   }
 }
 
@@ -2328,18 +2330,41 @@ async function loadProfileCompanyPeople(tab) {
 
 // Side panel stays open across tab switches — unlike a popup which reinits every
 // open — so we have to actively re-detect the active tab when the user navigates.
+let _tabChangePending = false;
+
 async function reactToActiveTabChange() {
+  // Never re-render mid-action (2026-09-07). A click elsewhere while Find
+  // Email or Draft is running used to wipe the result the moment it landed.
+  // Remember that something changed and catch up when the action finishes.
+  if (_actionInProgress) {
+    _tabChangePending = true;
+    return;
+  }
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.url) {
-      switchTab(detectMode(tab.url));
-    }
+    if (!tab?.url) return;
+    // Same person as the result on screen: leave the panel alone (LinkedIn
+    // rewrites the URL with tracking suffixes and section anchors as you
+    // scroll a profile).
+    const sameProfile = currentState.linkedInUrl
+      && tab.url.includes('linkedin.com/in/')
+      && tab.url.startsWith(currentState.linkedInUrl);
+    if (sameProfile) return;
+    switchTab(detectMode(tab.url));
     if (currentState.isLoggedIn) {
       await checkAndShowContent();
     }
   } catch (error) {
     console.error('[Offerloop Popup] Tab change handler error:', error);
   }
+}
+
+// Called by the long actions when they finish, so a navigation that
+// happened mid-action is honoured afterwards instead of dropped.
+function settleTabChange() {
+  if (!_tabChangePending) return;
+  _tabChangePending = false;
+  reactToActiveTabChange();
 }
 
 chrome.tabs.onActivated.addListener(reactToActiveTabChange);
