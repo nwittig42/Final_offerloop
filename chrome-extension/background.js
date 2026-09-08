@@ -125,6 +125,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleCompanyPeople(request, sendResponse);
       return true;
 
+    case 'draftContact':
+      handleDraftContact(request, sendResponse);
+      return true;
+
     case 'getCredits':
       handleGetCredits(request, sendResponse);
       return true;
@@ -205,7 +209,7 @@ async function handleImportLinkedIn(request, sendResponse) {
       return;
     }
     
-    const result = await importLinkedInContact(linkedInUrl, authToken);
+    const result = await importLinkedInContact(linkedInUrl, authToken, false, request.createDraft !== false);
     sendResponse(result);
   } catch (error) {
     console.error('[Offerloop Background] Error in handleImportLinkedIn:', error);
@@ -214,13 +218,15 @@ async function handleImportLinkedIn(request, sendResponse) {
 }
 
 // Import LinkedIn contact via API (with automatic token refresh on 401)
-async function importLinkedInContact(linkedInUrl, authToken, isRetry = false) {
-  console.log('[Offerloop Background] Importing LinkedIn contact:', linkedInUrl);
-  
+async function importLinkedInContact(linkedInUrl, authToken, isRetry = false, createDraft = true) {
+  console.log('[Offerloop Background] Importing LinkedIn contact:', linkedInUrl, 'draft:', createDraft);
+
   try {
-    // 90s timeout — the import-linkedin pipeline runs PDL + Hunter + resume
-    // extraction + Perplexity + Apify + batch_generate_emails + quality gate +
-    // Gmail draft, which can take 30-60s. 30s default cuts it off.
+    // 90s timeout: with create_draft the import-linkedin pipeline runs the
+    // engine lookup + resume extraction + Perplexity + Apify +
+    // batch_generate_emails + quality gate + Gmail draft, which can take
+    // 30-60s. Without it (the panel's default since 2026-09-07) the route
+    // stops after the contact + email and returns in a few seconds.
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/contacts/import-linkedin`, {
       method: 'POST',
       headers: {
@@ -229,15 +235,16 @@ async function importLinkedInContact(linkedInUrl, authToken, isRetry = false) {
       },
       body: JSON.stringify({
         linkedin_url: linkedInUrl,
+        create_draft: createDraft,
       }),
     }, 90000);
-    
+
     // Auto-refresh on 401 and retry once
     if (response.status === 401 && !isRetry) {
       console.log('[Offerloop Background] Got 401, attempting token refresh...');
       const newToken = await refreshAuthToken();
       if (newToken) {
-        return importLinkedInContact(linkedInUrl, newToken, true);
+        return importLinkedInContact(linkedInUrl, newToken, true, createDraft);
       }
     }
     
@@ -315,6 +322,64 @@ async function findSimilarContacts(source, authToken, isRetry = false) {
     };
   } catch (error) {
     console.error('[Offerloop Background] find-similar API error:', error);
+    throw error;
+  }
+}
+
+// Handle draft for a contact whose email is already known (step two)
+async function handleDraftContact(request, sendResponse) {
+  const { contact, authToken } = request;
+  try {
+    if (!authToken) {
+      sendResponse({ error: 'Not authenticated' });
+      return;
+    }
+    if (!contact || !contact.Email) {
+      sendResponse({ error: 'No email to draft to' });
+      return;
+    }
+    const result = await draftContactViaApi(contact, authToken);
+    sendResponse(result);
+  } catch (error) {
+    console.error('[Offerloop Background] Error in handleDraftContact:', error);
+    sendResponse({ error: error.message || 'Failed to create the draft' });
+  }
+}
+
+// Call /api/emails/generate-and-draft for one contact (with automatic token
+// refresh on 401). Same route the website's Find page uses after preview;
+// the resume comes from the user's profile server-side.
+async function draftContactViaApi(contact, authToken, isRetry = false) {
+  console.log('[Offerloop Background] Drafting for:', contact.Email);
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/emails/generate-and-draft`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ contacts: [contact] }),
+    }, 90000);
+
+    if (response.status === 401 && !isRetry) {
+      console.log('[Offerloop Background] generate-and-draft 401, refreshing token...');
+      const newToken = await refreshAuthToken();
+      if (newToken) return draftContactViaApi(contact, newToken, true);
+    }
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.message || data.error || `API error: ${response.status}`);
+    }
+    const first = (data.drafts || [])[0] || {};
+    return {
+      success: true,
+      gmail_draft_url: first.gmailUrl || '',
+      delivery_mode: first.deliveryMode || data.deliveryMode || '',
+      credits_remaining: data.credits_remaining,
+    };
+  } catch (error) {
+    console.error('[Offerloop Background] generate-and-draft API error:', error);
     throw error;
   }
 }

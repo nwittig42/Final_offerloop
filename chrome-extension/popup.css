@@ -1670,3 +1670,74 @@ body {
 .company-card .similar-footer-link {
   margin-top: 4px;
 }
+
+/* Step-two draft button shares the result-action look but is a <button>. */
+.result-action--button {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  text-align: left;
+}
+
+.result-action--button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* Empty-state nudge after "Browse ... on LinkedIn": the panel is waiting
+   for the next click, say so and breathe a little. */
+.state-card__nudge {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.state-card--waiting .state-card__halo {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+/* Rows you can open: the name, the avatar and the arrow send the LinkedIn
+   tab to the person, and the panel follows into Contact. */
+.similar-row--openable .similar-row__who,
+.similar-row--openable .similar-row__avatar {
+  cursor: pointer;
+}
+
+.similar-row--openable .similar-row__who:hover .similar-row__name {
+  text-decoration: underline;
+}
+
+.similar-row__open {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid var(--card-edge);
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: var(--ink-faint);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.similar-row__open svg {
+  width: 14px;
+  height: 14px;
+}
+
+.similar-row__open:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}

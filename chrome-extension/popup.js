@@ -58,7 +58,12 @@ function detectMode(url) {
   if (url && url.match(/linkedin\.com\/in\//)) {
     return 'contact';
   }
-  
+
+  // Company mode - a LinkedIn company page lists its people first
+  if (url && url.match(/linkedin\.com\/company\//i)) {
+    return 'company';
+  }
+
   // Job mode - job posting URLs
   if (url) {
     for (const pattern of JOB_URL_PATTERNS) {
@@ -84,6 +89,21 @@ function switchTab(tabName) {
   if (tabName === 'job') {
     initJobTab();
   }
+
+  // Company tab: the list when we are on a company page, the hint otherwise.
+  if (tabName === 'company') {
+    updateCompanyHint();
+  }
+}
+
+// The Company tab shows the people list only on a company page. Anywhere
+// else (or signed out) it shows the "open a company page" hint instead.
+function updateCompanyHint() {
+  const hint = document.getElementById('companyHint');
+  const list = document.getElementById('companySection');
+  const onCompanyPage = !!currentState.companyPage && currentState.isLoggedIn;
+  hint?.classList.toggle('hidden', onCompanyPage);
+  list?.classList.toggle('hidden', !onCompanyPage);
 }
 
 function initTabSwitcher() {
@@ -745,6 +765,7 @@ const elements = {
   loginBtn: null,
   signOutBtn: null,
   findEmailBtn: null,
+  draftEmailBtn: null,
   retryBtn: null,
   profileUrl: null,
   resultsSection: null,
@@ -780,6 +801,7 @@ function initElements() {
   elements.loginBtn = document.getElementById('loginBtn');
   elements.signOutBtn = document.getElementById('signOutBtn');
   elements.findEmailBtn = document.getElementById('findEmailBtn');
+  elements.draftEmailBtn = document.getElementById('draftEmailBtn');
   elements.retryBtn = document.getElementById('retryBtn');
   elements.profileUrl = document.getElementById('profileUrl');
   elements.resultsSection = document.getElementById('resultsSection');
@@ -1136,7 +1158,23 @@ function initEventListeners() {
   elements.loginBtn?.addEventListener('click', handleLogin);
   elements.signOutBtn?.addEventListener('click', handleSignOut);
   elements.findEmailBtn?.addEventListener('click', handleFindEmail);
+  elements.draftEmailBtn?.addEventListener('click', handleDraftEmail);
   elements.retryBtn?.addEventListener('click', handleRetry);
+
+  // The empty states' "Browse ... on LinkedIn" buttons open a search page
+  // in a new tab and turn the card into a nudge ("now click any person or
+  // company"), so the next step is obvious while the panel waits. The
+  // panel switches tabs on its own once the URL becomes a person or a
+  // company (reactToActiveTabChange).
+  document.querySelectorAll('.js-browse-linkedin').forEach((link) => {
+    link.addEventListener('click', () => {
+      const card = link.closest('.state-card');
+      if (!card) return;
+      card.querySelector('.js-follow-body')?.classList.add('hidden');
+      card.querySelector('.js-follow-nudge')?.classList.remove('hidden');
+      card.classList.add('state-card--waiting');
+    });
+  });
   
   // Coffee Chat Prep button
   document.getElementById('coffeeChatBtn')?.addEventListener('click', handleCoffeeChatPrep);
@@ -1182,7 +1220,10 @@ function showSection(sectionName) {
       elements.signOutBtn?.classList.remove('hidden');
       break;
     case 'company':
+      // The list lives in the Company tab; the Contact tab keeps its hint
+      // so switching tabs on a company page never shows an empty panel.
       elements.companySection?.classList.remove('hidden');
+      elements.noProfileSection?.classList.remove('hidden');
       elements.signOutBtn?.classList.remove('hidden');
       break;
     case 'profile':
@@ -1245,11 +1286,20 @@ function showResults(contact) {
   // Show success links section
   elements.successLinksSection?.classList.remove('hidden');
 
-  // Point Open Email Draft at the actual draft URL the backend returned,
-  // not the generic /#drafts folder that was hardcoded in sidepanel.html.
+  // Step two. With an email and no draft yet: the Draft button. With a
+  // draft URL (a draft was made this session): the Open link. No email:
+  // neither.
+  currentState.lastFound = contact;
   const draftUrl = contact.gmail_draft_url || contact.gmailDraftUrl || contact.draft_url;
   if (elements.openDraftLink && draftUrl) {
     elements.openDraftLink.href = draftUrl;
+  }
+  elements.openDraftLink?.classList.toggle('hidden', !draftUrl);
+  if (elements.draftEmailBtn) {
+    elements.draftEmailBtn.classList.toggle('hidden', !(contact.email && !draftUrl));
+    elements.draftEmailBtn.disabled = false;
+    const label = elements.draftEmailBtn.querySelector('.result-action__label');
+    if (label) label.textContent = 'Draft an email to them';
   }
 
   // Capture source for the "Find similar" disclosure and reset its state on
@@ -1432,22 +1482,26 @@ async function handleFindEmail() {
     return;
   }
   
-  showLoading('Finding email and generating draft...');
-  
+  // Two steps (2026-09-07): the email first, in seconds, then drafting is a
+  // separate click. The old single call ran enrichment + writing + Gmail
+  // before showing anything, 30 to 60 seconds of spinner for one address.
+  showLoading('Finding email...');
+
   try {
-    // Call backend via background script
+    // Call backend via background script, without the draft
     const response = await chrome.runtime.sendMessage({
       action: 'importLinkedIn',
       linkedInUrl: currentState.linkedInUrl,
       authToken: currentState.authToken,
+      createDraft: false,
     });
-    
+
     console.log('[Offerloop Popup] API Response:', response);
-    
+
     if (response.error) {
       throw new Error(response.error);
     }
-    
+
     // Update credits
     if (response.credits_remaining !== undefined) {
       updateCredits(response.credits_remaining);
@@ -1455,24 +1509,28 @@ async function handleFindEmail() {
       currentState.credits = response.credits_remaining;
       chrome.storage.local.set({ credits: response.credits_remaining });
     }
-    
-    // Show results
+
+    // Show the email; the draft button appears next to it
     const contact = response.contact || response;
     showResults({
       full_name: contact.full_name,
+      firstName: contact.firstName,
+      lastName: contact.lastName,
       email: contact.email,
       company: contact.company,
       jobTitle: contact.jobTitle || contact.title,
+      linkedinUrl: contact.linkedinUrl || contact.linkedin_url || currentState.linkedInUrl,
       draft_url: response.draft_url || contact.draft_url,
       gmail_draft_url: response.gmail_draft_url || contact.gmail_draft_url,
       gmailDraftUrl: response.gmailDraftUrl,
     });
-    
+
   } catch (error) {
     console.error('[Offerloop Popup] Error:', error);
     showError(error.message || 'Failed to find email. Please try again.');
   } finally {
     _actionInProgress = false;
+    settleTabChange();
   }
 }
 
@@ -1535,19 +1593,28 @@ async function checkAndShowContent() {
   currentState.isProfilePage = isProfilePage;
   currentState.linkedInUrl = linkedInUrl;
 
+  // Credits on every page (2026-09-07). This used to run only on profile
+  // pages, so the pill showed a dash everywhere else.
+  await refreshCredits();
+
   if (!isProfilePage) {
     // Company page: list the people first, email on demand per row.
     const company = parseCompanyFromTab(await getCurrentTab());
+    currentState.companyPage = company;
     if (company) {
       console.log('[Offerloop Popup] On LinkedIn company page:', company.name);
       showSection('company');
+      switchTab('company');
       await loadCompanyPeople(company);
       return;
     }
     console.log('[Offerloop Popup] Not on LinkedIn profile');
     showSection('noProfile');
+    updateCompanyHint();
     return;
   }
+  currentState.companyPage = null;
+  updateCompanyHint();
   
   console.log('[Offerloop Popup] On LinkedIn profile:', linkedInUrl);
   showSection('profile');
@@ -1559,10 +1626,13 @@ async function checkAndShowContent() {
   }
 
   // People at this person's company, listed before any email is bought.
-  // Fire and forget: the credits fetch below must not wait on it.
+  // Fire and forget: nothing else waits on it.
   getCurrentTab().then((tab) => loadProfileCompanyPeople(tab)).catch(() => {});
-  
-  // Fetch credits from backend (with cache to avoid redundant calls)
+}
+
+// Fetch credits from backend (with cache to avoid redundant calls). Runs for
+// every signed-in state, not just profile pages.
+async function refreshCredits() {
   if (currentState.authToken) {
     const now = Date.now();
     if (currentState.credits !== null && (now - _creditsCacheTime) < CREDITS_CACHE_TTL) {
@@ -1926,6 +1996,29 @@ function buildSimilarRowEl(row) {
 
   el.append(avatar, who);
 
+  // Open the person (2026-09-07): clicking the name or the arrow sends the
+  // LinkedIn tab to their profile, and the panel follows it into the
+  // Contact tab, exactly as if the user had clicked them on LinkedIn.
+  const profileUrl = normalizeLinkedInUrl(row.linkedinUrl || row.linkedin_url || '');
+  if (profileUrl && /linkedin\.com\/in\//i.test(profileUrl)) {
+    el.classList.add('similar-row--openable');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'similar-row__open';
+    open.title = `Open ${fullName} on LinkedIn`;
+    open.setAttribute('aria-label', `Open ${fullName} on LinkedIn`);
+    open.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+    const go = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openPersonOnLinkedIn(profileUrl);
+    };
+    open.addEventListener('click', go);
+    who.addEventListener('click', go);
+    avatar.addEventListener('click', go);
+    el.appendChild(open);
+  }
+
   // Action: existing email → pill link + draft button; otherwise lazy "Find email"
   if (row.email) {
     const actions = document.createElement('div');
@@ -1943,6 +2036,23 @@ function buildSimilarRowEl(row) {
   }
 
   return el;
+}
+
+// Send the active LinkedIn tab to a profile. The tab-change listener then
+// switches the panel to Contact for that person. Falls back to a new tab
+// when the active tab is not LinkedIn (the side panel can be open anywhere).
+async function openPersonOnLinkedIn(profileUrl) {
+  try {
+    const tab = await getCurrentTab();
+    if (tab?.id && /linkedin\.com/i.test(tab.url || '')) {
+      await chrome.tabs.update(tab.id, { url: profileUrl });
+    } else {
+      await chrome.tabs.create({ url: profileUrl });
+    }
+  } catch (e) {
+    console.error('[Offerloop Popup] open person failed:', e);
+    chrome.tabs.create({ url: profileUrl });
+  }
 }
 
 function buildDraftBtn(row) {
@@ -1989,21 +2099,16 @@ async function draftForRow(row, btn) {
     return;
   }
   try {
-    const response = await chrome.runtime.sendMessage({
-      action: 'importLinkedIn',
-      linkedInUrl,
-      authToken: currentState.authToken,
+    // The row already has an email, so this is only the writing step: no
+    // second lookup, no second charge for the address.
+    const draftUrl = await draftForContact({
+      firstName: row.firstName,
+      lastName: row.lastName,
+      email: row.email,
+      company: row.company,
+      jobTitle: row.title,
+      linkedinUrl: linkedInUrl,
     });
-    console.log('[Offerloop Popup] Draft response:', response);
-    if (!response || response.error) {
-      throw new Error((response && response.error) || 'Draft failed (empty response)');
-    }
-    if (response.credits_remaining !== undefined) {
-      updateCredits(response.credits_remaining);
-      currentState.credits = response.credits_remaining;
-      chrome.storage.local.set({ credits: response.credits_remaining });
-    }
-    const draftUrl = response.gmail_draft_url || 'https://mail.google.com/mail/u/0/#drafts';
     chrome.tabs.create({ url: draftUrl });
     btn.textContent = 'Opened ✓';
     setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 2000);
@@ -2013,6 +2118,61 @@ async function draftForRow(row, btn) {
     btn.textContent = 'Failed';
     btn.title = e.message || String(e);
     setTimeout(() => { btn.textContent = original; btn.removeAttribute('title'); }, 5000);
+  }
+}
+
+// Step two for any person whose email is already on screen: one call to the
+// website's generate-and-draft route (resume attached server-side), which
+// returns the Gmail draft URL. Throws on failure so callers can show it.
+async function draftForContact(person) {
+  const response = await chrome.runtime.sendMessage({
+    action: 'draftContact',
+    contact: {
+      Name: `${person.firstName || ''} ${person.lastName || ''}`.trim() || person.full_name || '',
+      FirstName: person.firstName || '',
+      LastName: person.lastName || '',
+      Email: person.email,
+      Company: person.company || '',
+      Title: person.jobTitle || person.title || '',
+      LinkedIn: person.linkedinUrl || '',
+    },
+    authToken: currentState.authToken,
+  });
+  console.log('[Offerloop Popup] Draft response:', response);
+  if (!response || response.error) {
+    throw new Error((response && response.error) || 'Draft failed (empty response)');
+  }
+  if (response.credits_remaining !== undefined && response.credits_remaining !== null) {
+    updateCredits(response.credits_remaining);
+    currentState.credits = response.credits_remaining;
+    chrome.storage.local.set({ credits: response.credits_remaining });
+  }
+  return response.gmail_draft_url || 'https://mail.google.com/mail/u/0/#drafts';
+}
+
+// Profile page, step two: the Draft button under the found email.
+async function handleDraftEmail() {
+  const person = currentState.lastFound;
+  const btn = elements.draftEmailBtn;
+  if (!person || !person.email || !btn || _actionInProgress) return;
+  _actionInProgress = true;
+  btn.disabled = true;
+  const label = btn.querySelector('.result-action__label');
+  if (label) label.textContent = 'Writing your draft...';
+  try {
+    const draftUrl = await draftForContact(person);
+    person.gmail_draft_url = draftUrl;
+    if (elements.openDraftLink) elements.openDraftLink.href = draftUrl;
+    btn.classList.add('hidden');
+    elements.openDraftLink?.classList.remove('hidden');
+    chrome.tabs.create({ url: draftUrl });
+  } catch (e) {
+    console.error('[Offerloop Popup] draft error:', e);
+    btn.disabled = false;
+    if (label) label.textContent = 'Draft failed, try again';
+  } finally {
+    _actionInProgress = false;
+    settleTabChange();
   }
 }
 
@@ -2037,10 +2197,13 @@ async function findEmailForRow(row, btn, rowEl) {
   const original = btn.textContent;
   btn.textContent = 'Finding…';
   try {
+    // Email only; drafting is the row's next button, not an automatic side
+    // effect of finding the address.
     const response = await chrome.runtime.sendMessage({
       action: 'importLinkedIn',
       linkedInUrl: row.linkedinUrl,
       authToken: currentState.authToken,
+      createDraft: false,
     });
 
     if (!response || response.error) {
@@ -2057,7 +2220,12 @@ async function findEmailForRow(row, btn, rowEl) {
     const found = response.contact || response;
     const email = (found.email || '').trim();
     if (email) {
-      btn.replaceWith(buildEmailPill(email));
+      row.email = email;
+      const actions = document.createElement('div');
+      actions.className = 'similar-row__actions';
+      actions.appendChild(buildEmailPill(email));
+      actions.appendChild(buildDraftBtn(row));
+      btn.replaceWith(actions);
     } else {
       rowEl.classList.add('similar-row--no-email');
       btn.textContent = 'No email';
@@ -2202,18 +2370,41 @@ async function loadProfileCompanyPeople(tab) {
 
 // Side panel stays open across tab switches — unlike a popup which reinits every
 // open — so we have to actively re-detect the active tab when the user navigates.
+let _tabChangePending = false;
+
 async function reactToActiveTabChange() {
+  // Never re-render mid-action (2026-09-07). A click elsewhere while Find
+  // Email or Draft is running used to wipe the result the moment it landed.
+  // Remember that something changed and catch up when the action finishes.
+  if (_actionInProgress) {
+    _tabChangePending = true;
+    return;
+  }
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.url) {
-      switchTab(detectMode(tab.url));
-    }
+    if (!tab?.url) return;
+    // Same person as the result on screen: leave the panel alone (LinkedIn
+    // rewrites the URL with tracking suffixes and section anchors as you
+    // scroll a profile).
+    const sameProfile = currentState.linkedInUrl
+      && tab.url.includes('linkedin.com/in/')
+      && tab.url.startsWith(currentState.linkedInUrl);
+    if (sameProfile) return;
+    switchTab(detectMode(tab.url));
     if (currentState.isLoggedIn) {
       await checkAndShowContent();
     }
   } catch (error) {
     console.error('[Offerloop Popup] Tab change handler error:', error);
   }
+}
+
+// Called by the long actions when they finish, so a navigation that
+// happened mid-action is honoured afterwards instead of dropped.
+function settleTabChange() {
+  if (!_tabChangePending) return;
+  _tabChangePending = false;
+  reactToActiveTabChange();
 }
 
 chrome.tabs.onActivated.addListener(reactToActiveTabChange);

@@ -25,6 +25,14 @@
         </svg>
         <span>Contact</span>
       </button>
+      <button class="tab" data-tab="company" role="tab">
+        <svg class="tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18"></path>
+          <path d="M5 21V7l8-4v18"></path>
+          <path d="M19 21V11l-6-4"></path>
+        </svg>
+        <span>Company</span>
+      </button>
       <button class="tab" data-tab="job" role="tab">
         <svg class="tab__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="7" width="20" height="14" rx="2"></rect>
@@ -71,39 +79,15 @@
                 </svg>
               </span>
             </div>
-            <h2 class="state-card__title">Open a <em>LinkedIn</em> profile</h2>
-            <p class="state-card__body">Navigate to anyone's profile to find their email and draft a personalized outreach in seconds.</p>
-            <a href="https://www.linkedin.com" target="_blank" class="btn btn-outline btn-full">
+            <h2 class="state-card__title js-follow-title">Click any <em>person</em> or <em>company</em></h2>
+            <p class="state-card__body js-follow-body">This panel follows you on LinkedIn. Open a person and the Contact tab finds their email. Open a company and the Company tab lists who works there.</p>
+            <p class="state-card__nudge js-follow-nudge hidden">Now click any person or company on LinkedIn. This panel will switch on its own.</p>
+            <a href="https://www.linkedin.com/search/results/people/" target="_blank" class="btn btn-outline btn-full js-browse-linkedin">
               <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                <polyline points="15 3 21 3 21 9"></polyline>
-                <line x1="10" y1="14" x2="21" y2="3"></line>
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
-              <span>Open LinkedIn</span>
-            </a>
-          </div>
-        </section>
-
-        <!-- LinkedIn company page: people first, email on demand -->
-        <section id="companySection" class="section hidden">
-          <div class="company-card">
-            <div class="company-card__header">
-              <span class="company-card__eyebrow">People at</span>
-              <h2 id="companyName" class="company-card__title">this company</h2>
-              <p class="company-card__body">Browse for free. Find an email only for the people you want to reach.</p>
-            </div>
-            <div id="companyLoading" class="similar-loading hidden">
-              <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-              <p>Finding people…</p>
-            </div>
-            <div id="companyResults" class="similar-results hidden" role="list"></div>
-            <p id="companyEmpty" class="similar-empty hidden">No one on file yet at <span></span>. Open a profile here and we will start from that person.</p>
-            <p id="companyError" class="similar-error hidden"></p>
-            <a id="companyFooterLink" class="similar-footer-link" href="https://www.offerloop.ai/find?tab=people" target="_blank">
-              <span>Search more at <span class="similar-footer-link__company">this company</span></span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="9 18 15 12 9 6"></polyline>
-              </svg>
+              <span>Browse people on LinkedIn</span>
             </a>
           </div>
         </section>
@@ -127,7 +111,7 @@
                 <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
                 <polyline points="22,6 12,13 2,6"></polyline>
               </svg>
-              <span>Find Email &amp; Draft</span>
+              <span>Find Email</span>
             </button>
 
             <button id="coffeeChatBtn" class="btn btn-outline btn-full btn-hero">
@@ -247,7 +231,18 @@
             </div>
 
             <div id="successLinksSection" class="result-card__actions">
-              <a id="openDraftLink" href="https://mail.google.com/mail/u/0/#drafts" target="_blank" class="result-action result-action--primary">
+              <!-- Step two: the email is on screen, drafting is the user's call -->
+              <button id="draftEmailBtn" type="button" class="result-action result-action--primary result-action--button hidden">
+                <svg class="result-action__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+                <span class="result-action__label">Draft an email to them</span>
+                <svg class="result-action__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 18 15 12 9 6"></polyline>
+                </svg>
+              </button>
+              <a id="openDraftLink" href="https://mail.google.com/mail/u/0/#drafts" target="_blank" class="result-action result-action--primary hidden">
                 <svg class="result-action__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
                   <polyline points="22,6 12,13 2,6"></polyline>
@@ -317,6 +312,58 @@
               </svg>
               <span>Try Again</span>
             </button>
+          </div>
+        </section>
+      </div>
+
+      <!-- ====================== Company Tab ====================== -->
+      <div class="tab-content hidden" id="company-tab">
+
+        <!-- Not on a company page yet -->
+        <section id="companyHint" class="section">
+          <div class="state-card">
+            <div class="state-card__visual state-card__visual--linkedin" aria-hidden="true">
+              <span class="state-card__halo state-card__halo--blue"></span>
+              <span class="linkedin-tile">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"></path>
+                </svg>
+              </span>
+            </div>
+            <h2 class="state-card__title js-follow-title">Click any <em>company</em></h2>
+            <p class="state-card__body js-follow-body">Open a company on LinkedIn and this tab lists who works there, free to browse. Open a person instead and the Contact tab takes over.</p>
+            <p class="state-card__nudge js-follow-nudge hidden">Now click any company on LinkedIn. This panel will switch on its own.</p>
+            <a href="https://www.linkedin.com/search/results/companies/" target="_blank" class="btn btn-outline btn-full js-browse-linkedin">
+              <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <span>Browse companies on LinkedIn</span>
+            </a>
+          </div>
+        </section>
+
+        <!-- LinkedIn company page: people first, email on demand -->
+        <section id="companySection" class="section hidden">
+          <div class="company-card">
+            <div class="company-card__header">
+              <span class="company-card__eyebrow">People at</span>
+              <h2 id="companyName" class="company-card__title">this company</h2>
+              <p class="company-card__body">Browse for free. Find an email only for the people you want to reach.</p>
+            </div>
+            <div id="companyLoading" class="similar-loading hidden">
+              <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <p>Finding people…</p>
+            </div>
+            <div id="companyResults" class="similar-results hidden" role="list"></div>
+            <p id="companyEmpty" class="similar-empty hidden">No one on file yet at <span></span>. Open a profile here and we will start from that person.</p>
+            <p id="companyError" class="similar-error hidden"></p>
+            <a id="companyFooterLink" class="similar-footer-link" href="https://www.offerloop.ai/find?tab=people" target="_blank">
+              <span>Search more at <span class="similar-footer-link__company">this company</span></span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </a>
           </div>
         </section>
       </div>
