@@ -15,6 +15,7 @@ Read-only; data refreshes from Notion every 45 seconds.
 import json
 import os
 import subprocess
+import threading
 import time
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -98,6 +99,102 @@ def rows():
     return _cache["rows"]
 
 
+def query_all(db, body=None):
+    out, cur = [], None
+    while True:
+        b = dict(body or {}); b["page_size"] = 100
+        if cur:
+            b["start_cursor"] = cur
+        req = urllib.request.Request(
+            f"https://api.notion.com/v1/databases/{db}/query", data=json.dumps(b).encode(),
+            headers={"Authorization": f"Bearer {os.environ['NOTION_TOKEN']}",
+                     "Notion-Version": "2022-06-28", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            q = json.loads(r.read())
+        out += q.get("results", [])
+        if not q.get("has_more"):
+            break
+        cur = q["next_cursor"]
+    return out
+
+
+def num(prop):
+    return prop.get("number")
+
+
+def sel(prop):
+    return (prop.get("select") or {}).get("name") or ""
+
+
+def dt(prop):
+    return ((prop.get("date") or {}).get("start") or "")[:19]
+
+
+_cdata = {"t": 0, "data": None}
+
+
+def creators_data():
+    """Links, clicks, creators, posts for the Creators studio (cached like the inbox rows)."""
+    if time.time() - _cdata["t"] > CACHE_SECONDS or _cdata["data"] is None:
+        d = {"links": [], "clicks": [], "creators": [], "posts": []}
+        env = os.environ
+        if env.get("NOTION_LINKS_DB"):
+            for r in query_all(env["NOTION_LINKS_DB"]):
+                p = r["properties"]
+                d["links"].append({"code": text_of(p["Code"]), "owner": text_of(p.get("Owner", {})),
+                                   "target": p.get("Target", {}).get("url") or "", "destination": sel(p.get("Destination", {})),
+                                   "active": bool(p.get("Active", {}).get("checkbox")), "notes": text_of(p.get("Notes", {}))})
+        if env.get("NOTION_CLICKS_DB"):
+            for r in query_all(env["NOTION_CLICKS_DB"]):
+                p = r["properties"]
+                d["clicks"].append({"code": text_of(p.get("Code", {})), "dest": text_of(p.get("Destination", {})),
+                                    "device": sel(p.get("Device", {})), "when": dt(p.get("When", {}))})
+        if env.get("NOTION_CREATORS_DB"):
+            for r in query_all(env["NOTION_CREATORS_DB"]):
+                p = r["properties"]
+                d["creators"].append({"name": text_of(p["Name"]), "tiktok": text_of(p.get("TikTok", {})).lstrip("@"),
+                                      "instagram": text_of(p.get("Instagram", {})).lstrip("@"), "code": text_of(p.get("Link code", {})),
+                                      "track": sel(p.get("Track", {})), "active": bool(p.get("Active", {}).get("checkbox"))})
+        if env.get("NOTION_POSTS_DB"):
+            for r in query_all(env["NOTION_POSTS_DB"]):
+                p = r["properties"]
+                try:
+                    hist = json.loads(text_of(p.get("History", {})) or "[]")
+                except json.JSONDecodeError:
+                    hist = []
+                d["posts"].append({"title": text_of(p["Post"]), "creator": text_of(p.get("Creator", {})), "platform": sel(p.get("Platform", {})),
+                                   "url": p.get("URL", {}).get("url") or "", "posted": dt(p.get("Posted", {}))[:10],
+                                   "views": num(p.get("Views", {})), "likes": num(p.get("Likes", {})), "comments": num(p.get("Comments", {})),
+                                   "shares": num(p.get("Shares", {})), "checked": dt(p.get("Last checked", {}))[:10], "history": hist})
+        _cdata.update(t=time.time(), data=d)
+    return _cdata["data"]
+
+
+def log_click(code, dest, ua, referrer):
+    """One Notion row per click, written off the request thread so the redirect is instant."""
+    db = os.environ.get("NOTION_CLICKS_DB")
+    if not db:
+        return
+    ua = ua or ""
+    device = ("iPhone" if "iPhone" in ua or "iPad" in ua else "Android" if "Android" in ua
+              else "Mac" if "Macintosh" in ua else "Windows" if "Windows" in ua else "Other")
+    when = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+    body = {"parent": {"database_id": db}, "properties": {
+        "Click": {"title": [{"text": {"content": f"{code} {when}"}}]},
+        "Code": {"rich_text": [{"text": {"content": code}}]},
+        "Destination": {"rich_text": [{"text": {"content": dest[:200]}}]},
+        "Device": {"select": {"name": device}},
+        "Referrer": {"rich_text": [{"text": {"content": (referrer or "")[:300]}}]},
+        "When": {"date": {"start": when}}}}
+    try:
+        req = urllib.request.Request("https://api.notion.com/v1/pages", data=json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {os.environ['NOTION_TOKEN']}",
+                                              "Notion-Version": "2022-06-28", "Content-Type": "application/json"})
+        urllib.request.urlopen(req).read()
+    except Exception as e:
+        print("click log failed:", e)
+
+
 PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offerloop Studio</title>
@@ -163,17 +260,93 @@ nav button.on span{border-bottom:2px solid var(--ink);padding-bottom:3px}
 .empty{text-align:center;color:var(--ink3);padding:60px 0;grid-column:1/-1}
 .count{font-size:12px;color:var(--ink3);margin:2px 2px 10px}
 .feels{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+/* creators studio */
+.modes{display:flex;border:1px solid var(--hair);border-radius:8px;overflow:hidden}
+.modes button{border:0;background:var(--paper);color:var(--ink3);font:inherit;font-size:12px;font-weight:500;padding:6px 10px;cursor:pointer}
+.modes button.on{background:var(--ink);color:var(--paper)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.tile-stat{background:var(--paper);border:1px solid var(--hair);border-radius:10px;padding:12px 14px}
+.tile-stat .n{font-family:"Instrument Serif",Georgia,serif;font-size:28px;line-height:1.1}
+.tile-stat .l{font-size:12px;color:var(--ink3)}
+.tile-stat .d{font-size:12px;color:var(--ok)}
+.card2{background:var(--paper);border:1px solid var(--hair);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.card2 h3{margin:0 0 4px;font-size:15px}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{text-align:left;font-weight:500;color:var(--ink3);font-size:11px;padding:6px 8px;border-bottom:1px solid var(--hair)}
+.tbl td{padding:7px 8px;border-bottom:1px solid var(--hair);white-space:nowrap}
+.tbl td.t{white-space:normal;max-width:320px}
+.tbl a{color:var(--accent);text-decoration:none}
+.tw{overflow-x:auto;background:var(--paper);border:1px solid var(--hair);border-radius:10px}
+.bars{display:flex;align-items:flex-end;gap:3px;height:60px;margin:8px 0 2px}
+.bars div{flex:1;background:var(--accent);border-radius:2px 2px 0 0;min-height:2px;opacity:.85}
+.bars div.zero{background:var(--hair)}
+.mini{font-size:11px;color:var(--ink3);display:flex;justify-content:space-between}
+.share{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;background:var(--surface);border:1px solid var(--hair);border-radius:6px;padding:4px 8px;display:inline-block}
+.up{color:var(--ok)} .dn{color:var(--crit)}
 </style></head><body>
-<div class="top"><h1 id="title">Clips</h1><input class="search" id="q" placeholder="Search by feeling or scene (struggle, smug, thanos...)"></div>
+<div class="top"><div class="modes"><button id="m-studio" class="on" onclick="setMode('studio')">Studio</button><button id="m-creators" onclick="setMode('creators')">Creators</button></div><h1 id="title">Clips</h1><input class="search" id="q" placeholder="Search by feeling or scene (struggle, smug, thanos...)"></div>
 <main id="main"></main>
-<nav>
+<nav id="nav-studio">
 <button id="nb-clips" class="on" onclick="go('clips')"><span>Clips</span></button>
 <button id="nb-reels" onclick="go('reels')"><span>Reels</span></button>
 <button id="nb-drops" onclick="go('drops')"><span>Drops</span></button>
 </nav>
+<nav id="nav-creators" hidden>
+<button id="nb-dash" class="on" onclick="go('dash')"><span>Dashboard</span></button>
+<button id="nb-posts" onclick="go('posts')"><span>Posts</span></button>
+<button id="nb-links" onclick="go('links')"><span>Links</span></button>
+</nav>
 <script>
-const ROWS = __ROWS__;
-let view='clips', q='';
+const DATA = __DATA__;
+const ROWS = DATA.rows;
+let mode='studio', view='clips', q='';
+const fmt=n=>n==null?'':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(1)+'K':String(n);
+const SITE=location.origin;
+function delta(p,field){ // change over the last day from the post's history snapshots
+  const idx={views:1,likes:2,comments:3,shares:4}[field]; const h=p.history||[];
+  if(h.length<2) return null; return (h[h.length-1][idx]||0)-(h[h.length-2][idx]||0);
+}
+function sum(list,f){return list.reduce((a,p)=>a+(p[f]||0),0)}
+function dayKey(iso){return (iso||'').slice(0,10)}
+function lastDays(n){const out=[];const d=new Date();for(let i=n-1;i>=0;i--){const x=new Date(d);x.setDate(d.getDate()-i);out.push(x.toISOString().slice(0,10));}return out}
+function bars(counts,days){const mx=Math.max(1,...days.map(d=>counts[d]||0));return `<div class="bars">${days.map(d=>`<div class="${counts[d]?'':'zero'}" style="height:${Math.round((counts[d]||0)/mx*100)}%" title="${d}: ${counts[d]||0}"></div>`).join('')}</div><div class="mini"><span>${days[0]}</span><span>${days[days.length-1]}</span></div>`}
+function clicksByDay(code){const c={};DATA.clicks.filter(x=>!code||x.code===code).forEach(x=>{const k=dayKey(x.when);c[k]=(c[k]||0)+1});return c}
+function creatorsView(){
+  const posts=DATA.posts.filter(p=>match({title:p.title,description:p.creator,sources:p.platform,tags:''}));
+  const creators=DATA.creators.filter(c=>c.active);
+  const days=lastDays(14); const clicks=clicksByDay(null); const c7=days.slice(-7).reduce((a,d)=>a+(clicks[d]||0),0);
+  const dv=posts.reduce((a,p)=>a+(delta(p,'views')||0),0);
+  if(view==='dash'){
+    return `<div class="tiles">
+      <div class="tile-stat"><div class="n">${fmt(sum(posts,'views'))}</div><div class="l">views</div>${dv?`<div class="d">+${fmt(dv)} last day</div>`:''}</div>
+      <div class="tile-stat"><div class="n">${fmt(sum(posts,'likes'))}</div><div class="l">likes</div></div>
+      <div class="tile-stat"><div class="n">${fmt(sum(posts,'shares'))}</div><div class="l">shares</div></div>
+      <div class="tile-stat"><div class="n">${fmt(sum(posts,'comments'))}</div><div class="l">comments</div></div>
+      <div class="tile-stat"><div class="n">${DATA.clicks.length}</div><div class="l">link clicks</div>${c7?`<div class="d">${c7} last 7 days</div>`:''}</div>
+      <div class="tile-stat"><div class="n">${posts.length}</div><div class="l">posts tracked</div></div>
+    </div>
+    <div class="card2"><h3>Link clicks, last 14 days</h3>${bars(clicks,days)}</div>
+    ${creators.map(c=>{const ps=posts.filter(p=>p.creator===c.name); const top=ps.slice().sort((a,b)=>(b.views||0)-(a.views||0))[0];
+      return `<div class="card2"><h3>${esc(c.name)} <span class="tmeta" style="display:inline">${c.tiktok?'@'+esc(c.tiktok)+' on TikTok':''} ${c.instagram?'· @'+esc(c.instagram)+' on Instagram':''} · ${esc(c.track||'all')} posts</span></h3>
+        <div class="tmeta">${ps.length} posts · ${fmt(sum(ps,'views'))} views · ${fmt(sum(ps,'likes'))} likes · ${fmt(sum(ps,'shares'))} shares${c.code?` · link clicks: ${DATA.clicks.filter(x=>x.code.startsWith(c.code)).length}`:''}</div>
+        ${top?`<div class="tmeta">top post: <a href="${top.url}" target="_blank">${esc(top.title.slice(0,70))}</a> · ${fmt(top.views)} views</div>`:'<div class="tmeta">no posts yet'+(c.tiktok?'':' (add the TikTok handle in Notion)')+'</div>'}
+      </div>`}).join('')||'<div class="empty">No creators yet. Add one in the Creators database in Notion.</div>'}`;
+  }
+  if(view==='posts'){
+    const list=posts.slice().sort((a,b)=>(b.posted||'').localeCompare(a.posted||''));
+    return `<div class="count">${list.length} posts</div><div class="tw"><table class="tbl"><tr><th>Creator</th><th>Post</th><th>Posted</th><th>Views</th><th>Δ day</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Checked</th></tr>
+      ${list.map(p=>{const d=delta(p,'views');return `<tr><td>${esc(p.creator)}</td><td class="t"><a href="${p.url}" target="_blank">${esc(p.title.slice(0,80))}</a> <span class="pill t-none">${esc(p.platform)}</span></td><td>${p.posted}</td><td>${fmt(p.views)}</td><td class="${d>0?'up':d<0?'dn':''}">${d==null?'':(d>0?'+':'')+fmt(d)}</td><td>${fmt(p.likes)}</td><td>${fmt(p.comments)}</td><td>${fmt(p.shares)}</td><td>${p.checked}</td></tr>`}).join('')||'<tr><td colspan=9 class="empty">Nothing tracked yet.</td></tr>'}</table></div>`;
+  }
+  return DATA.links.map(l=>{const cs=DATA.clicks.filter(x=>x.code===l.code); const c={}; cs.forEach(x=>{c[x.device||'Other']=(c[x.device||'Other']||0)+1});
+    const byday=clicksByDay(l.code); const d7=lastDays(7).reduce((a,d)=>a+(byday[d]||0),0);
+    return `<div class="card2"><h3>${esc(l.code)} <span class="tmeta" style="display:inline">${esc(l.owner)} · ${esc(l.destination)}${l.active?'':' · inactive'}</span></h3>
+      <div style="margin:6px 0"><span class="share">${SITE}/go/${esc(l.code)}</span> <button class="chip" onclick="navigator.clipboard.writeText('${SITE}/go/${esc(l.code)}')">copy</button></div>
+      <div class="tmeta">${cs.length} clicks · ${d7} in the last 7 days · ${Object.entries(c).map(([k,v])=>k+' '+v).join(', ')||'no clicks yet'}</div>
+      <div class="tmeta">sends to <a href="${l.target}" target="_blank">${esc(l.target.slice(0,80))}</a></div>
+      ${l.notes?`<div class="tmeta">${esc(l.notes)}</div>`:''}
+      ${bars(byday,lastDays(14))}</div>`}).join('')||'<div class="empty">No links yet. Add a row to the Studio Links database in Notion.</div>';
+}
+function setMode(m){mode=m;view=m==='studio'?'clips':'dash';['studio','creators'].forEach(x=>document.getElementById('m-'+x).className=(x===m?'on':''));document.getElementById('nav-studio').hidden=m!=='studio';document.getElementById('nav-creators').hidden=m!=='creators';render();window.scrollTo(0,0)}
 function esc(t){const d=document.createElement('div');d.textContent=t||'';return d.innerHTML}
 function tierOf(row, clipName){
   const m=(row.sources||'').match(/via (\\w+)\\]/);
@@ -235,10 +408,12 @@ function feelCloud(rows){
   return top.length?`<div class="feels">${top.map(([f,n])=>`<button class="chip" onclick="setQ('${esc(f)}')">${esc(f)} ${n}</button>`).join('')}</div>`:'';
 }
 function render(){
-  document.getElementById('title').textContent={clips:'Clips',reels:'Reels',drops:'Drops'}[view];
-  ['clips','reels','drops'].forEach(v=>document.getElementById('nb-'+v).className=(v===view?'on':''));
-  document.getElementById('q').style.display=view==='drops'?'none':'';
+  document.getElementById('title').textContent={clips:'Clips',reels:'Reels',drops:'Drops',dash:'Dashboard',posts:'Posts',links:'Links'}[view];
+  ['clips','reels','drops','dash','posts','links'].forEach(v=>{const b=document.getElementById('nb-'+v); if(b) b.className=(v===view?'on':'')});
+  document.getElementById('q').style.display=(view==='drops'||view==='dash'||view==='links')?'none':'';
+  document.getElementById('q').placeholder=mode==='creators'?'Search posts':'Search by feeling or scene (struggle, smug, thanos...)';
   const m=document.getElementById('main');
+  if(mode==='creators'){ m.innerHTML=creatorsView(); return; }
   if(view==='clips'){
     const list=[]; ROWS.filter(match).forEach(r=>r.clips.forEach(c=>{ if(c.url) list.push({c,r}); }));
     m.innerHTML=(q?'':feelCloud(ROWS))+`<div class="count">${list.length} clip${list.length!==1?'s':''}${q?' matching "'+esc(q)+'"':' ready'}</div><div class="grid">`+
@@ -258,6 +433,7 @@ function render(){
   }
 }
 function go(v){view=v;render();window.scrollTo(0,0)}
+if(location.hash==='#creators') setMode('creators');
 function setQ(w){q=w.toLowerCase();document.getElementById('q').value=w;if(view==='drops')view='clips';render();window.scrollTo(0,0)}
 document.getElementById('q').addEventListener('input',e=>{q=e.target.value.trim().toLowerCase();render()});
 render();
@@ -318,6 +494,21 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        parts0 = self.path.split("?")[0].strip("/").split("/")
+        if parts0[0] == "go" and len(parts0) >= 2:      # ambassador links: public, no password
+            code = parts0[1].lower()
+            dest = parts0[2].lower() if len(parts0) > 2 else ""
+            links = [l for l in creators_data()["links"] if l["active"] and l["code"].lower() == (f"{code}-{dest}" if dest else code)]
+            if not links:
+                links = [l for l in creators_data()["links"] if l["active"] and l["code"].lower() == code]
+            if not links or not links[0]["target"]:
+                self.send_response(404); self.send_header("Content-Type", "text/plain"); self.end_headers()
+                self.wfile.write(b"unknown link"); return
+            link = links[0]
+            threading.Thread(target=log_click, args=(link["code"], link["destination"] or link["target"],
+                             self.headers.get("User-Agent"), self.headers.get("Referer")), daemon=True).start()
+            self.send_response(302); self.send_header("Location", link["target"]); self.send_header("Cache-Control", "no-store")
+            self.end_headers(); return
         if self.path.split("?")[0] == "/health":     # Render's health check, no password
             body = b"ok"
             self.send_response(200)
@@ -350,8 +541,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not poster.exists():
                     self.send_response(404); self.end_headers(); return
                 return self.send_file(poster, "image/jpeg")
-            data = rows()
-            page = PAGE.replace("__ROWS__", json.dumps(data))
+            data = {"rows": rows(), **creators_data()}
+            page = PAGE.replace("__DATA__", json.dumps(data))
             body = page.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
