@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -45,7 +45,7 @@ def notion_query():
                          "page_size": 100}).encode(),
         headers={"Authorization": f"Bearer {os.environ['NOTION_TOKEN']}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req) as r:
+    with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read())["results"]
 
 
@@ -59,7 +59,15 @@ def files_of(prop):
             for f in prop.get("files", []) if (f.get("file") or f.get("external") or {}).get("url")]
 
 
+_lock = threading.Lock()
+
+
 def rows():
+    with _lock:            # one fetch at a time; others reuse the cache
+        return _rows()
+
+
+def _rows():
     if time.time() - _cache["t"] > CACHE_SECONDS:
         out = []
         for r in notion_query():
@@ -109,7 +117,7 @@ def query_all(db, body=None):
             f"https://api.notion.com/v1/databases/{db}/query", data=json.dumps(b).encode(),
             headers={"Authorization": f"Bearer {os.environ['NOTION_TOKEN']}",
                      "Notion-Version": "2022-06-28", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req) as r:
+        with urllib.request.urlopen(req, timeout=25) as r:
             q = json.loads(r.read())
         out += q.get("results", [])
         if not q.get("has_more"):
@@ -135,6 +143,11 @@ _cdata = {"t": 0, "data": None}
 
 def creators_data():
     """Links, clicks, creators, posts for the Creators studio (cached like the inbox rows)."""
+    with _lock:
+        return _creators_data()
+
+
+def _creators_data():
     if time.time() - _cdata["t"] > CACHE_SECONDS or _cdata["data"] is None:
         d = {"links": [], "clicks": [], "creators": [], "posts": []}
         env = os.environ
@@ -190,7 +203,7 @@ def log_click(code, dest, ua, referrer):
         req = urllib.request.Request("https://api.notion.com/v1/pages", data=json.dumps(body).encode(),
                                      headers={"Authorization": f"Bearer {os.environ['NOTION_TOKEN']}",
                                               "Notion-Version": "2022-06-28", "Content-Type": "application/json"})
-        urllib.request.urlopen(req).read()
+        urllib.request.urlopen(req, timeout=25).read()
     except Exception as e:
         print("click log failed:", e)
 
@@ -565,4 +578,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_env()
     print(f"Offerloop Studio viewer: http://localhost:{PORT}")
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    # threaded: one slow Notion call must never block the health check or other visitors
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
