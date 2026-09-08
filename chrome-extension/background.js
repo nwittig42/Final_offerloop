@@ -412,6 +412,7 @@ async function handleCompanyPeople(request, sendResponse) {
       limit: request.limit || 10,
       prefetch: request.prefetch !== false,
       focus: (request.focus || '').trim(),
+      dig: request.dig,
     });
     sendResponse(result);
   } catch (error) {
@@ -444,6 +445,10 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       prefetch: opts.prefetch === false ? '0' : '1',
     });
     if (role) params.set('role', role);
+    // dig: '1' asks the server to pull new people from LinkedIn for a dry
+    // company (the student pressed the button); '0' forbids it (glance
+    // lists). Unset means the server decides, which for the panel is no.
+    if (opts.dig === '1' || opts.dig === '0') params.set('dig', opts.dig);
     if (opts.focus) params.set('focus', opts.focus);
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/ranker/candidates?${params.toString()}`, {
       method: 'GET',
@@ -497,6 +502,7 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       deck_id: data.deck_id || '',
       reason: data.reason || '',
       chips: Array.isArray(data.chips) ? data.chips : [],
+      can_dig: data.can_dig === true,
     };
   } catch (error) {
     console.error('[Offerloop Background] company deck API error:', error);

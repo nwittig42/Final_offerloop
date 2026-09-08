@@ -12,6 +12,7 @@ See person_ranker module docstring for algorithm details, sensitive-field
 posture, and known gaps.
 """
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -28,6 +29,39 @@ from app.services.person_ranker import (
     suggest_chips,
 )
 from app.utils.recommendation_events import log_recommendation_event
+
+# ── Spend guardrails for the deck (2026-09-08) ──────────────────────────
+# Which surfaces get the FullEnrich prefetch at deck time. The extension is
+# OFF until the 20K reseller credits land (balance ~140 on 2026-09-08; six
+# per company page would drain it in an afternoon). Flip by setting
+# DECK_PREFETCH_SURFACES="ios_swipe_deck,extension" on Render.
+_PREFETCH_SURFACES = {
+    s.strip() for s in os.environ.get("DECK_PREFETCH_SURFACES", "ios_swipe_deck").split(",") if s.strip()
+}
+# The extension never digs Coresignal on its own: a dry company returns
+# shelf_empty and the student asks for the dig with ?dig=1. Each dig is
+# capped smaller than the app's and rationed per student per day.
+EXTENSION_DIG_COLLECTS = int(os.environ.get("EXTENSION_DIG_COLLECTS", "6"))
+EXTENSION_DIGS_PER_DAY = int(os.environ.get("EXTENSION_DIGS_PER_DAY", "5"))
+DECK_DIG_COLLECTS = int(os.environ.get("DECK_DIG_COLLECTS", "12"))
+
+
+def _extension_dig_allowed(db, uid: str) -> bool:
+    """Count today's extension digs for this student; True and increment
+    when under EXTENSION_DIGS_PER_DAY, False when the day's ration is spent.
+    Fails closed on any error (no dig) so a Firestore blip never spends."""
+    try:
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        ref = db.collection("users").document(uid).collection("quotas").document("extensionDigs")
+        snap = ref.get()
+        used = int(((snap.to_dict() or {}) if getattr(snap, "exists", False) else {}).get(day, 0))
+        if used >= EXTENSION_DIGS_PER_DAY:
+            return False
+        ref.set({day: used + 1, "updatedAt": datetime.now(timezone.utc).isoformat()}, merge=True)
+        return True
+    except Exception:
+        logger.exception("ranker: dig quota check failed uid=%s", uid)
+        return False
 
 logger = logging.getLogger(__name__)
 
@@ -156,10 +190,19 @@ def get_ranked_candidates():
     surface = (request.args.get("surface") or "").strip()[:40] or "ios_swipe_deck"
     # ?prefetch=0 skips the FullEnrich prefetch (the extension's glance lists).
     do_prefetch = (request.args.get("prefetch") or "1").strip() != "0"
+    # ?dig=1 asks for the Coresignal dig on a dry company; ?dig=0 forbids it.
+    # The app keeps its automatic dig; the extension must ask (see the
+    # guardrails at the top of this file).
+    dig_arg = (request.args.get("dig") or "").strip()
+    is_extension = surface == "extension"
+    want_dig = (dig_arg == "1") or (not is_extension and dig_arg != "0")
+    dig_collects = EXTENSION_DIG_COLLECTS if is_extension else DECK_DIG_COLLECTS
 
     db = get_db()
     if not db:
         return jsonify({"error": "Database not initialized"}), 500
+
+    dig_state = "not_needed"   # not_needed | ran | not_asked | capped
 
     candidates = rank_people_for_user(
         uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
@@ -174,7 +217,12 @@ def get_ranked_candidates():
     # covered firm, feed the warehouse, and rank again. Bounded: one firm, one
     # search, ~10 collects, only on an empty rank, so a healthy well never
     # pays it and a dry one pays it once.
-    if not candidates:
+    if not candidates and not want_dig:
+        dig_state = "not_asked"
+    elif not candidates and is_extension and not _extension_dig_allowed(db, uid):
+        dig_state = "capped"
+    elif not candidates:
+        dig_state = "ran"
         try:
             from app.services import coresignal_client
             from app.services.firm_cache.writer import cache_pdl_contacts
@@ -200,7 +248,7 @@ def get_ranked_candidates():
                     {"companies": [{"name": _dig_name}],
                      "title_variations": [role] if role else [],
                      "locations": ["United States"]},
-                    12,
+                    dig_collects,
                 )
                 # Keep only people whose employer actually IS the firm. A
                 # one-word firm name like Stripe token-matches "Kleen Stripe"
@@ -294,7 +342,7 @@ def get_ranked_candidates():
     # deck latency is the product here and the prefetch must never add to
     # it. Their dedupe makes re-enriching a recently-enriched person free,
     # so no cache check is needed before asking.
-    if candidates and do_prefetch:
+    if candidates and do_prefetch and surface in _PREFETCH_SURFACES:
         def _prefetch(cands, uid_, deck_id_):
             try:
                 from app.services import fullenrich_client
@@ -342,11 +390,16 @@ def get_ranked_candidates():
             chips = []
 
     if not candidates:
+        # shelf_empty: nothing on file and no dig was run; the panel may ask
+        # for one (?dig=1). dig_cap: the student's daily digs are spent.
+        # no_candidates: we dug (or nothing applied) and still found nobody.
+        reason = {"not_asked": "shelf_empty", "capped": "dig_cap"}.get(dig_state, "no_candidates")
         return jsonify({
             "candidates":  [],
             "count":       0,
             "deck_id":     deck_id,
-            "reason":      "no_candidates",
+            "reason":      reason,
+            "can_dig":     bool(company) and dig_state == "not_asked",
             "chips":       chips,
             "generatedAt": generated_at,
         })
