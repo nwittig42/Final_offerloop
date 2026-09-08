@@ -209,7 +209,10 @@ def find_work_email(
         email = (best.get("email") or "").strip().lower()
         status = (best.get("status") or "").upper()
         logger.info("fullenrich result %s %s (%.0f credits)", email or "(none)", status, credits)
-        if not email or status not in ("DELIVERABLE", "HIGH_PROBABILITY"):
+        sellable = status in ("DELIVERABLE", "HIGH_PROBABILITY") or (
+            status == "CATCH_ALL" and _ACCEPT_CATCH_ALL
+        )
+        if not email or not sellable:
             return None
         return {"email": email, "status": status}
     except Exception:
@@ -254,6 +257,9 @@ def start_bulk(people, db=None) -> str:
         return ""
 
 
+_ACCEPT_CATCH_ALL = (os.getenv("FULLENRICH_ACCEPT_CATCH_ALL", "0").strip() == "1")
+
+
 def fetch_bulk(enrichment_id: str, wait_seconds: int = 12, db=None):
     """(ready, {pid: {email, status}}) for a prefetch job, sellable tiers
     only. ready=False means the job is still running (caller should fall
@@ -278,15 +284,28 @@ def fetch_bulk(enrichment_id: str, wait_seconds: int = 12, db=None):
         if credits and db is not None and not _spent_marked(db, enrichment_id):
             _add_spend(db, credits)
         out: Dict[str, Dict[str, Any]] = {}
+        verdicts = []
         for row in body.get("data") or []:
             pid = str(((row.get("custom") or {}).get("pid")) or "")
             best = ((row.get("contact_info") or {}).get("most_probable_work_email") or {})
             email = (best.get("email") or "").strip().lower()
             status = (best.get("status") or "").upper()
-            if pid and email and status in ("DELIVERABLE", "HIGH_PROBABILITY"):
+            # Every verdict in the log, not just the sellable count, so a
+            # miss at a catch-all domain (Apple, most of big tech) reads as
+            # "CATCH_ALL" rather than "nothing", and the policy below can be
+            # judged on real data. Domain only, never the address.
+            verdicts.append(f"{pid}:{status or 'NONE'}@{email.split('@')[-1] if email else '-'}")
+            sellable = status in ("DELIVERABLE", "HIGH_PROBABILITY")
+            # Catch-all domains accept any address, so FullEnrich cannot
+            # verify and reports CATCH_ALL with its most probable pattern.
+            # Off by default; FULLENRICH_ACCEPT_CATCH_ALL=1 sells those too,
+            # labelled so callers can say "likely" instead of "verified".
+            if not sellable and status == "CATCH_ALL" and _ACCEPT_CATCH_ALL:
+                sellable = True
+            if pid and email and sellable:
                 out[pid] = {"email": email, "status": status}
-        logger.info("fullenrich prefetch %s FINISHED: %d sellable of %d rows",
-                    enrichment_id, len(out), len(body.get("data") or []))
+        logger.info("fullenrich prefetch %s FINISHED: %d sellable of %d rows [%s]",
+                    enrichment_id, len(out), len(body.get("data") or []), ", ".join(verdicts))
         return True, out
     except Exception:
         logger.exception("fullenrich: fetch_bulk failed")

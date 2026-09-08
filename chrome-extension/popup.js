@@ -1273,9 +1273,20 @@ function showResults(contact) {
   const fullName = contact.full_name || `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || 'Unknown';
   elements.resultName.textContent = fullName;
 
-  // Email, or the waiting state while FullEnrich finishes in the background
+  // Email, or the waiting state while FullEnrich finishes in the background:
+  // the app's green bar with filler copy that advances every few seconds.
+  const progressEl = document.getElementById('resultProgress');
+  if (_pendingStagesStop) { _pendingStagesStop(); _pendingStagesStop = null; }
+  progressEl?.classList.toggle('hidden', !contact.pending);
+  applyResultAvatar();
   if (contact.pending) {
-    elements.resultEmail.textContent = 'Locking down their email. This can take a minute or two.';
+    _pendingStagesStop = startLoadingStages(elements.resultEmail, [
+      'Checking who already has this address',
+      'Asking our email partners',
+      'Verifying the address is live',
+      'Still working, this one is taking a moment',
+      'Almost there',
+    ], 6000);
   } else if (contact.email) {
     elements.resultEmail.textContent = contact.email;
   } else {
@@ -1323,6 +1334,32 @@ function showResults(contact) {
   // Capture source for the "Find similar" disclosure and reset its state on
   // every new result so an old company's rows never bleed across contacts.
   primeSimilarSection(contact);
+}
+
+// The result card's avatar: the person's company logo in a gold ring when
+// the page gave us one, Scout otherwise.
+let _pendingStagesStop = null;
+
+function applyResultAvatar() {
+  const wrap = document.getElementById('resultAvatar');
+  const img = document.getElementById('resultAvatarImg');
+  if (!wrap || !img) return;
+  const logo = (currentState.profileCompanyLogo || '').trim();
+  if (logo) {
+    if (img.getAttribute('src') !== logo) {
+      img.onerror = () => {
+        img.onerror = null;
+        img.src = 'images/yeti-mascot.png';
+        wrap.classList.remove('result-card__scout-avatar--logo');
+      };
+      img.src = logo;
+    }
+    wrap.classList.add('result-card__scout-avatar--logo');
+  } else {
+    img.onerror = null;
+    if (!/yeti-mascot/.test(img.getAttribute('src') || '')) img.src = 'images/yeti-mascot.png';
+    wrap.classList.remove('result-card__scout-avatar--logo');
+  }
 }
 
 // Update credits display
@@ -1661,7 +1698,10 @@ async function checkAndShowContent() {
   }
 
   // People at this person's company, listed before any email is bought.
-  // Fire and forget: nothing else waits on it.
+  // Fire and forget: nothing else waits on it. The logo resets per profile
+  // so one company's mark never sits on the next person's card.
+  currentState.profileCompanyLogo = '';
+  applyResultAvatar();
   getCurrentTab().then((tab) => loadProfileCompanyPeople(tab)).catch(() => {});
 }
 
@@ -1923,6 +1963,12 @@ async function fetchSimilarContacts() {
   results?.classList.add('hidden');
   empty?.classList.add('hidden');
   error?.classList.add('hidden');
+  startLoadingStages(_getSimilarEl('similarLoadingText'), [
+    'Checking who is already on file',
+    'Looking for people like them',
+    'Ranking them for you',
+    'Almost there',
+  ]);
 
   try {
     const response = await chrome.runtime.sendMessage({
@@ -2071,32 +2117,41 @@ function buildSimilarRowEl(row) {
   // Expand on the name (2026-09-07): a little more about the person from
   // data the deck already sent, so it costs nothing. Location, school, the
   // year they joined, every reason the ranker had, and a LinkedIn link.
-  const detailLines = [];
-  if (row.title) detailLines.push(row.title);
+  // Concise (2026-09-08): the full title on one line, then place, school
+  // (with a cap mark) and tenure on a second, then up to three reason
+  // tags. The ranker's sentence is dropped here; the row caption already
+  // carries it.
+  const facts = [];
   const place = [row.city, row.state].filter(Boolean).join(', ');
-  if (place) detailLines.push(place);
-  if (row.school) detailLines.push(row.school);
-  if (row.joinedYear) detailLines.push(`At ${row.company || 'this company'} since ${row.joinedYear}`);
-  const reasonLines = Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : [];
-  if (detailLines.length || reasonLines.length || row.briefing) {
+  if (place) facts.push({ text: place });
+  if (row.school) facts.push({ text: row.school, icon: 'school' });
+  if (row.joinedYear) facts.push({ text: `Since ${row.joinedYear}` });
+  const reasonLines = (Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : []).slice(0, 3);
+  if (row.title || facts.length || reasonLines.length) {
     el.classList.add('similar-row--expandable');
     const details = document.createElement('div');
     details.className = 'similar-row__details hidden';
-    if (row.briefing) {
-      const b = document.createElement('p');
-      b.className = 'similar-row__briefing';
-      b.textContent = row.briefing;
-      details.appendChild(b);
+    if (row.title) {
+      const t = document.createElement('p');
+      t.className = 'similar-row__fact-title';
+      t.textContent = row.title;
+      details.appendChild(t);
     }
-    if (detailLines.length) {
-      const ul = document.createElement('ul');
-      ul.className = 'similar-row__facts';
-      detailLines.forEach((line) => {
-        const li = document.createElement('li');
-        li.textContent = line;
-        ul.appendChild(li);
+    if (facts.length) {
+      const line = document.createElement('p');
+      line.className = 'similar-row__facts';
+      facts.forEach((f, i) => {
+        if (i) line.appendChild(document.createTextNode('  ·  '));
+        if (f.icon === 'school') {
+          const cap = document.createElement('span');
+          cap.className = 'similar-row__cap';
+          cap.setAttribute('aria-hidden', 'true');
+          cap.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10L12 5 2 10l10 5 10-5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>';
+          line.appendChild(cap);
+        }
+        line.appendChild(document.createTextNode(f.text));
       });
-      details.appendChild(ul);
+      details.appendChild(line);
     }
     if (reasonLines.length) {
       const why = document.createElement('div');
@@ -2565,6 +2620,8 @@ function startLoadingStages(textEl, stages, everyMs = 3500) {
   let i = 0;
   textEl.textContent = stages[0];
   const timer = setInterval(() => {
+    // Self-stopping: once the loader is hidden, the copy stops advancing.
+    if (textEl.closest('.hidden')) { clearInterval(timer); return; }
     i = Math.min(i + 1, stages.length - 1);
     textEl.textContent = stages[i];
   }, everyMs);
@@ -2611,12 +2668,32 @@ function renderCompanyEmpty(prefix, company, response, dig) {
   if (hint) hint.classList.toggle('hidden', !showDig);
 }
 
+const COMPANY_ROWS_FIRST = 5;
+
 function renderCompanyRows(rows, prefix = 'company') {
   const results = _companyEl(prefix, 'Results');
   if (!results) return;
   results.innerHTML = '';
   // Deck rows carry the ranker's reason as their caption; no bucket caption.
-  rows.forEach((row) => results.appendChild(buildSimilarRowEl({ ...row, category: '' })));
+  // Five up front, the rest behind one line: shorter list, same data, no
+  // extra request (rows are already in hand).
+  const els = rows.map((row) => buildSimilarRowEl({ ...row, category: '' }));
+  els.forEach((el, i) => {
+    if (prefix === 'company' && i >= COMPANY_ROWS_FIRST) el.classList.add('hidden', 'similar-row--folded');
+    results.appendChild(el);
+  });
+  if (prefix === 'company' && els.length > COMPANY_ROWS_FIRST) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'similar-more';
+    const rest = els.length - COMPANY_ROWS_FIRST;
+    more.textContent = `Show ${rest} more`;
+    more.addEventListener('click', () => {
+      results.querySelectorAll('.similar-row--folded').forEach((el) => el.classList.remove('hidden', 'similar-row--folded'));
+      more.remove();
+    });
+    results.appendChild(more);
+  }
   results.classList.remove('hidden');
 }
 
@@ -2731,6 +2808,27 @@ async function loadProfileCompanyPeople(tab) {
   try {
     const res = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileCompany' });
     company = ((res && res.company) || '').trim();
+    // The company's logo, for the result card's avatar (gold ring). The
+    // page often has not painted its logos when we first ask, so retry a
+    // couple of times before settling for Scout.
+    currentState.profileCompanyLogo = ((res && res.logoUrl) || '').trim();
+    applyResultAvatar();
+    if (!currentState.profileCompanyLogo) {
+      const wantedUrl = currentState.linkedInUrl;
+      for (const delay of [2500, 6000]) {
+        setTimeout(async () => {
+          if (currentState.profileCompanyLogo || currentState.linkedInUrl !== wantedUrl) return;
+          try {
+            const again = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileCompany' });
+            const logo = ((again && again.logoUrl) || '').trim();
+            if (logo && currentState.linkedInUrl === wantedUrl) {
+              currentState.profileCompanyLogo = logo;
+              applyResultAvatar();
+            }
+          } catch (e) { /* content script gone; nothing to do */ }
+        }, delay);
+      }
+    }
   } catch (e) {
     // Content script not ready on this page yet; nothing to show.
     return;

@@ -51,6 +51,45 @@ function getProfileCurrentCompany() {
   return '';
 }
 
+// The current company's logo as LinkedIn renders it on this profile: the
+// top card's "Current company" button carries it, else the first Experience
+// entry's logo. Empty string when neither is there. Never throws.
+function getProfileCompanyLogo() {
+  try {
+    // LinkedIn lazy-loads images: before they load, src is empty or a data
+    // URI and the real address sits in data-delayed-url / data-ghost-url.
+    const pick = (img) => {
+      if (!img) return '';
+      const candidates = [
+        img.currentSrc, img.src,
+        img.getAttribute('data-delayed-url'), img.getAttribute('data-ghost-url'), img.getAttribute('data-src'),
+      ];
+      for (const c of candidates) {
+        const src = (c || '').trim();
+        if (/^https?:\/\//i.test(src) && !/data:image/i.test(src)) return src;
+      }
+      return '';
+    };
+    const selectors = [
+      'button[aria-label^="Current company"] img',
+      '.pv-top-card a[href*="/company/"] img',
+      'a[href*="/company/"] img[alt*="logo" i]',
+      '#experience ~ * li a[href*="/company/"] img',
+      '#experience ~ * li img',
+      'section:has(#experience) li img',
+    ];
+    for (const sel of selectors) {
+      let img = null;
+      try { img = document.querySelector(sel); } catch (e) { img = null; }
+      const src = pick(img);
+      if (src) return src;
+    }
+  } catch (e) {
+    console.warn('[Offerloop] company logo scrape failed:', e);
+  }
+  return '';
+}
+
 // Show toast notification
 function showToast(message, type = 'info') {
   // Remove existing toast
@@ -810,7 +849,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // the Experience section is the fallback. Empty string when neither is
   // present (the panel then simply shows nothing extra).
   if (request.action === 'getProfileCompany') {
-    sendResponse({ company: isLinkedInProfilePage() ? getProfileCurrentCompany() : '' });
+    const onProfile = isLinkedInProfilePage();
+    sendResponse({
+      company: onProfile ? getProfileCurrentCompany() : '',
+      logoUrl: onProfile ? getProfileCompanyLogo() : '',
+    });
     return true;
   }
 
