@@ -2027,3 +2027,45 @@ body {
   color: var(--ink-faint);
   text-align: center;
 }
+
+/* Company logo on the result card, ringed in gold. Scout stays when the
+   page gave us no logo. */
+:root { --gold: #C9A227; --gold-soft: #F1E3B3; }
+
+.result-card__scout-avatar--logo {
+  background: #FFFFFF;
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-soft), 0 2px 6px rgba(201, 162, 39, 0.25);
+}
+
+.result-card__scout-avatar--logo img {
+  object-fit: contain;
+  padding: 5px;
+}
+
+.result-card__progress {
+  margin-bottom: 8px;
+}
+
+.similar-more {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px dashed var(--indigo-200);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--indigo-600);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.similar-more:hover {
+  background: var(--indigo-foam);
+}
+
+.result-card__scout-avatar--logo img {
+  object-position: center;
+}

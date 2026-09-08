@@ -51,6 +51,32 @@ function getProfileCurrentCompany() {
   return '';
 }
 
+// The current company's logo as LinkedIn renders it on this profile: the
+// top card's "Current company" button carries it, else the first Experience
+// entry's logo. Empty string when neither is there. Never throws.
+function getProfileCompanyLogo() {
+  try {
+    const pick = (img) => {
+      if (!img) return '';
+      const src = (img.currentSrc || img.src || '').trim();
+      return /^https?:\/\//i.test(src) && !/data:image/i.test(src) ? src : '';
+    };
+    const btnImg = document.querySelector('button[aria-label^="Current company"] img');
+    const fromBtn = pick(btnImg);
+    if (fromBtn) return fromBtn;
+    const exp = document.querySelector('#experience');
+    const section = exp ? exp.closest('section') : null;
+    if (section) {
+      const img = section.querySelector('li img');
+      const fromExp = pick(img);
+      if (fromExp) return fromExp;
+    }
+  } catch (e) {
+    console.warn('[Offerloop] company logo scrape failed:', e);
+  }
+  return '';
+}
+
 // Show toast notification
 function showToast(message, type = 'info') {
   // Remove existing toast
@@ -810,7 +836,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // the Experience section is the fallback. Empty string when neither is
   // present (the panel then simply shows nothing extra).
   if (request.action === 'getProfileCompany') {
-    sendResponse({ company: isLinkedInProfilePage() ? getProfileCurrentCompany() : '' });
+    const onProfile = isLinkedInProfilePage();
+    sendResponse({
+      company: onProfile ? getProfileCurrentCompany() : '',
+      logoUrl: onProfile ? getProfileCompanyLogo() : '',
+    });
     return true;
   }
 

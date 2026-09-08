@@ -208,8 +208,8 @@
           <div id="resultsSection" class="result-card result-card--success hidden">
             <div class="result-card__header">
               <div class="result-card__heading">
-                <span class="result-card__scout-avatar" aria-hidden="true">
-                  <img src="images/yeti-mascot.png" alt="">
+                <span id="resultAvatar" class="result-card__scout-avatar" aria-hidden="true">
+                  <img id="resultAvatarImg" src="images/yeti-mascot.png" alt="">
                 </span>
                 <span class="result-card__who">
                   <span id="resultName" class="result-card__title">Sarah Chen</span>
@@ -219,6 +219,7 @@
               <span id="resultStatus" class="badge status-badge badge--success">Found</span>
             </div>
 
+            <div id="resultProgress" class="progress result-card__progress hidden" aria-hidden="true"><span class="progress__bar"></span></div>
             <div class="result-card__email-row">
               <svg class="result-card__email-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
@@ -275,8 +276,8 @@
               </button>
               <div id="similarBody" class="similar-body hidden">
                 <div id="similarLoading" class="similar-loading hidden">
-                  <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-                  <p>Finding similar contacts…</p>
+                  <div class="progress" aria-hidden="true"><span class="progress__bar"></span></div>
+                  <p id="similarLoadingText">Checking who is already on file</p>
                 </div>
                 <div id="similarResults" class="similar-results hidden" role="list"></div>
                 <p id="similarEmpty" class="similar-empty hidden">No similar contacts found at <span></span>.</p>
