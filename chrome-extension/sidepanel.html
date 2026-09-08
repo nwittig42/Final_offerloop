@@ -351,6 +351,13 @@
               <h2 id="companyName" class="company-card__title">this company</h2>
               <p class="company-card__body">Ranked for you. Browse for free; find an email only for the people you want to reach.</p>
             </div>
+            <button id="companyFilterToggle" type="button" class="company-filter-toggle" aria-expanded="false" aria-controls="companyFilterPanel">
+              <span class="company-filter-toggle__label">Who are you looking for?</span>
+              <svg class="company-filter-toggle__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <div id="companyFilterPanel" class="company-filter-panel hidden">
             <form id="companyRoleForm" class="company-filter" autocomplete="off">
               <input id="companyRoleInput" class="company-filter__input" type="search" placeholder="Who are you looking for? e.g. analyst, recruiter" aria-label="Filter people by role">
               <button type="submit" class="company-filter__go" aria-label="Search this company">
@@ -361,12 +368,23 @@
               </button>
             </form>
             <div id="companyChips" class="company-chips" role="list"></div>
+            </div>
             <div id="companyLoading" class="similar-loading hidden">
               <div class="progress" aria-hidden="true"><span class="progress__bar"></span></div>
               <p id="companyLoadingText">Checking who is already on file</p>
             </div>
             <div id="companyResults" class="similar-results hidden" role="list"></div>
-            <p id="companyEmpty" class="similar-empty hidden">We checked our shelf and LinkedIn and have no one for this filter at <span></span> yet. Try another chip above, or open any profile here and we start from that person.</p>
+            <div id="companyEmpty" class="similar-empty hidden">
+              <p id="companyEmptyText">No one on file yet at <span></span>.</p>
+              <button id="companyDigBtn" type="button" class="btn btn-outline btn-full hidden">
+                <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <span>Look for people here</span>
+              </button>
+              <p id="companyEmptyHint" class="similar-empty__hint hidden">Pulls a few new profiles from LinkedIn. Free to you, and they stay on file for everyone.</p>
+            </div>
             <p id="companyError" class="similar-error hidden"></p>
             <a id="companyFooterLink" class="similar-footer-link" href="https://www.offerloop.ai/find?tab=people" target="_blank">
               <span>Search more at <span class="similar-footer-link__company">this company</span></span>

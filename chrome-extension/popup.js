@@ -2453,7 +2453,7 @@ function _companyEl(prefix, suffix) {
   return document.getElementById(prefix + suffix);
 }
 
-async function loadCompanyPeople(company, prefix = 'company') {
+async function loadCompanyPeople(company, prefix = 'company', opts = {}) {
   const state = companyState[prefix] || (companyState[prefix] = { key: null, rows: [] });
   const nameEl = _companyEl(prefix, 'Name');
   const loading = _companyEl(prefix, 'Loading');
@@ -2471,7 +2471,10 @@ async function loadCompanyPeople(company, prefix = 'company') {
   }
   const role = prefix === 'company' ? (companyFilter.role || '') : '';
   const focus = prefix === 'company' ? (companyFilter.focus || '') : '';
-  const key = `${company.slug || company.name}|${role}|${focus}`;
+  // Glance lists never pull new people; the Company tab only does when the
+  // student presses the button (opts.dig === '1').
+  const dig = prefix === 'profileCompany' ? '0' : (opts.dig === '1' ? '1' : '');
+  const key = `${company.slug || company.name}|${role}|${focus}|${dig}`;
   if (prefix === 'company') renderCompanyChips(company);
 
   if (nameEl) nameEl.textContent = company.name;
@@ -2514,6 +2517,7 @@ async function loadCompanyPeople(company, prefix = 'company') {
       // rows and no FullEnrich prefetch, so browsing profiles spends nothing.
       limit: prefix === 'profileCompany' ? 5 : 10,
       prefetch: prefix !== 'profileCompany',
+      dig,
       authToken: currentState.authToken,
     });
     stopStages();
@@ -2537,6 +2541,7 @@ async function loadCompanyPeople(company, prefix = 'company') {
       renderCompanyChips(company);
     }
     if (state.rows.length === 0) {
+      renderCompanyEmpty(prefix, company, response, dig);
       empty?.classList.remove('hidden');
       return;
     }
@@ -2564,6 +2569,46 @@ function startLoadingStages(textEl, stages, everyMs = 3500) {
     textEl.textContent = stages[i];
   }, everyMs);
   return () => clearInterval(timer);
+}
+
+// Empty states for a company list. The panel never pulls new people on
+// its own; when the shelf is dry the student gets a button and decides.
+// Digs are rationed per day server-side (reason "dig_cap").
+function renderCompanyEmpty(prefix, company, response, dig) {
+  const text = _companyEl(prefix, 'EmptyText') || _companyEl(prefix, 'Empty');
+  const btn = _companyEl(prefix, 'DigBtn');
+  const hint = _companyEl(prefix, 'EmptyHint');
+  const name = company.name || 'this company';
+  const reason = (response && response.reason) || '';
+  const filtered = !!(companyFilter.role || companyFilter.focus) && prefix === 'company';
+  let copy = '';
+  let showDig = false;
+  if (reason === 'shelf_empty' && response.can_dig && prefix === 'company') {
+    copy = `No one on file yet at ${name}.`;
+    showDig = true;
+  } else if (reason === 'dig_cap') {
+    copy = `You have pulled new people enough for today. ${name} will be here tomorrow, or open any profile there and we start from that person.`;
+  } else if (filtered) {
+    copy = `No one on file for this filter at ${name}. Try another chip, or clear the filter.`;
+  } else if (dig === '1') {
+    copy = `We looked on LinkedIn and found no one we could place at ${name} yet. Open any profile there and we start from that person.`;
+  } else {
+    copy = `No one on file yet at ${name}.`;
+  }
+  if (text) {
+    // Keep the <span> the tab-title catch-up writes into, but the copy above
+    // already names the company, so it can stay empty.
+    text.textContent = copy;
+  }
+  if (btn) {
+    btn.classList.toggle('hidden', !showDig);
+    btn.disabled = false;
+    btn.onclick = showDig ? () => {
+      btn.disabled = true;
+      loadCompanyPeople(company, prefix, { dig: '1' });
+    } : null;
+  }
+  if (hint) hint.classList.toggle('hidden', !showDig);
 }
 
 function renderCompanyRows(rows, prefix = 'company') {
@@ -2609,6 +2654,17 @@ function renderCompanyChips(company) {
   if (lastJob && !chips.some((c) => c.role.toLowerCase() === lastJob.toLowerCase())) {
     chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob, focus: '' });
   }
+  // The collapsed control shows what is applied, so the list stays the
+  // hero and the filter is one tap away.
+  const toggleLabel = document.querySelector('#companyFilterToggle .company-filter-toggle__label');
+  if (toggleLabel) {
+    const activeChip = (companyFilter.chips || DEFAULT_CHIPS).find((c) =>
+      ((c.role || '').toLowerCase() === (companyFilter.role || '').toLowerCase())
+      && ((c.focus || '') === (companyFilter.focus || '')) && (c.role || c.focus));
+    toggleLabel.textContent = active
+      ? `Showing: ${activeChip ? activeChip.label : companyFilter.role}`
+      : 'Who are you looking for?';
+  }
   wrap.innerHTML = '';
   chips.forEach((chip) => {
     if (!chip.label) return;
@@ -2642,6 +2698,15 @@ function applyCompanyRole(role, company) {
 document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('companyRoleForm');
   const input = document.getElementById('companyRoleInput');
+  // The filter lives behind one control; the list is the hero.
+  const toggle = document.getElementById('companyFilterToggle');
+  const panel = document.getElementById('companyFilterPanel');
+  toggle?.addEventListener('click', () => {
+    const open = panel?.classList.toggle('hidden') === false;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    toggle.classList.toggle('company-filter-toggle--open', open);
+    if (open) input?.focus();
+  });
   form?.addEventListener('submit', (ev) => {
     ev.preventDefault();
     applyCompanyRole(input ? input.value : '');
