@@ -1996,6 +1996,29 @@ function buildSimilarRowEl(row) {
 
   el.append(avatar, who);
 
+  // Open the person (2026-09-07): clicking the name or the arrow sends the
+  // LinkedIn tab to their profile, and the panel follows it into the
+  // Contact tab, exactly as if the user had clicked them on LinkedIn.
+  const profileUrl = normalizeLinkedInUrl(row.linkedinUrl || row.linkedin_url || '');
+  if (profileUrl && /linkedin\.com\/in\//i.test(profileUrl)) {
+    el.classList.add('similar-row--openable');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'similar-row__open';
+    open.title = `Open ${fullName} on LinkedIn`;
+    open.setAttribute('aria-label', `Open ${fullName} on LinkedIn`);
+    open.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+    const go = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openPersonOnLinkedIn(profileUrl);
+    };
+    open.addEventListener('click', go);
+    who.addEventListener('click', go);
+    avatar.addEventListener('click', go);
+    el.appendChild(open);
+  }
+
   // Action: existing email → pill link + draft button; otherwise lazy "Find email"
   if (row.email) {
     const actions = document.createElement('div');
@@ -2013,6 +2036,23 @@ function buildSimilarRowEl(row) {
   }
 
   return el;
+}
+
+// Send the active LinkedIn tab to a profile. The tab-change listener then
+// switches the panel to Contact for that person. Falls back to a new tab
+// when the active tab is not LinkedIn (the side panel can be open anywhere).
+async function openPersonOnLinkedIn(profileUrl) {
+  try {
+    const tab = await getCurrentTab();
+    if (tab?.id && /linkedin\.com/i.test(tab.url || '')) {
+      await chrome.tabs.update(tab.id, { url: profileUrl });
+    } else {
+      await chrome.tabs.create({ url: profileUrl });
+    }
+  } catch (e) {
+    console.error('[Offerloop Popup] open person failed:', e);
+    chrome.tabs.create({ url: profileUrl });
+  }
 }
 
 function buildDraftBtn(row) {
