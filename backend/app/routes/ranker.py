@@ -23,7 +23,9 @@ from app.services.firm_cache.schema import slugify_company
 from app.services.person_ranker import (
     DEFAULT_RANKED_LIMIT,
     MAX_RANKED_LIMIT,
+    _load_user_context,
     rank_people_for_user,
+    suggest_chips,
 )
 from app.utils.recommendation_events import log_recommendation_event
 
@@ -145,6 +147,12 @@ def get_ranked_candidates():
     # or chip. ?surface= labels the event rows and sizes the prefetch.
     company = (request.args.get("company") or "").strip()[:120] or None
     role = (request.args.get("role") or "").strip()[:80] or None
+    # ?focus=alumni|recent|managers: the predicted-hunt chips.
+    focus = (request.args.get("focus") or "").strip().lower()[:20] or None
+    if company:
+        # Collapse the double spaces a LinkedIn slug like
+        # "warner-bros--entertainment" leaves behind.
+        company = " ".join(company.split())
     surface = (request.args.get("surface") or "").strip()[:40] or "ios_swipe_deck"
     # ?prefetch=0 skips the FullEnrich prefetch (the extension's glance lists).
     do_prefetch = (request.args.get("prefetch") or "1").strip() != "0"
@@ -155,7 +163,7 @@ def get_ranked_candidates():
 
     candidates = rank_people_for_user(
         uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-        company=company, role=role,
+        company=company, role=role, focus=focus,
     )
 
     # Dry well? DIG (2026-08-30). "Show more from your targets" rank-orders the
@@ -198,10 +206,18 @@ def get_ranked_candidates():
                 # one-word firm name like Stripe token-matches "Kleen Stripe"
                 # and "PERMA-STRIPE OF FLORIDA" in the search index; caching
                 # those as Stripe would poison the warehouse for everyone.
-                import re as _re
-                _firm_l = _dig_name.lower().strip()
-                _pat = _re.compile(r"^\s*" + _re.escape(_firm_l) + r"\b", _re.I)
-                _dug = [c for c in (_dug or []) if _pat.match((c.get("Company") or ""))]
+                # Slug against slug (2026-09-07): the text match dropped every
+                # Warner Bros. employee because "warner bros entertainment"
+                # never equals "Warner Bros. Entertainment". Slugs strip the
+                # punctuation and corporate suffixes on both sides; startswith
+                # keeps "Warner Bros. Entertainment Group" and drops
+                # "Warner Bros. Discovery" style siblings only when the
+                # student is on the exact subsidiary.
+                _want = slugify_company(_dig_name)
+                _dug = [
+                    c for c in (_dug or [])
+                    if _want and slugify_company(c.get("Company") or "").startswith(_want)
+                ]
                 if _dug:
                     cache_pdl_contacts(_dug, shape="app", async_write=False)
                     _collected = int(((_meta or {}).get("collected_count")) or 0)
@@ -217,7 +233,7 @@ def get_ranked_candidates():
                             pass
                     candidates = rank_people_for_user(
                         uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-                        company=company, role=role,
+                        company=company, role=role, focus=focus,
                     )
                     logger.info("ranker dig: %s -> %d collected, %d ranked",
                                 _dig_firm, len(_dug), len(candidates))
@@ -315,18 +331,30 @@ def get_ranked_candidates():
         _threading.Thread(target=_prefetch, args=(candidates, uid, deck_id),
                           daemon=True, name="ranker-prefetch").start()
 
+    # The company deck also returns the chips the panel should offer, predicted
+    # from the student's year, school and saved roles (person_ranker.suggest_chips).
+    chips = []
+    if company:
+        try:
+            chips = suggest_chips(_load_user_context(uid, db))
+        except Exception:
+            logger.exception("ranker: chips failed uid=%s", uid)
+            chips = []
+
     if not candidates:
         return jsonify({
             "candidates":  [],
             "count":       0,
             "deck_id":     deck_id,
             "reason":      "no_candidates",
+            "chips":       chips,
             "generatedAt": generated_at,
         })
     return jsonify({
         "candidates":  candidates,
         "count":       len(candidates),
         "deck_id":     deck_id,
+        "chips":       chips,
         "generatedAt": generated_at,
     })
 

@@ -411,6 +411,7 @@ async function handleCompanyPeople(request, sendResponse) {
     const result = await fetchCompanyPeople(company, authToken, false, (role || '').trim(), {
       limit: request.limit || 10,
       prefetch: request.prefetch !== false,
+      focus: (request.focus || '').trim(),
     });
     sendResponse(result);
   } catch (error) {
@@ -443,6 +444,7 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       prefetch: opts.prefetch === false ? '0' : '1',
     });
     if (role) params.set('role', role);
+    if (opts.focus) params.set('focus', opts.focus);
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/ranker/candidates?${params.toString()}`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${authToken}` },
@@ -494,6 +496,7 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       contacts: rows,
       deck_id: data.deck_id || '',
       reason: data.reason || '',
+      chips: Array.isArray(data.chips) ? data.chips : [],
     };
   } catch (error) {
     console.error('[Offerloop Background] company deck API error:', error);

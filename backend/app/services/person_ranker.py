@@ -64,6 +64,8 @@ public shared module in a follow-up — do not fork the logic here.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.services.firm_cache.schema import (
@@ -116,6 +118,7 @@ def rank_people_for_user(
     exclude_ids: set | None = None,
     company: str | None = None,
     role: str | None = None,
+    focus: str | None = None,
 ) -> list[dict]:
     """Return a diversified, ranked feed of people uid should reach out to.
 
@@ -172,6 +175,16 @@ def rank_people_for_user(
         except Exception:
             pass
 
+    # Focus chips (2026-09-07): what a student is usually hunting for at a
+    # company. "alumni" narrows the candidate pool to the student's school;
+    # "recent" floats people who joined in the last two years (the
+    # near-peers who just went through the process); "managers" floats the
+    # people who hire. Each is an ordering, never a hard drop, except alumni.
+    focus = (focus or "").strip().lower()
+    if focus not in ("alumni", "recent", "managers"):
+        focus = ""
+    user_ctx["focus"] = focus
+
     if not user_ctx["dream_company_slugs"] and not user_ctx["school_slugs"]:
         # Brand-new accounts have neither (onboarding does not ask for target
         # companies yet), and every one of them opened an empty deck on day
@@ -212,6 +225,7 @@ def rank_people_for_user(
         db,
         cap=DEFAULT_CANDIDATE_POOL_CAP,
         exclude_keys=exclude_keys,
+        alumni_only=(user_ctx.get("focus") == "alumni"),
     )
     if not candidates:
         logger.info(
@@ -242,13 +256,26 @@ def rank_people_for_user(
         scored.append(item)
 
     role_filter = user_ctx.get("role_filter") or ""
-    if role_filter:
-        # Matching titles first, then everyone else, warmth order inside each.
-        for item in scored:
-            item["_role_hit"] = _role_hit(
-                (item["candidate"].get("Title") or ""), role_filter,
-            )
-        scored.sort(key=lambda x: (0 if x.get("_role_hit") else 1, -x["score"]))
+    focus = user_ctx.get("focus") or ""
+    this_year = datetime.now(timezone.utc).year
+    for item in scored:
+        title = item["candidate"].get("Title") or ""
+        item["_role_hit"] = _role_hit(title, role_filter) if role_filter else False
+        joined = item["candidate"].get("JoinedYear")
+        try:
+            joined = int(joined) if joined else None
+        except (TypeError, ValueError):
+            joined = None
+        item["_recent"] = bool(joined and joined >= this_year - 1)
+        item["_manager"] = bool(_MANAGER_RE.search(title))
+    if role_filter or focus:
+        # Typed role first, then the focus, then warmth. Each is an
+        # ordering, so a thin company still shows everyone it has.
+        scored.sort(key=lambda x: (
+            0 if x.get("_role_hit") else 1,
+            0 if (focus == "recent" and x.get("_recent")) or (focus == "managers" and x.get("_manager")) else 1,
+            -x["score"],
+        ))
     else:
         scored.sort(key=lambda x: x["score"], reverse=True)
 
@@ -261,8 +288,94 @@ def rank_people_for_user(
         d = _to_response_dict(x)
         if role_filter:
             d["role_match"] = bool(x.get("_role_hit"))
+        if focus:
+            d["focus_match"] = bool(
+                (focus == "recent" and x.get("_recent"))
+                or (focus == "managers" and x.get("_manager"))
+                or focus == "alumni"
+            )
         out.append(d)
     return out
+
+
+# Titles that hire or run a team. Used by the "managers" focus.
+_MANAGER_RE = re.compile(
+    r"\b(manager|director|head of|head,|lead|vp|vice president|principal|partner|chief)\b",
+    re.I,
+)
+
+
+def suggest_chips(user_ctx: Optional[dict]) -> list[dict]:
+    """The chips the Company tab shows, predicted from the student's
+    profile: their year decides the order, their school names the alumni
+    chip, their saved roles become chips of their own.
+
+    Each chip is {"label", "role"?: str, "focus"?: str}. Recruiters is always
+    there (the most-tapped hunt). Never raises; a bare default on any
+    failure.
+    """
+    default = [
+        {"label": "Alumni", "focus": "alumni"},
+        {"label": "Recent hires", "focus": "recent"},
+        {"label": "Recruiters", "role": "recruiter"},
+        {"label": "Hiring managers", "focus": "managers"},
+    ]
+    try:
+        profile = (user_ctx or {}).get("profile") or {}
+        academics = profile.get("academics") or {}
+        goals = profile.get("goals") or {}
+
+        school = (academics.get("university") or academics.get("school")
+                  or profile.get("university") or profile.get("school") or "").strip()
+        alumni_label = "Alumni"
+        if school:
+            short = school
+            low = school.lower()
+            if "southern california" in low:
+                short = "USC"
+            elif len(school) > 18:
+                short = "Alumni"
+            alumni_label = f"{short} alumni" if short != "Alumni" else "Alumni"
+
+        grad_raw = (academics.get("graduationYear") or profile.get("graduationYear")
+                    or profile.get("gradYear") or profile.get("classYear") or "")
+        years_left = None
+        try:
+            m = re.search(r"(20\d\d)", str(grad_raw))
+            if m:
+                years_left = int(m.group(1)) - datetime.now(timezone.utc).year
+        except Exception:
+            years_left = None
+
+        roles: list[str] = []
+        for key in ("targetRoles", "target_roles", "careerInterests"):
+            raw = goals.get(key) or profile.get(key) or []
+            if isinstance(raw, str):
+                raw = [raw]
+            for r in raw:
+                name = (r.get("name") if isinstance(r, dict) else r) or ""
+                name = str(name).strip()
+                if name and name.lower() not in {x.lower() for x in roles}:
+                    roles.append(name)
+        role_chips = [{"label": r[:28], "role": r} for r in roles[:2]]
+
+        alumni = {"label": alumni_label, "focus": "alumni"}
+        recent = {"label": "Recent hires", "focus": "recent"}
+        recruiters = {"label": "Recruiters", "role": "recruiter"}
+        managers = {"label": "Hiring managers", "focus": "managers"}
+
+        if years_left is not None and years_left >= 2:
+            # First and second years: warm intros and near-peers, not hiring.
+            order = [alumni, recent, recruiters] + role_chips + [managers]
+        elif years_left is not None and years_left >= 0:
+            # Junior and senior: the people who just got in and the people who hire.
+            order = [recent, alumni, managers, recruiters] + role_chips
+        else:
+            order = [alumni, managers, recruiters, recent] + role_chips
+        return order[:6]
+    except Exception:
+        logger.exception("person_ranker: suggest_chips failed")
+        return default
 
 
 # Role words that mean the same hunt. "recruiter" is the chip students tap
@@ -409,6 +522,7 @@ def _fetch_candidates(
     db,
     cap: int,
     exclude_keys: Optional[set] = None,
+    alumni_only: bool = False,
 ) -> list[dict]:
     """Query firm_employees for candidate people. Uses indexed where()
     only — never in-memory filter on unindexed fields. Excludes anyone
@@ -450,6 +564,12 @@ def _fetch_candidates(
                        .where("schools", "array_contains", sch)
                        .limit(cap)
                 )
+        if alumni_only:
+            # The alumni chip: only people who share the student's school.
+            return [firm_employee_doc_to_app_contact(d) for d in docs
+                    if ((d.get("first_name") or "").lower().strip(),
+                        (d.get("last_name") or "").lower().strip(),
+                        (d.get("company_display") or "").lower().strip()) not in exclude_keys][:cap]
         # Alumni-at-target-firm is gold but rare. This used to be the ONLY
         # query when both were set, so a user with a school saved got NOBODY
         # at their target firms unless the warehouse happened to hold an alum

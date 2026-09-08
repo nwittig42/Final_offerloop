@@ -1608,7 +1608,7 @@ function parseCompanyFromTab(tab) {
   // changes. The tab title lags a navigation (Chrome reports the URL first,
   // the title later), so it is only used for display, and only when it
   // agrees with the slug; otherwise the slug is shown title-cased.
-  const slugWords = slug.replace(/-/g, ' ').trim();
+  const slugWords = slug.replace(/-+/g, ' ').replace(/\s+/g, ' ').trim();
   const slugName = slugWords.replace(/\b\w/g, (c) => c.toUpperCase());
   let title = (tab.title || '')
     .replace(/^\(\d+\)\s*/, '')
@@ -2467,9 +2467,11 @@ async function loadCompanyPeople(company, prefix = 'company') {
     // A new company: the previous company's filter does not carry over.
     companyFilter.company = company.slug || company.name;
     companyFilter.role = '';
+    companyFilter.focus = '';
   }
   const role = prefix === 'company' ? (companyFilter.role || '') : '';
-  const key = `${company.slug || company.name}|${role}`;
+  const focus = prefix === 'company' ? (companyFilter.focus || '') : '';
+  const key = `${company.slug || company.name}|${role}|${focus}`;
   if (prefix === 'company') renderCompanyChips(company);
 
   if (nameEl) nameEl.textContent = company.name;
@@ -2507,6 +2509,7 @@ async function loadCompanyPeople(company, prefix = 'company') {
       action: 'companyPeople',
       company: company.apiName || company.name,
       role,
+      focus,
       // The profile page's "Also at" block is a glance, not a hunt: five
       // rows and no FullEnrich prefetch, so browsing profiles spends nothing.
       limit: prefix === 'profileCompany' ? 5 : 10,
@@ -2529,6 +2532,10 @@ async function loadCompanyPeople(company, prefix = 'company') {
       chrome.storage.local.set({ credits: response.credits_remaining });
     }
     state.rows = (response.contacts || []).map((r) => ({ ...r, deckId: response.deck_id || '' }));
+    if (prefix === 'company' && Array.isArray(response.chips) && response.chips.length) {
+      companyFilter.chips = response.chips;
+      renderCompanyChips(company);
+    }
     if (state.rows.length === 0) {
       empty?.classList.remove('hidden');
       return;
@@ -2573,7 +2580,17 @@ function renderCompanyRows(rows, prefix = 'company') {
 // and asks Coresignal for that role when the shelf is dry. Chips: Recruiters
 // always, plus the last job title the Job tab saw (arriving at a company
 // from a posting is the common path).
-const companyFilter = { role: '', company: '' };
+// role: typed text or a role chip. focus: alumni | recent | managers, the
+// predicted hunts. chips: what the server suggested for this student
+// (year, school, saved roles); a plain default until the first response.
+const companyFilter = { role: '', focus: '', company: '', chips: null };
+
+const DEFAULT_CHIPS = [
+  { label: 'Alumni', focus: 'alumni' },
+  { label: 'Recent hires', focus: 'recent' },
+  { label: 'Recruiters', role: 'recruiter' },
+  { label: 'Hiring managers', focus: 'managers' },
+];
 
 function renderCompanyChips(company) {
   const wrap = document.getElementById('companyChips');
@@ -2581,30 +2598,45 @@ function renderCompanyChips(company) {
   if (!wrap) return;
   if (input && input.value !== companyFilter.role) input.value = companyFilter.role;
   const chips = [];
-  if (companyFilter.role) chips.push({ label: 'Everyone', role: '' });
-  chips.push({ label: 'Recruiters', role: 'recruiter' });
+  const active = companyFilter.role || companyFilter.focus;
+  if (active) chips.push({ label: 'Everyone', role: '', focus: '' });
+  (companyFilter.chips || DEFAULT_CHIPS).forEach((c) => chips.push({
+    label: c.label || '',
+    role: (c.role || '').trim(),
+    focus: (c.focus || '').trim(),
+  }));
   const lastJob = (currentState.lastJobTitle || '').trim();
-  if (lastJob && lastJob.toLowerCase() !== companyFilter.role.toLowerCase()) {
-    chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob });
+  if (lastJob && !chips.some((c) => c.role.toLowerCase() === lastJob.toLowerCase())) {
+    chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob, focus: '' });
   }
   wrap.innerHTML = '';
   chips.forEach((chip) => {
+    if (!chip.label) return;
+    const isActive = (chip.role || chip.focus)
+      && chip.role.toLowerCase() === (companyFilter.role || '').toLowerCase()
+      && chip.focus === (companyFilter.focus || '');
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'chip' + (chip.role.toLowerCase() === companyFilter.role.toLowerCase() && chip.role ? ' chip--active' : '');
+    b.className = 'chip' + (isActive ? ' chip--active' : '');
     b.textContent = chip.label;
     b.setAttribute('role', 'listitem');
-    b.addEventListener('click', () => applyCompanyRole(chip.role, company));
+    b.addEventListener('click', () => applyCompanyFilter({ role: chip.role, focus: chip.focus }, company));
     wrap.appendChild(b);
   });
 }
 
-function applyCompanyRole(role, company) {
-  companyFilter.role = (role || '').trim();
+function applyCompanyFilter(filter, company) {
+  companyFilter.role = ((filter && filter.role) || '').trim();
+  companyFilter.focus = ((filter && filter.focus) || '').trim();
   const input = document.getElementById('companyRoleInput');
   if (input) input.value = companyFilter.role;
   const target = company || currentState.companyPage;
   if (target) loadCompanyPeople(target, 'company');
+}
+
+// Typing a role clears any focus chip; the words are the filter now.
+function applyCompanyRole(role, company) {
+  applyCompanyFilter({ role, focus: '' }, company);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
