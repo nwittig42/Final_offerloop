@@ -189,6 +189,10 @@ def log_click(code, dest, ua, referrer):
     if not db:
         return
     ua = ua or ""
+    # only real browsers count: curl, uptime checks and link previews (iMessage, Slack, Facebook) are noise
+    low = ua.lower()
+    if "mozilla" not in low or any(b in low for b in ("bot", "curl", "facebookexternalhit", "facebot", "preview", "slack", "whatsapp", "telegram", "discord", "python", "wget", "render")):
+        return
     device = ("iPhone" if "iPhone" in ua or "iPad" in ua else "Android" if "Android" in ua
               else "Mac" if "Macintosh" in ua else "Windows" if "Windows" in ua else "Other")
     when = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
