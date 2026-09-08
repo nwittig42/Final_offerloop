@@ -2117,32 +2117,41 @@ function buildSimilarRowEl(row) {
   // Expand on the name (2026-09-07): a little more about the person from
   // data the deck already sent, so it costs nothing. Location, school, the
   // year they joined, every reason the ranker had, and a LinkedIn link.
-  const detailLines = [];
-  if (row.title) detailLines.push(row.title);
+  // Concise (2026-09-08): the full title on one line, then place, school
+  // (with a cap mark) and tenure on a second, then up to three reason
+  // tags. The ranker's sentence is dropped here; the row caption already
+  // carries it.
+  const facts = [];
   const place = [row.city, row.state].filter(Boolean).join(', ');
-  if (place) detailLines.push(place);
-  if (row.school) detailLines.push(row.school);
-  if (row.joinedYear) detailLines.push(`At ${row.company || 'this company'} since ${row.joinedYear}`);
-  const reasonLines = Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : [];
-  if (detailLines.length || reasonLines.length || row.briefing) {
+  if (place) facts.push({ text: place });
+  if (row.school) facts.push({ text: row.school, icon: 'school' });
+  if (row.joinedYear) facts.push({ text: `Since ${row.joinedYear}` });
+  const reasonLines = (Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : []).slice(0, 3);
+  if (row.title || facts.length || reasonLines.length) {
     el.classList.add('similar-row--expandable');
     const details = document.createElement('div');
     details.className = 'similar-row__details hidden';
-    if (row.briefing) {
-      const b = document.createElement('p');
-      b.className = 'similar-row__briefing';
-      b.textContent = row.briefing;
-      details.appendChild(b);
+    if (row.title) {
+      const t = document.createElement('p');
+      t.className = 'similar-row__fact-title';
+      t.textContent = row.title;
+      details.appendChild(t);
     }
-    if (detailLines.length) {
-      const ul = document.createElement('ul');
-      ul.className = 'similar-row__facts';
-      detailLines.forEach((line) => {
-        const li = document.createElement('li');
-        li.textContent = line;
-        ul.appendChild(li);
+    if (facts.length) {
+      const line = document.createElement('p');
+      line.className = 'similar-row__facts';
+      facts.forEach((f, i) => {
+        if (i) line.appendChild(document.createTextNode('  ·  '));
+        if (f.icon === 'school') {
+          const cap = document.createElement('span');
+          cap.className = 'similar-row__cap';
+          cap.setAttribute('aria-hidden', 'true');
+          cap.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10L12 5 2 10l10 5 10-5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>';
+          line.appendChild(cap);
+        }
+        line.appendChild(document.createTextNode(f.text));
       });
-      details.appendChild(ul);
+      details.appendChild(line);
     }
     if (reasonLines.length) {
       const why = document.createElement('div');
@@ -2799,9 +2808,27 @@ async function loadProfileCompanyPeople(tab) {
   try {
     const res = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileCompany' });
     company = ((res && res.company) || '').trim();
-    // The company's logo, for the result card's avatar (gold ring).
+    // The company's logo, for the result card's avatar (gold ring). The
+    // page often has not painted its logos when we first ask, so retry a
+    // couple of times before settling for Scout.
     currentState.profileCompanyLogo = ((res && res.logoUrl) || '').trim();
     applyResultAvatar();
+    if (!currentState.profileCompanyLogo) {
+      const wantedUrl = currentState.linkedInUrl;
+      for (const delay of [2500, 6000]) {
+        setTimeout(async () => {
+          if (currentState.profileCompanyLogo || currentState.linkedInUrl !== wantedUrl) return;
+          try {
+            const again = await chrome.tabs.sendMessage(tab.id, { action: 'getProfileCompany' });
+            const logo = ((again && again.logoUrl) || '').trim();
+            if (logo && currentState.linkedInUrl === wantedUrl) {
+              currentState.profileCompanyLogo = logo;
+              applyResultAvatar();
+            }
+          } catch (e) { /* content script gone; nothing to do */ }
+        }, delay);
+      }
+    }
   } catch (e) {
     // Content script not ready on this page yet; nothing to show.
     return;

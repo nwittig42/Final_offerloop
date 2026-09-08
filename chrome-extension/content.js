@@ -56,20 +56,33 @@ function getProfileCurrentCompany() {
 // entry's logo. Empty string when neither is there. Never throws.
 function getProfileCompanyLogo() {
   try {
+    // LinkedIn lazy-loads images: before they load, src is empty or a data
+    // URI and the real address sits in data-delayed-url / data-ghost-url.
     const pick = (img) => {
       if (!img) return '';
-      const src = (img.currentSrc || img.src || '').trim();
-      return /^https?:\/\//i.test(src) && !/data:image/i.test(src) ? src : '';
+      const candidates = [
+        img.currentSrc, img.src,
+        img.getAttribute('data-delayed-url'), img.getAttribute('data-ghost-url'), img.getAttribute('data-src'),
+      ];
+      for (const c of candidates) {
+        const src = (c || '').trim();
+        if (/^https?:\/\//i.test(src) && !/data:image/i.test(src)) return src;
+      }
+      return '';
     };
-    const btnImg = document.querySelector('button[aria-label^="Current company"] img');
-    const fromBtn = pick(btnImg);
-    if (fromBtn) return fromBtn;
-    const exp = document.querySelector('#experience');
-    const section = exp ? exp.closest('section') : null;
-    if (section) {
-      const img = section.querySelector('li img');
-      const fromExp = pick(img);
-      if (fromExp) return fromExp;
+    const selectors = [
+      'button[aria-label^="Current company"] img',
+      '.pv-top-card a[href*="/company/"] img',
+      'a[href*="/company/"] img[alt*="logo" i]',
+      '#experience ~ * li a[href*="/company/"] img',
+      '#experience ~ * li img',
+      'section:has(#experience) li img',
+    ];
+    for (const sel of selectors) {
+      let img = null;
+      try { img = document.querySelector(sel); } catch (e) { img = null; }
+      const src = pick(img);
+      if (src) return src;
     }
   } catch (e) {
     console.warn('[Offerloop] company logo scrape failed:', e);

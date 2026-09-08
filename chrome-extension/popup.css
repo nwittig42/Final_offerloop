@@ -2069,3 +2069,55 @@ body {
 .result-card__scout-avatar--logo img {
   object-position: center;
 }
+
+/* Captions and the expanded card in the body face, not the serif italic
+   (Rylan 2026-09-08: it read as cursive). Concise: title, one facts line,
+   up to three tags. */
+.similar-row__category {
+  font-family: var(--font-body);
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-transform: none;
+}
+
+.similar-row__details,
+.similar-row__details * {
+  font-family: var(--font-body);
+  font-style: normal;
+}
+
+.similar-row__details {
+  gap: 6px;
+}
+
+.similar-row__fact-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.similar-row__facts {
+  margin: 0;
+  padding: 0;
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  white-space: normal;
+}
+
+.similar-row__cap {
+  display: inline-flex;
+  vertical-align: -2px;
+  width: 13px;
+  height: 13px;
+  margin-right: 4px;
+  color: var(--indigo-500);
+}
+
+.similar-row__cap svg {
+  width: 13px;
+  height: 13px;
+}
