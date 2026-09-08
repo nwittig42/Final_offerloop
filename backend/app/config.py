@@ -434,10 +434,14 @@ CREDIT_COSTS = {
     # 5000 tier caps (≈200/500 contacts per month respectively). All
     # deduction sites now read from this dict — no hardcoded 5s left.
     'find_contact':         10,  # default contact search (incl. verified email + AI draft)
+    # One person, chosen by hand (ranker reveal, extension Find Email,
+    # website URL paste): the verified address plus the written email.
+    # Same price on every surface since 2026-09-07 (was 5 on the import
+    # path, 8 on the app deck).
+    'reveal_email':         8,
     'find_hiring_manager':  10,  # Pro+ gated
     'find_recruiter':       6,
-    'find_employee':        4,
-    'firm_search':          10,  # per firm returned, Pro+ gated
+    'find_employee':        4,    'firm_search':          10,  # per firm returned, Pro+ gated
 
     # Generative actions — per output
     'coffee_chat_prep':     30,  # alias for back-compat with COFFEE_CHAT_CREDITS

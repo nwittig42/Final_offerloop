@@ -349,8 +349,18 @@
             <div class="company-card__header">
               <span class="company-card__eyebrow">People at</span>
               <h2 id="companyName" class="company-card__title">this company</h2>
-              <p class="company-card__body">Browse for free. Find an email only for the people you want to reach.</p>
+              <p class="company-card__body">Ranked for you. Browse for free; find an email only for the people you want to reach.</p>
             </div>
+            <form id="companyRoleForm" class="company-filter" autocomplete="off">
+              <input id="companyRoleInput" class="company-filter__input" type="search" placeholder="Who are you looking for? e.g. analyst, recruiter" aria-label="Filter people by role">
+              <button type="submit" class="company-filter__go" aria-label="Search this company">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </button>
+            </form>
+            <div id="companyChips" class="company-chips" role="list"></div>
             <div id="companyLoading" class="similar-loading hidden">
               <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
               <p>Finding people…</p>
