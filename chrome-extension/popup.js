@@ -2005,6 +2005,20 @@ function buildSimilarRowEl(row) {
   const avatar = document.createElement('span');
   avatar.className = 'similar-row__avatar';
   avatar.textContent = initials;
+  // A face when the shelf has one. LinkedIn's picture links expire after
+  // weeks and its grey "no photo" silhouette is not a photo (the app's rule
+  // too), so both fall back to the initials underneath.
+  const photo = (row.photoUrl || row.photo_url || '').trim();
+  if (photo && !/static\.licdn\.com|\/aero-v1\//i.test(photo)) {
+    const img = document.createElement('img');
+    img.className = 'similar-row__photo';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => img.remove());
+    img.src = photo;
+    avatar.appendChild(img);
+  }
 
   const who = document.createElement('div');
   who.className = 'similar-row__who';
@@ -2050,9 +2064,70 @@ function buildSimilarRowEl(row) {
       openPersonOnLinkedIn(profileUrl);
     };
     open.addEventListener('click', go);
-    who.addEventListener('click', go);
     avatar.addEventListener('click', go);
     el.appendChild(open);
+  }
+
+  // Expand on the name (2026-09-07): a little more about the person from
+  // data the deck already sent, so it costs nothing. Location, school, the
+  // year they joined, every reason the ranker had, and a LinkedIn link.
+  const detailLines = [];
+  if (row.title) detailLines.push(row.title);
+  const place = [row.city, row.state].filter(Boolean).join(', ');
+  if (place) detailLines.push(place);
+  if (row.school) detailLines.push(row.school);
+  if (row.joinedYear) detailLines.push(`At ${row.company || 'this company'} since ${row.joinedYear}`);
+  const reasonLines = Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : [];
+  if (detailLines.length || reasonLines.length || row.briefing) {
+    el.classList.add('similar-row--expandable');
+    const details = document.createElement('div');
+    details.className = 'similar-row__details hidden';
+    if (row.briefing) {
+      const b = document.createElement('p');
+      b.className = 'similar-row__briefing';
+      b.textContent = row.briefing;
+      details.appendChild(b);
+    }
+    if (detailLines.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'similar-row__facts';
+      detailLines.forEach((line) => {
+        const li = document.createElement('li');
+        li.textContent = line;
+        ul.appendChild(li);
+      });
+      details.appendChild(ul);
+    }
+    if (reasonLines.length) {
+      const why = document.createElement('div');
+      why.className = 'similar-row__why';
+      reasonLines.forEach((r) => {
+        const tag = document.createElement('span');
+        tag.className = 'similar-row__why-tag';
+        tag.textContent = r;
+        why.appendChild(tag);
+      });
+      details.appendChild(why);
+    }
+    if (profileUrl) {
+      const link = document.createElement('a');
+      link.className = 'similar-row__link';
+      link.href = profileUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'View on LinkedIn';
+      details.appendChild(link);
+    }
+    el.appendChild(details);
+    who.setAttribute('role', 'button');
+    who.setAttribute('aria-expanded', 'false');
+    who.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const open = details.classList.toggle('hidden');
+      el.classList.toggle('similar-row--open', !open);
+      who.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
   }
 
   // Action: existing email → pill link + draft button; otherwise lazy "Find email"

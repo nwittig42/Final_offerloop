@@ -460,10 +460,14 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
     }
     const rows = (data.candidates || []).map((c) => {
       const p = c.person || {};
-      const firstReason = Array.isArray(c.reasons) && c.reasons.length ? c.reasons[0] : null;
-      const reasonText = firstReason && typeof firstReason === 'object'
-        ? (firstReason.label || firstReason.text || firstReason.detail || REASON_LABELS[firstReason.type] || '')
-        : (typeof firstReason === 'string' ? firstReason : '');
+      // Every reason in plain words, for the expanded card; the first one
+      // (or the ranker's briefing sentence) is the row caption.
+      const reasonLabels = (Array.isArray(c.reasons) ? c.reasons : [])
+        .map((r) => (r && typeof r === 'object')
+          ? (r.label || r.text || REASON_LABELS[r.type] || '') + (r.detail ? ` (${r.detail})` : '')
+          : (typeof r === 'string' ? r : ''))
+        .map((s) => s.trim())
+        .filter(Boolean);
       return {
         candidateId: p.id || '',
         firstName: p.firstName || '',
@@ -472,9 +476,14 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
         company: p.company || company,
         linkedinUrl: p.linkedinUrl || '',
         school: p.college || '',
+        city: p.city || '',
+        state: p.state || '',
+        joinedYear: p.joinedYear || null,
         photoUrl: p.photo_url || '',
         email: '',
-        caption: c.briefing || reasonText || '',
+        caption: c.briefing || reasonLabels[0] || '',
+        briefing: c.briefing || '',
+        reasons: reasonLabels,
         tier: c.tier || '',
         roleMatch: c.role_match === true,
         category: '',
