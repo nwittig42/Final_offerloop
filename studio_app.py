@@ -301,7 +301,8 @@ const DATA = __DATA__;
 const ROWS = DATA.rows;
 let mode='studio', view='clips', q='';
 const fmt=n=>n==null?'':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(1)+'K':String(n);
-const SITE=location.origin;
+const SITE=location.hostname.endsWith('offerloop.ai')?'https://go.offerloop.ai':location.origin;
+const goUrl=code=>SITE.startsWith('https://go.')?`${SITE}/${code}`:`${SITE}/go/${code}`;
 function delta(p,field){ // change over the last day from the post's history snapshots
   const idx={views:1,likes:2,comments:3,shares:4}[field]; const h=p.history||[];
   if(h.length<2) return null; return (h[h.length-1][idx]||0)-(h[h.length-2][idx]||0);
@@ -340,7 +341,7 @@ function creatorsView(){
   return DATA.links.map(l=>{const cs=DATA.clicks.filter(x=>x.code===l.code); const c={}; cs.forEach(x=>{c[x.device||'Other']=(c[x.device||'Other']||0)+1});
     const byday=clicksByDay(l.code); const d7=lastDays(7).reduce((a,d)=>a+(byday[d]||0),0);
     return `<div class="card2"><h3>${esc(l.code)} <span class="tmeta" style="display:inline">${esc(l.owner)} · ${esc(l.destination)}${l.active?'':' · inactive'}</span></h3>
-      <div style="margin:6px 0"><span class="share">${SITE}/go/${esc(l.code)}</span> <button class="chip" onclick="navigator.clipboard.writeText('${SITE}/go/${esc(l.code)}')">copy</button></div>
+      <div style="margin:6px 0"><span class="share">${goUrl(esc(l.code))}</span> <button class="chip" onclick="navigator.clipboard.writeText('${goUrl(esc(l.code))}')">copy</button></div>
       <div class="tmeta">${cs.length} clicks · ${d7} in the last 7 days · ${Object.entries(c).map(([k,v])=>k+' '+v).join(', ')||'no clicks yet'}</div>
       <div class="tmeta">sends to <a href="${l.target}" target="_blank">${esc(l.target.slice(0,80))}</a></div>
       ${l.notes?`<div class="tmeta">${esc(l.notes)}</div>`:''}
