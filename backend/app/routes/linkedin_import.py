@@ -900,7 +900,7 @@ def import_from_linkedin():
 # ---------------------------------------------------------------------------
 
 
-@linkedin_import_bp.route('/contacts/<contact_id>/email-status', methods=['GET'])
+@linkedin_import_bp.route('/<contact_id>/email-status', methods=['GET'])
 @require_firebase_auth
 def linkedin_import_email_status(contact_id):
     """GET /api/contacts/<contact_id>/email-status
