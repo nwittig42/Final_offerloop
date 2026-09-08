@@ -1815,3 +1815,9 @@ body {
   border-color: var(--ink);
   color: #FFFFFF;
 }
+
+.status-badge.pending {
+  background: var(--silver-50);
+  color: var(--ink-muted);
+  border-color: var(--card-edge);
+}

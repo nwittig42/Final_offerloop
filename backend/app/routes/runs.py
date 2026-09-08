@@ -672,7 +672,33 @@ def prompt_search():
         _missing = [c for c in contacts
                     if not (c.get("Email") or c.get("email") or "").strip()][:_FE_BACKFILL_CAP]
         if _missing:
-            _still = _missing
+            # Hunter first (2026-09-07): one database, 2 to 3 seconds each,
+            # run in parallel, accepted at confidence 90+. Whoever it finds
+            # skips the waterfall; the rest go to FullEnrich as before. Same
+            # ladder as the extension and the deck reveal (email_fast).
+            try:
+                from app.services import email_fast as _ef
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                def _hunt(_c):
+                    return _ef.hunter_email(
+                        (_c.get("FirstName") or "").strip(),
+                        (_c.get("LastName") or "").strip(),
+                        (_c.get("Company") or "").strip(),
+                    )
+                with _TPE(max_workers=max(1, len(_missing))) as _ex:
+                    _hunter_hits = list(_ex.map(_hunt, _missing))
+                for _c, _h in zip(_missing, _hunter_hits):
+                    if _h and _h.get("email"):
+                        _c["Email"] = _h["email"]
+                        _c["WorkEmail"] = _h["email"]
+                        _c["EmailSource"] = "hunter_finder"
+                        _c["EmailVerified"] = False
+                        _c["EmailConfidenceScore"] = int(_h.get("confidence") or 0)
+                print(f"[ContactSearch] Hunter fast rung: "
+                      f"{sum(1 for _h in _hunter_hits if _h)}/{len(_missing)} found")
+            except Exception:
+                print("[ContactSearch] Hunter fast rung errored; everyone goes to FullEnrich")
+            _still = [c for c in _missing if not (c.get("Email") or "").strip()]
             if _still:
                 try:
                     from app.services import fullenrich_client

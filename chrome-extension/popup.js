@@ -1273,14 +1273,24 @@ function showResults(contact) {
   const fullName = contact.full_name || `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || 'Unknown';
   elements.resultName.textContent = fullName;
 
-  // Email
-  const email = contact.email || 'Not found';
-  elements.resultEmail.textContent = email;
+  // Email, or the waiting state while FullEnrich finishes in the background
+  if (contact.pending) {
+    elements.resultEmail.textContent = 'Locking down their email. This can take a minute or two.';
+  } else if (contact.email) {
+    elements.resultEmail.textContent = contact.email;
+  } else {
+    elements.resultEmail.textContent = contact.refunded
+      ? 'No email found. Your credits were refunded.'
+      : 'Not found';
+  }
 
   // Status badge
-  if (contact.email) {
+  elements.resultStatus.classList.remove('no-email', 'pending');
+  if (contact.pending) {
+    elements.resultStatus.textContent = 'Searching';
+    elements.resultStatus.classList.add('pending');
+  } else if (contact.email) {
     elements.resultStatus.textContent = 'Found';
-    elements.resultStatus.classList.remove('no-email');
   } else {
     elements.resultStatus.textContent = 'No Email';
     elements.resultStatus.classList.add('no-email');
@@ -1491,12 +1501,15 @@ async function handleFindEmail() {
   showLoading('Finding email...');
 
   try {
-    // Call backend via background script, without the draft
+    // Call backend via background script, without the draft. Fast mode:
+    // the shelf or Hunter answer in seconds; if only FullEnrich's waterfall
+    // is left, the server starts it and we poll while the person is shown.
     const response = await chrome.runtime.sendMessage({
       action: 'importLinkedIn',
       linkedInUrl: currentState.linkedInUrl,
       authToken: currentState.authToken,
       createDraft: false,
+      emailMode: 'fast',
     });
 
     console.log('[Offerloop Popup] API Response:', response);
@@ -1513,9 +1526,10 @@ async function handleFindEmail() {
       chrome.storage.local.set({ credits: response.credits_remaining });
     }
 
-    // Show the email; the draft button appears next to it
+    // Show the email; the draft button appears next to it. Pending: show
+    // the person now and let the poll fill the address in.
     const contact = response.contact || response;
-    showResults({
+    const shown = {
       full_name: contact.full_name,
       firstName: contact.firstName,
       lastName: contact.lastName,
@@ -1526,7 +1540,13 @@ async function handleFindEmail() {
       draft_url: response.draft_url || contact.draft_url,
       gmail_draft_url: response.gmail_draft_url || contact.gmail_draft_url,
       gmailDraftUrl: response.gmailDraftUrl,
-    });
+      pending: response.email_pending === true && !contact.email,
+      contactId: response.contact_id || '',
+    };
+    showResults(shown);
+    if (shown.pending && shown.contactId) {
+      startEmailPolling(shown);
+    }
 
   } catch (error) {
     console.error('[Offerloop Popup] Error:', error);
@@ -2152,6 +2172,66 @@ async function draftForContact(person) {
     chrome.storage.local.set({ credits: response.credits_remaining });
   }
   return response.gmail_draft_url || 'https://mail.google.com/mail/u/0/#drafts';
+}
+
+// ── Pending email: poll until FullEnrich lands, then fill the card in ──
+// One poll at a time. Survives tab changes (the result belongs to the
+// profile it was started on); the card is only refreshed when that profile
+// is still the one on screen.
+const emailPoll = { timer: null, contactId: '', linkedInUrl: '', tries: 0 };
+const EMAIL_POLL_EVERY_MS = 5000;
+const EMAIL_POLL_MAX_TRIES = 84; // seven minutes, the server's own ceiling
+
+function stopEmailPolling() {
+  if (emailPoll.timer) clearInterval(emailPoll.timer);
+  emailPoll.timer = null;
+  emailPoll.contactId = '';
+  emailPoll.tries = 0;
+}
+
+function startEmailPolling(shown) {
+  stopEmailPolling();
+  emailPoll.contactId = shown.contactId;
+  emailPoll.linkedInUrl = shown.linkedinUrl || currentState.linkedInUrl || '';
+  emailPoll.tries = 0;
+  const tick = async () => {
+    if (!emailPoll.contactId) return;
+    emailPoll.tries += 1;
+    let res = null;
+    try {
+      res = await chrome.runtime.sendMessage({
+        action: 'emailStatus',
+        contactId: emailPoll.contactId,
+        authToken: currentState.authToken,
+      });
+    } catch (e) {
+      res = null;
+    }
+    if (!res || res.error) {
+      if (emailPoll.tries >= EMAIL_POLL_MAX_TRIES) stopEmailPolling();
+      return;
+    }
+    if (res.status === 'pending') {
+      if (emailPoll.tries >= EMAIL_POLL_MAX_TRIES) stopEmailPolling();
+      return;
+    }
+    stopEmailPolling();
+    const stillHere = (currentState.linkedInUrl || '') === emailPoll.linkedInUrl;
+    if (res.status === 'found' && res.email) {
+      shown.pending = false;
+      shown.email = res.email;
+      if (stillHere) showResults(shown);
+    } else {
+      shown.pending = false;
+      shown.email = '';
+      shown.refunded = !!res.refunded;
+      if (stillHere) showResults(shown);
+      _creditsCacheTime = 0;
+      refreshCredits().catch(() => {});
+    }
+  };
+  emailPoll.timer = setInterval(tick, EMAIL_POLL_EVERY_MS);
+  setTimeout(tick, 2500);
 }
 
 // Profile page, step two: the Draft button under the found email.
