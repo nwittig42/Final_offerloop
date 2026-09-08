@@ -1608,7 +1608,7 @@ function parseCompanyFromTab(tab) {
   // changes. The tab title lags a navigation (Chrome reports the URL first,
   // the title later), so it is only used for display, and only when it
   // agrees with the slug; otherwise the slug is shown title-cased.
-  const slugWords = slug.replace(/-/g, ' ').trim();
+  const slugWords = slug.replace(/-+/g, ' ').replace(/\s+/g, ' ').trim();
   const slugName = slugWords.replace(/\b\w/g, (c) => c.toUpperCase());
   let title = (tab.title || '')
     .replace(/^\(\d+\)\s*/, '')
@@ -2005,6 +2005,20 @@ function buildSimilarRowEl(row) {
   const avatar = document.createElement('span');
   avatar.className = 'similar-row__avatar';
   avatar.textContent = initials;
+  // A face when the shelf has one. LinkedIn's picture links expire after
+  // weeks and its grey "no photo" silhouette is not a photo (the app's rule
+  // too), so both fall back to the initials underneath.
+  const photo = (row.photoUrl || row.photo_url || '').trim();
+  if (photo && !/static\.licdn\.com|\/aero-v1\//i.test(photo)) {
+    const img = document.createElement('img');
+    img.className = 'similar-row__photo';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => img.remove());
+    img.src = photo;
+    avatar.appendChild(img);
+  }
 
   const who = document.createElement('div');
   who.className = 'similar-row__who';
@@ -2050,9 +2064,70 @@ function buildSimilarRowEl(row) {
       openPersonOnLinkedIn(profileUrl);
     };
     open.addEventListener('click', go);
-    who.addEventListener('click', go);
     avatar.addEventListener('click', go);
     el.appendChild(open);
+  }
+
+  // Expand on the name (2026-09-07): a little more about the person from
+  // data the deck already sent, so it costs nothing. Location, school, the
+  // year they joined, every reason the ranker had, and a LinkedIn link.
+  const detailLines = [];
+  if (row.title) detailLines.push(row.title);
+  const place = [row.city, row.state].filter(Boolean).join(', ');
+  if (place) detailLines.push(place);
+  if (row.school) detailLines.push(row.school);
+  if (row.joinedYear) detailLines.push(`At ${row.company || 'this company'} since ${row.joinedYear}`);
+  const reasonLines = Array.isArray(row.reasons) ? row.reasons.filter(Boolean) : [];
+  if (detailLines.length || reasonLines.length || row.briefing) {
+    el.classList.add('similar-row--expandable');
+    const details = document.createElement('div');
+    details.className = 'similar-row__details hidden';
+    if (row.briefing) {
+      const b = document.createElement('p');
+      b.className = 'similar-row__briefing';
+      b.textContent = row.briefing;
+      details.appendChild(b);
+    }
+    if (detailLines.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'similar-row__facts';
+      detailLines.forEach((line) => {
+        const li = document.createElement('li');
+        li.textContent = line;
+        ul.appendChild(li);
+      });
+      details.appendChild(ul);
+    }
+    if (reasonLines.length) {
+      const why = document.createElement('div');
+      why.className = 'similar-row__why';
+      reasonLines.forEach((r) => {
+        const tag = document.createElement('span');
+        tag.className = 'similar-row__why-tag';
+        tag.textContent = r;
+        why.appendChild(tag);
+      });
+      details.appendChild(why);
+    }
+    if (profileUrl) {
+      const link = document.createElement('a');
+      link.className = 'similar-row__link';
+      link.href = profileUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'View on LinkedIn';
+      details.appendChild(link);
+    }
+    el.appendChild(details);
+    who.setAttribute('role', 'button');
+    who.setAttribute('aria-expanded', 'false');
+    who.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const open = details.classList.toggle('hidden');
+      el.classList.toggle('similar-row--open', !open);
+      who.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
   }
 
   // Action: existing email → pill link + draft button; otherwise lazy "Find email"
@@ -2392,9 +2467,11 @@ async function loadCompanyPeople(company, prefix = 'company') {
     // A new company: the previous company's filter does not carry over.
     companyFilter.company = company.slug || company.name;
     companyFilter.role = '';
+    companyFilter.focus = '';
   }
   const role = prefix === 'company' ? (companyFilter.role || '') : '';
-  const key = `${company.slug || company.name}|${role}`;
+  const focus = prefix === 'company' ? (companyFilter.focus || '') : '';
+  const key = `${company.slug || company.name}|${role}|${focus}`;
   if (prefix === 'company') renderCompanyChips(company);
 
   if (nameEl) nameEl.textContent = company.name;
@@ -2432,6 +2509,7 @@ async function loadCompanyPeople(company, prefix = 'company') {
       action: 'companyPeople',
       company: company.apiName || company.name,
       role,
+      focus,
       // The profile page's "Also at" block is a glance, not a hunt: five
       // rows and no FullEnrich prefetch, so browsing profiles spends nothing.
       limit: prefix === 'profileCompany' ? 5 : 10,
@@ -2454,6 +2532,10 @@ async function loadCompanyPeople(company, prefix = 'company') {
       chrome.storage.local.set({ credits: response.credits_remaining });
     }
     state.rows = (response.contacts || []).map((r) => ({ ...r, deckId: response.deck_id || '' }));
+    if (prefix === 'company' && Array.isArray(response.chips) && response.chips.length) {
+      companyFilter.chips = response.chips;
+      renderCompanyChips(company);
+    }
     if (state.rows.length === 0) {
       empty?.classList.remove('hidden');
       return;
@@ -2498,7 +2580,17 @@ function renderCompanyRows(rows, prefix = 'company') {
 // and asks Coresignal for that role when the shelf is dry. Chips: Recruiters
 // always, plus the last job title the Job tab saw (arriving at a company
 // from a posting is the common path).
-const companyFilter = { role: '', company: '' };
+// role: typed text or a role chip. focus: alumni | recent | managers, the
+// predicted hunts. chips: what the server suggested for this student
+// (year, school, saved roles); a plain default until the first response.
+const companyFilter = { role: '', focus: '', company: '', chips: null };
+
+const DEFAULT_CHIPS = [
+  { label: 'Alumni', focus: 'alumni' },
+  { label: 'Recent hires', focus: 'recent' },
+  { label: 'Recruiters', role: 'recruiter' },
+  { label: 'Hiring managers', focus: 'managers' },
+];
 
 function renderCompanyChips(company) {
   const wrap = document.getElementById('companyChips');
@@ -2506,30 +2598,45 @@ function renderCompanyChips(company) {
   if (!wrap) return;
   if (input && input.value !== companyFilter.role) input.value = companyFilter.role;
   const chips = [];
-  if (companyFilter.role) chips.push({ label: 'Everyone', role: '' });
-  chips.push({ label: 'Recruiters', role: 'recruiter' });
+  const active = companyFilter.role || companyFilter.focus;
+  if (active) chips.push({ label: 'Everyone', role: '', focus: '' });
+  (companyFilter.chips || DEFAULT_CHIPS).forEach((c) => chips.push({
+    label: c.label || '',
+    role: (c.role || '').trim(),
+    focus: (c.focus || '').trim(),
+  }));
   const lastJob = (currentState.lastJobTitle || '').trim();
-  if (lastJob && lastJob.toLowerCase() !== companyFilter.role.toLowerCase()) {
-    chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob });
+  if (lastJob && !chips.some((c) => c.role.toLowerCase() === lastJob.toLowerCase())) {
+    chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob, focus: '' });
   }
   wrap.innerHTML = '';
   chips.forEach((chip) => {
+    if (!chip.label) return;
+    const isActive = (chip.role || chip.focus)
+      && chip.role.toLowerCase() === (companyFilter.role || '').toLowerCase()
+      && chip.focus === (companyFilter.focus || '');
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'chip' + (chip.role.toLowerCase() === companyFilter.role.toLowerCase() && chip.role ? ' chip--active' : '');
+    b.className = 'chip' + (isActive ? ' chip--active' : '');
     b.textContent = chip.label;
     b.setAttribute('role', 'listitem');
-    b.addEventListener('click', () => applyCompanyRole(chip.role, company));
+    b.addEventListener('click', () => applyCompanyFilter({ role: chip.role, focus: chip.focus }, company));
     wrap.appendChild(b);
   });
 }
 
-function applyCompanyRole(role, company) {
-  companyFilter.role = (role || '').trim();
+function applyCompanyFilter(filter, company) {
+  companyFilter.role = ((filter && filter.role) || '').trim();
+  companyFilter.focus = ((filter && filter.focus) || '').trim();
   const input = document.getElementById('companyRoleInput');
   if (input) input.value = companyFilter.role;
   const target = company || currentState.companyPage;
   if (target) loadCompanyPeople(target, 'company');
+}
+
+// Typing a role clears any focus chip; the words are the filter now.
+function applyCompanyRole(role, company) {
+  applyCompanyFilter({ role, focus: '' }, company);
 }
 
 document.addEventListener('DOMContentLoaded', () => {

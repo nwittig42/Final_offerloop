@@ -411,6 +411,7 @@ async function handleCompanyPeople(request, sendResponse) {
     const result = await fetchCompanyPeople(company, authToken, false, (role || '').trim(), {
       limit: request.limit || 10,
       prefetch: request.prefetch !== false,
+      focus: (request.focus || '').trim(),
     });
     sendResponse(result);
   } catch (error) {
@@ -443,6 +444,7 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       prefetch: opts.prefetch === false ? '0' : '1',
     });
     if (role) params.set('role', role);
+    if (opts.focus) params.set('focus', opts.focus);
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/ranker/candidates?${params.toString()}`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${authToken}` },
@@ -460,10 +462,14 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
     }
     const rows = (data.candidates || []).map((c) => {
       const p = c.person || {};
-      const firstReason = Array.isArray(c.reasons) && c.reasons.length ? c.reasons[0] : null;
-      const reasonText = firstReason && typeof firstReason === 'object'
-        ? (firstReason.label || firstReason.text || firstReason.detail || REASON_LABELS[firstReason.type] || '')
-        : (typeof firstReason === 'string' ? firstReason : '');
+      // Every reason in plain words, for the expanded card; the first one
+      // (or the ranker's briefing sentence) is the row caption.
+      const reasonLabels = (Array.isArray(c.reasons) ? c.reasons : [])
+        .map((r) => (r && typeof r === 'object')
+          ? (r.label || r.text || REASON_LABELS[r.type] || '') + (r.detail ? ` (${r.detail})` : '')
+          : (typeof r === 'string' ? r : ''))
+        .map((s) => s.trim())
+        .filter(Boolean);
       return {
         candidateId: p.id || '',
         firstName: p.firstName || '',
@@ -472,9 +478,14 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
         company: p.company || company,
         linkedinUrl: p.linkedinUrl || '',
         school: p.college || '',
+        city: p.city || '',
+        state: p.state || '',
+        joinedYear: p.joinedYear || null,
         photoUrl: p.photo_url || '',
         email: '',
-        caption: c.briefing || reasonText || '',
+        caption: c.briefing || reasonLabels[0] || '',
+        briefing: c.briefing || '',
+        reasons: reasonLabels,
         tier: c.tier || '',
         roleMatch: c.role_match === true,
         category: '',
@@ -485,6 +496,7 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       contacts: rows,
       deck_id: data.deck_id || '',
       reason: data.reason || '',
+      chips: Array.isArray(data.chips) ? data.chips : [],
     };
   } catch (error) {
     console.error('[Offerloop Background] company deck API error:', error);

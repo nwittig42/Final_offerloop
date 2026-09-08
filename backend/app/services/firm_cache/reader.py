@@ -222,6 +222,12 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
         "EmailSource":        "warehouse" if wh_email else "cache_no_email",
         "EmailVerified":      bool(wh_email),
         "EmailConfidenceScore": 95 if wh_email else 0,
+        # Same two fields the mobile reader carries (2026-08-18 / 08-26):
+        # the year they joined (a real outreach hook) and the face. Without
+        # them every deck row served from the shelf on this branch lost its
+        # photo and tenure on the way out.
+        "JoinedYear":         doc.get("joined_year") or None,
+        "PhotoUrl":           doc.get("photo_url") or "",
         "IsCurrentlyAtTarget": True,  # We only cached them as current — safe default
         # Provenance / observability
         "source":             "firm_cache",
