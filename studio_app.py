@@ -161,7 +161,8 @@ def _creators_data():
             for r in query_all(env["NOTION_CLICKS_DB"]):
                 p = r["properties"]
                 d["clicks"].append({"code": text_of(p.get("Code", {})), "dest": text_of(p.get("Destination", {})),
-                                    "device": sel(p.get("Device", {})), "when": dt(p.get("When", {}))})
+                                    "device": sel(p.get("Device", {})), "when": dt(p.get("When", {})),
+                                    "visitor": text_of(p.get("Visitor", {}))})
         if env.get("NOTION_CREATORS_DB"):
             for r in query_all(env["NOTION_CREATORS_DB"]):
                 p = r["properties"]
@@ -183,7 +184,7 @@ def _creators_data():
     return _cdata["data"]
 
 
-def log_click(code, dest, ua, referrer):
+def log_click(code, dest, ua, referrer, ip=""):
     """One Notion row per click, written off the request thread so the redirect is instant."""
     db = os.environ.get("NOTION_CLICKS_DB")
     if not db:
@@ -196,7 +197,11 @@ def log_click(code, dest, ua, referrer):
     device = ("iPhone" if "iPhone" in ua or "iPad" in ua else "Android" if "Android" in ua
               else "Mac" if "Macintosh" in ua else "Windows" if "Windows" in ua else "Other")
     when = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
+    # anonymous visitor fingerprint: a one-way hash of address + browser, never the address itself
+    import hashlib
+    visitor = hashlib.sha256(f"{ip}|{ua}".encode()).hexdigest()[:12]
     body = {"parent": {"database_id": db}, "properties": {
+        "Visitor": {"rich_text": [{"text": {"content": visitor}}]},
         "Click": {"title": [{"text": {"content": f"{code} {when}"}}]},
         "Code": {"rich_text": [{"text": {"content": code}}]},
         "Destination": {"rich_text": [{"text": {"content": dest[:200]}}]},
@@ -328,6 +333,7 @@ function sum(list,f){return list.reduce((a,p)=>a+(p[f]||0),0)}
 function dayKey(iso){return (iso||'').slice(0,10)}
 function lastDays(n){const out=[];const d=new Date();for(let i=n-1;i>=0;i--){const x=new Date(d);x.setDate(d.getDate()-i);out.push(x.toISOString().slice(0,10));}return out}
 function bars(counts,days){const mx=Math.max(1,...days.map(d=>counts[d]||0));return `<div class="bars">${days.map(d=>`<div class="${counts[d]?'':'zero'}" style="height:${Math.round((counts[d]||0)/mx*100)}%" title="${d}: ${counts[d]||0}"></div>`).join('')}</div><div class="mini"><span>${days[0]}</span><span>${days[days.length-1]}</span></div>`}
+function uniq(list){return new Set(list.map(x=>x.visitor||('c'+Math.random()))).size}
 function clicksByDay(code){const c={};DATA.clicks.filter(x=>!code||x.code===code).forEach(x=>{const k=dayKey(x.when);c[k]=(c[k]||0)+1});return c}
 function creatorsView(){
   const posts=DATA.posts.filter(p=>match({title:p.title,description:p.creator,sources:p.platform,tags:''}));
@@ -341,12 +347,13 @@ function creatorsView(){
       <div class="tile-stat"><div class="n">${fmt(sum(posts,'shares'))}</div><div class="l">shares</div></div>
       <div class="tile-stat"><div class="n">${fmt(sum(posts,'comments'))}</div><div class="l">comments</div></div>
       <div class="tile-stat"><div class="n">${DATA.clicks.length}</div><div class="l">link clicks</div>${c7?`<div class="d">${c7} last 7 days</div>`:''}</div>
+      <div class="tile-stat"><div class="n">${uniq(DATA.clicks)}</div><div class="l">unique people</div></div>
       <div class="tile-stat"><div class="n">${posts.length}</div><div class="l">posts tracked</div></div>
     </div>
     <div class="card2"><h3>Link clicks, last 14 days</h3>${bars(clicks,days)}</div>
     ${creators.map(c=>{const ps=posts.filter(p=>p.creator===c.name); const top=ps.slice().sort((a,b)=>(b.views||0)-(a.views||0))[0];
       return `<div class="card2"><h3>${esc(c.name)} <span class="tmeta" style="display:inline">${c.tiktok?'@'+esc(c.tiktok)+' on TikTok':''} ${c.instagram?'· @'+esc(c.instagram)+' on Instagram':''} · ${esc(c.track||'all')} posts</span></h3>
-        <div class="tmeta">${ps.length} posts · ${fmt(sum(ps,'views'))} views · ${fmt(sum(ps,'likes'))} likes · ${fmt(sum(ps,'shares'))} shares${c.code?` · link clicks: ${DATA.clicks.filter(x=>x.code.startsWith(c.code)).length}`:''}</div>
+        <div class="tmeta">${ps.length} posts · ${fmt(sum(ps,'views'))} views · ${fmt(sum(ps,'likes'))} likes · ${fmt(sum(ps,'shares'))} shares${c.code?` · link: ${DATA.clicks.filter(x=>x.code.startsWith(c.code)).length} clicks, ${uniq(DATA.clicks.filter(x=>x.code.startsWith(c.code)))} people`:''}</div>
         ${top?`<div class="tmeta">top post: <a href="${top.url}" target="_blank">${esc(top.title.slice(0,70))}</a> · ${fmt(top.views)} views</div>`:'<div class="tmeta">no posts yet'+(c.tiktok?'':' (add the TikTok handle in Notion)')+'</div>'}
       </div>`}).join('')||'<div class="empty">No creators yet. Add one in the Creators database in Notion.</div>'}`;
   }
@@ -359,7 +366,7 @@ function creatorsView(){
     const byday=clicksByDay(l.code); const d7=lastDays(7).reduce((a,d)=>a+(byday[d]||0),0);
     return `<div class="card2"><h3>${esc(l.code)} <span class="tmeta" style="display:inline">${esc(l.owner)} · ${esc(l.destination)}${l.active?'':' · inactive'}</span></h3>
       <div style="margin:6px 0"><span class="share">${goUrl(esc(l.code))}</span> <button class="chip" onclick="navigator.clipboard.writeText('${goUrl(esc(l.code))}')">copy</button></div>
-      <div class="tmeta">${cs.length} clicks · ${d7} in the last 7 days · ${Object.entries(c).map(([k,v])=>k+' '+v).join(', ')||'no clicks yet'}</div>
+      <div class="tmeta">${cs.length} clicks from ${uniq(cs)} people · ${d7} in the last 7 days · ${Object.entries(c).map(([k,v])=>k+' '+v).join(', ')||'no clicks yet'}</div>
       <div class="tmeta">sends to <a href="${l.target}" target="_blank">${esc(l.target.slice(0,80))}</a></div>
       ${l.notes?`<div class="tmeta">${esc(l.notes)}</div>`:''}
       ${bars(byday,lastDays(14))}</div>`}).join('')||'<div class="empty">No links yet. Add a row to the Studio Links database in Notion.</div>';
@@ -529,8 +536,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(404); self.send_header("Content-Type", "text/plain"); self.end_headers()
                 self.wfile.write(b"unknown link"); return
             link = links[0]
+            ip = (self.headers.get("X-Forwarded-For") or self.client_address[0] or "").split(",")[0].strip()
             threading.Thread(target=log_click, args=(link["code"], link["destination"] or link["target"],
-                             self.headers.get("User-Agent"), self.headers.get("Referer")), daemon=True).start()
+                             self.headers.get("User-Agent"), self.headers.get("Referer"), ip), daemon=True).start()
             self.send_response(302); self.send_header("Location", link["target"]); self.send_header("Cache-Control", "no-store")
             self.end_headers(); return
         if self.path.split("?")[0] == "/health":     # Render's health check, no password
