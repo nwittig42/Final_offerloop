@@ -434,6 +434,7 @@ function render(){
 }
 function go(v){view=v;render();window.scrollTo(0,0)}
 if(location.hash==='#creators') setMode('creators');
+const q0=new URLSearchParams(location.search).get('q'); if(q0){ setQ(q0); }
 function setQ(w){q=w.toLowerCase();document.getElementById('q').value=w;if(view==='drops')view='clips';render();window.scrollTo(0,0)}
 document.getElementById('q').addEventListener('input',e=>{q=e.target.value.trim().toLowerCase();render()});
 render();
