@@ -1284,16 +1284,21 @@ function showResults(contact) {
       : 'Not found';
   }
 
-  // Status badge
+  // Status badge, card state, and the line under the name
   elements.resultStatus.classList.remove('no-email', 'pending');
+  elements.resultsSection?.classList.toggle('result-card--pending', !!contact.pending);
+  const metaEl = elements.resultsSection?.querySelector('.result-card__meta');
   if (contact.pending) {
     elements.resultStatus.textContent = 'Searching';
     elements.resultStatus.classList.add('pending');
+    if (metaEl) metaEl.textContent = 'Finding their email';
   } else if (contact.email) {
     elements.resultStatus.textContent = 'Found';
+    if (metaEl) metaEl.textContent = 'Ready to reach out';
   } else {
     elements.resultStatus.textContent = 'No Email';
     elements.resultStatus.classList.add('no-email');
+    if (metaEl) metaEl.textContent = contact.refunded ? 'Credits refunded' : 'No email on file';
   }
 
   // Show success links section
@@ -1598,15 +1603,22 @@ function parseCompanyFromTab(tab) {
   const m = url.match(/linkedin\.com\/company\/([^/?#]+)/i);
   if (!m) return null;
   const slug = decodeURIComponent(m[1]);
-  let name = (tab.title || '')
+  // The slug is the truth for the search: "hallmark-media" keys the same
+  // shelf row as "Hallmark Media", and it is right the instant the URL
+  // changes. The tab title lags a navigation (Chrome reports the URL first,
+  // the title later), so it is only used for display, and only when it
+  // agrees with the slug; otherwise the slug is shown title-cased.
+  const slugWords = slug.replace(/-/g, ' ').trim();
+  const slugName = slugWords.replace(/\b\w/g, (c) => c.toUpperCase());
+  let title = (tab.title || '')
     .replace(/^\(\d+\)\s*/, '')
     .replace(/\s*\|\s*LinkedIn\s*$/i, '')
     .split(':')[0]
     .trim();
-  if (!name || /^linkedin$/i.test(name)) {
-    name = slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-  return { slug, name };
+  const firstSlugWord = (slugWords.split(' ')[0] || '').toLowerCase();
+  const titleAgrees = title && firstSlugWord.length > 2 && title.toLowerCase().includes(firstSlugWord);
+  const name = titleAgrees ? title : slugName;
+  return { slug, name, apiName: slugWords };
 }
 
 // Check auth state and show appropriate content
@@ -2408,11 +2420,17 @@ async function loadCompanyPeople(company, prefix = 'company') {
   error?.classList.add('hidden');
   if (results) results.innerHTML = '';
   loading?.classList.remove('hidden');
+  const stopStages = startLoadingStages(_companyEl(prefix, 'LoadingText'), [
+    'Checking who is already on file',
+    'Ranking them for you',
+    'Looking deeper on LinkedIn',
+    'Almost there',
+  ]);
 
   try {
     const response = await chrome.runtime.sendMessage({
       action: 'companyPeople',
-      company: company.name,
+      company: company.apiName || company.name,
       role,
       // The profile page's "Also at" block is a glance, not a hunt: five
       // rows and no FullEnrich prefetch, so browsing profiles spends nothing.
@@ -2420,6 +2438,7 @@ async function loadCompanyPeople(company, prefix = 'company') {
       prefetch: prefix !== 'profileCompany',
       authToken: currentState.authToken,
     });
+    stopStages();
     loading?.classList.add('hidden');
     if (state.key !== key) return; // the user moved on
 
@@ -2442,12 +2461,27 @@ async function loadCompanyPeople(company, prefix = 'company') {
     renderCompanyRows(state.rows, prefix);
   } catch (e) {
     console.error('[Offerloop Popup] company-people error:', e);
+    stopStages();
     loading?.classList.add('hidden');
     if (error) {
       error.textContent = e.message || 'Could not load people here. Try again.';
       error.classList.remove('hidden');
     }
   }
+}
+
+// Staged loading copy (the app's green-bar move): the message advances
+// every few seconds so a 15 second dig reads as progress, not a hang.
+// Returns a stop function; safe to call twice.
+function startLoadingStages(textEl, stages, everyMs = 3500) {
+  if (!textEl || !stages || !stages.length) return () => {};
+  let i = 0;
+  textEl.textContent = stages[0];
+  const timer = setInterval(() => {
+    i = Math.min(i + 1, stages.length - 1);
+    textEl.textContent = stages[i];
+  }, everyMs);
+  return () => clearInterval(timer);
 }
 
 function renderCompanyRows(rows, prefix = 'company') {
@@ -2576,6 +2610,20 @@ function settleTabChange() {
 chrome.tabs.onActivated.addListener(reactToActiveTabChange);
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (changeInfo.url && tab.active) reactToActiveTabChange();
+  // The title settles after the URL. On a company page, catch up the
+  // display name only; the search already ran on the slug.
+  if (changeInfo.title && tab.active && currentState.companyPage) {
+    const c = parseCompanyFromTab(tab);
+    if (c && c.slug === currentState.companyPage.slug && c.name !== currentState.companyPage.name) {
+      currentState.companyPage = c;
+      const nameEl = document.getElementById('companyName');
+      if (nameEl) nameEl.textContent = c.name;
+      const emptyCompanyEl = document.querySelector('#companyEmpty span');
+      if (emptyCompanyEl) emptyCompanyEl.textContent = c.name;
+      const footerCompanyEl = document.querySelector('#companyFooterLink .similar-footer-link__company');
+      if (footerCompanyEl) footerCompanyEl.textContent = c.name;
+    }
+  }
 });
 
 // Start initialization when DOM is ready

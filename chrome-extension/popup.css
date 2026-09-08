@@ -847,9 +847,34 @@ body {
   align-items: center;
   gap: 9px;
   padding: 10px 12px;
-  background: var(--silver-50);
-  border: 1px solid var(--card-edge);
+  background: var(--indigo-foam);
+  border: 1px solid var(--indigo-100);
   border-radius: var(--radius-sm);
+}
+
+/* Waiting on FullEnrich in the background: same blue family as the rest
+   of the panel, body type instead of the email's monospace, no verified
+   check until there is something to verify. */
+.result-card--pending .result-card__email-row {
+  background: var(--indigo-foam);
+  border-color: var(--indigo-200);
+}
+
+.result-card--pending .result-card__email {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--indigo-700);
+  word-break: normal;
+}
+
+.result-card--pending .result-card__verified {
+  display: none;
+}
+
+.result-card--pending .result-card__email-icon {
+  color: var(--indigo-500);
+  animation: breathe 1.8s ease-in-out infinite;
 }
 
 .result-card__email-icon {
@@ -1091,7 +1116,7 @@ body {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: var(--silver-50);
+  background: var(--indigo-foam);
   border: 1px solid var(--card-edge);
   border-radius: var(--radius-md);
   animation: rise 280ms var(--ease-out);
@@ -1754,7 +1779,7 @@ body {
   padding: 9px 11px;
   border: 1px solid var(--card-edge);
   border-radius: 8px;
-  background: var(--silver-50);
+  background: var(--indigo-foam);
   font-family: var(--font-body);
   font-size: 13px;
   color: var(--ink);
@@ -1817,7 +1842,51 @@ body {
 }
 
 .status-badge.pending {
-  background: var(--silver-50);
+  background: var(--indigo-100);
+  color: var(--indigo-700);
+  border-color: var(--indigo-200);
+}
+
+/* Indeterminate progress bar, the app deck move, in the brand jade so it
+   reads as "working" rather than "warning". */
+.progress {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--indigo-100);
+  overflow: hidden;
+}
+
+.progress__bar {
+  position: absolute;
+  top: 0;
+  left: -40%;
+  width: 40%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--jade-500), var(--jade-600));
+  animation: progress-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-sweep {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+.similar-loading p {
+  margin-top: 8px;
+}
+
+/* Loading blocks stack: bar on top, staged message under it. */
+.similar-loading {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.similar-loading p {
+  text-align: center;
+  font-size: 12.5px;
   color: var(--ink-muted);
-  border-color: var(--card-edge);
 }
