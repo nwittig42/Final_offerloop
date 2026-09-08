@@ -129,6 +129,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleDraftContact(request, sendResponse);
       return true;
 
+    case 'revealEmail':
+      handleRevealEmail(request, sendResponse);
+      return true;
+
     case 'getCredits':
       handleGetCredits(request, sendResponse);
       return true;
@@ -386,7 +390,7 @@ async function draftContactViaApi(contact, authToken, isRetry = false) {
 
 // Handle company people (side panel on a LinkedIn company page)
 async function handleCompanyPeople(request, sendResponse) {
-  const { company, authToken } = request;
+  const { company, authToken, role } = request;
   try {
     if (!authToken) {
       sendResponse({ error: 'Not authenticated' });
@@ -396,7 +400,10 @@ async function handleCompanyPeople(request, sendResponse) {
       sendResponse({ error: 'Missing company' });
       return;
     }
-    const result = await fetchCompanyPeople(company, authToken);
+    const result = await fetchCompanyPeople(company, authToken, false, (role || '').trim(), {
+      limit: request.limit || 10,
+      prefetch: request.prefetch !== false,
+    });
     sendResponse(result);
   } catch (error) {
     console.error('[Offerloop Background] Error in handleCompanyPeople:', error);
@@ -404,38 +411,136 @@ async function handleCompanyPeople(request, sendResponse) {
   }
 }
 
-// Call /api/contacts/company-people (with automatic token refresh on 401).
-// Zero credits: this is the browse step, the email step charges per row.
-async function fetchCompanyPeople(company, authToken, isRetry = false) {
-  console.log('[Offerloop Background] Loading people at:', company);
+// The company deck (2026-09-07): the same ranker the app's People deck
+// runs, narrowed to one firm. Ranked against the student (school, target
+// roles, tenure), each row carrying the ranker's reason. Zero credits to
+// browse; the top rows get a FullEnrich prefetch so a reveal is instant.
+// Reason types the ranker emits, in plain words, used when it gives no sentence.
+const REASON_LABELS = {
+  alumni: 'Went to your school',
+  dream_company: 'At one of your target companies',
+  shared_company: 'Worked where you worked',
+  career_path: 'On the path you want',
+  shared_major: 'Studied what you studied',
+  recent_transition: 'Recently changed roles',
+};
+
+async function fetchCompanyPeople(company, authToken, isRetry = false, role = '', opts = {}) {
+  console.log('[Offerloop Background] Loading company deck:', company, role ? `role=${role}` : '');
   try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/contacts/company-people`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}`,
-      },
-      body: JSON.stringify({ company, limit: 10 }),
-    }, 45000);
+    const params = new URLSearchParams({
+      company,
+      limit: String(opts.limit || 10),
+      surface: 'extension',
+      prefetch: opts.prefetch === false ? '0' : '1',
+    });
+    if (role) params.set('role', role);
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/ranker/candidates?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${authToken}` },
+    }, 60000);
 
     if (response.status === 401 && !isRetry) {
-      console.log('[Offerloop Background] company-people 401, refreshing token...');
+      console.log('[Offerloop Background] company deck 401, refreshing token...');
       const newToken = await refreshAuthToken();
-      if (newToken) return fetchCompanyPeople(company, newToken, true);
+      if (newToken) return fetchCompanyPeople(company, newToken, true, role, opts);
     }
 
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.message || data.error || `API error: ${response.status}`);
     }
+    const rows = (data.candidates || []).map((c) => {
+      const p = c.person || {};
+      const firstReason = Array.isArray(c.reasons) && c.reasons.length ? c.reasons[0] : null;
+      const reasonText = firstReason && typeof firstReason === 'object'
+        ? (firstReason.label || firstReason.text || firstReason.detail || REASON_LABELS[firstReason.type] || '')
+        : (typeof firstReason === 'string' ? firstReason : '');
+      return {
+        candidateId: p.id || '',
+        firstName: p.firstName || '',
+        lastName: p.lastName || '',
+        title: p.title || '',
+        company: p.company || company,
+        linkedinUrl: p.linkedinUrl || '',
+        school: p.college || '',
+        photoUrl: p.photo_url || '',
+        email: '',
+        caption: c.briefing || reasonText || '',
+        tier: c.tier || '',
+        roleMatch: c.role_match === true,
+        category: '',
+      };
+    });
     return {
       success: true,
-      contacts: data.contacts || [],
-      cap: data.cap,
-      credits_remaining: data.credits_remaining,
+      contacts: rows,
+      deck_id: data.deck_id || '',
+      reason: data.reason || '',
     };
   } catch (error) {
-    console.error('[Offerloop Background] company-people API error:', error);
+    console.error('[Offerloop Background] company deck API error:', error);
+    throw error;
+  }
+}
+
+// Handle reveal for a company-deck row (8 credits, refunded on a miss)
+async function handleRevealEmail(request, sendResponse) {
+  const { candidateId, deckId, authToken } = request;
+  try {
+    if (!authToken) {
+      sendResponse({ error: 'Not authenticated' });
+      return;
+    }
+    if (!candidateId) {
+      sendResponse({ error: 'Missing candidate' });
+      return;
+    }
+    const result = await revealCandidateEmail(candidateId, deckId || '', authToken);
+    sendResponse(result);
+  } catch (error) {
+    console.error('[Offerloop Background] Error in handleRevealEmail:', error);
+    sendResponse({ error: error.message || 'Failed to find the email' });
+  }
+}
+
+// POST /api/ranker/candidates/<id>/reveal-email: warehouse first, then the
+// deck's prefetch, then one live FullEnrich lookup. Charged only when a
+// verified address lands; the backend refunds a miss on its own.
+async function revealCandidateEmail(candidateId, deckId, authToken, isRetry = false) {
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/ranker/candidates/${encodeURIComponent(candidateId)}/reveal-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ deck_id: deckId, surface: 'extension' }),
+      }, 90000);
+
+    if (response.status === 401 && !isRetry) {
+      const newToken = await refreshAuthToken();
+      if (newToken) return revealCandidateEmail(candidateId, deckId, newToken, true);
+    }
+
+    const data = await response.json();
+    if (response.status === 402) {
+      throw new Error(`Not enough credits (need ${data.required}, have ${data.have})`);
+    }
+    if (!response.ok) {
+      throw new Error(data.message || data.error || `API error: ${response.status}`);
+    }
+    return {
+      success: true,
+      email: data.email || '',
+      verified: !!data.verified,
+      charged: !!data.charged,
+      cached: !!data.cached,
+      reason: data.reason || '',
+    };
+  } catch (error) {
+    console.error('[Offerloop Background] reveal-email API error:', error);
     throw error;
   }
 }

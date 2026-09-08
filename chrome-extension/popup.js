@@ -568,6 +568,9 @@ function showCoverLetterResults(data, company, jobTitle) {
   // Extract company/title from various possible locations
   let companyName = company || data.company || data.companyName;
   let title = jobTitle || data.jobTitle || data.job_title || data.title;
+  // Remembered for the Company tab's chips: arriving at a company page from
+  // a posting is the common path, and the team you would join is the ask.
+  if (title) currentState.lastJobTitle = title;
   
   // Also check inside coverLetter object if it exists
   if (data.coverLetter && typeof data.coverLetter === 'object') {
@@ -1981,8 +1984,9 @@ function buildSimilarRowEl(row) {
   metaEl.textContent = meta || (row.company || '');
   who.append(nameEl, metaEl);
 
-  // Bucket caption explains *why* this row was suggested.
-  const captionText = _categoryCaption(
+  // Caption explains *why* this row was suggested: the ranker's own
+  // sentence for deck rows, the bucket caption for find-similar rows.
+  const captionText = (row.caption || '').trim() || _categoryCaption(
     row.category,
     similarState.source && similarState.source.company,
     similarState.source && similarState.source.title,
@@ -2198,27 +2202,42 @@ async function findEmailForRow(row, btn, rowEl) {
   btn.textContent = 'Finding…';
   try {
     // Email only; drafting is the row's next button, not an automatic side
-    // effect of finding the address.
-    const response = await chrome.runtime.sendMessage({
-      action: 'importLinkedIn',
-      linkedInUrl: row.linkedinUrl,
-      authToken: currentState.authToken,
-      createDraft: false,
-    });
-
-    if (!response || response.error) {
-      throw new Error((response && response.error) || 'Find-email failed');
+    // effect of finding the address. Deck rows reveal through the ranker
+    // (warehouse, then the deck's prefetch, then one live lookup; 8
+    // credits, refunded on a miss). Other rows go through import-linkedin.
+    let email = '';
+    if (row.candidateId) {
+      const response = await chrome.runtime.sendMessage({
+        action: 'revealEmail',
+        candidateId: row.candidateId,
+        deckId: row.deckId || '',
+        authToken: currentState.authToken,
+      });
+      if (!response || response.error) {
+        throw new Error((response && response.error) || 'Find-email failed');
+      }
+      email = (response.email || '').trim();
+      // The reveal route does not return the balance; refetch it.
+      _creditsCacheTime = 0;
+      refreshCredits().catch(() => {});
+    } else {
+      const response = await chrome.runtime.sendMessage({
+        action: 'importLinkedIn',
+        linkedInUrl: row.linkedinUrl,
+        authToken: currentState.authToken,
+        createDraft: false,
+      });
+      if (!response || response.error) {
+        throw new Error((response && response.error) || 'Find-email failed');
+      }
+      if (response.credits_remaining !== undefined) {
+        updateCredits(response.credits_remaining);
+        currentState.credits = response.credits_remaining;
+        chrome.storage.local.set({ credits: response.credits_remaining });
+      }
+      const found = response.contact || response;
+      email = (found.email || '').trim();
     }
-
-    // Credit refresh from the import-linkedin response
-    if (response.credits_remaining !== undefined) {
-      updateCredits(response.credits_remaining);
-      currentState.credits = response.credits_remaining;
-      chrome.storage.local.set({ credits: response.credits_remaining });
-    }
-
-    const found = response.contact || response;
-    const email = (found.email || '').trim();
     if (email) {
       row.email = email;
       const actions = document.createElement('div');
@@ -2275,7 +2294,16 @@ async function loadCompanyPeople(company, prefix = 'company') {
   const empty = _companyEl(prefix, 'Empty');
   const error = _companyEl(prefix, 'Error');
   const footer = _companyEl(prefix, 'FooterLink');
-  const key = company.slug || company.name;
+  // The typed role or chip (Company tab only). Part of the cache key, so a
+  // new filter always refetches and the same filter never does.
+  if (prefix === 'company' && companyFilter.company !== (company.slug || company.name)) {
+    // A new company: the previous company's filter does not carry over.
+    companyFilter.company = company.slug || company.name;
+    companyFilter.role = '';
+  }
+  const role = prefix === 'company' ? (companyFilter.role || '') : '';
+  const key = `${company.slug || company.name}|${role}`;
+  if (prefix === 'company') renderCompanyChips(company);
 
   if (nameEl) nameEl.textContent = company.name;
   const emptyCompanyEl = empty?.querySelector('span');
@@ -2305,6 +2333,11 @@ async function loadCompanyPeople(company, prefix = 'company') {
     const response = await chrome.runtime.sendMessage({
       action: 'companyPeople',
       company: company.name,
+      role,
+      // The profile page's "Also at" block is a glance, not a hunt: five
+      // rows and no FullEnrich prefetch, so browsing profiles spends nothing.
+      limit: prefix === 'profileCompany' ? 5 : 10,
+      prefetch: prefix !== 'profileCompany',
       authToken: currentState.authToken,
     });
     loading?.classList.add('hidden');
@@ -2321,7 +2354,7 @@ async function loadCompanyPeople(company, prefix = 'company') {
       updateCredits(response.credits_remaining);
       chrome.storage.local.set({ credits: response.credits_remaining });
     }
-    state.rows = response.contacts || [];
+    state.rows = (response.contacts || []).map((r) => ({ ...r, deckId: response.deck_id || '' }));
     if (state.rows.length === 0) {
       empty?.classList.remove('hidden');
       return;
@@ -2341,10 +2374,63 @@ function renderCompanyRows(rows, prefix = 'company') {
   const results = _companyEl(prefix, 'Results');
   if (!results) return;
   results.innerHTML = '';
-  // No bucket caption on company rows: the header already says where they work.
+  // Deck rows carry the ranker's reason as their caption; no bucket caption.
   rows.forEach((row) => results.appendChild(buildSimilarRowEl({ ...row, category: '' })));
   results.classList.remove('hidden');
 }
+
+// ── Company tab filter: a typed role plus a couple of chips ──────────
+// The role rides to the ranker as ?role=, which puts matching titles first
+// and asks Coresignal for that role when the shelf is dry. Chips: Recruiters
+// always, plus the last job title the Job tab saw (arriving at a company
+// from a posting is the common path).
+const companyFilter = { role: '', company: '' };
+
+function renderCompanyChips(company) {
+  const wrap = document.getElementById('companyChips');
+  const input = document.getElementById('companyRoleInput');
+  if (!wrap) return;
+  if (input && input.value !== companyFilter.role) input.value = companyFilter.role;
+  const chips = [];
+  if (companyFilter.role) chips.push({ label: 'Everyone', role: '' });
+  chips.push({ label: 'Recruiters', role: 'recruiter' });
+  const lastJob = (currentState.lastJobTitle || '').trim();
+  if (lastJob && lastJob.toLowerCase() !== companyFilter.role.toLowerCase()) {
+    chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob });
+  }
+  wrap.innerHTML = '';
+  chips.forEach((chip) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip' + (chip.role.toLowerCase() === companyFilter.role.toLowerCase() && chip.role ? ' chip--active' : '');
+    b.textContent = chip.label;
+    b.setAttribute('role', 'listitem');
+    b.addEventListener('click', () => applyCompanyRole(chip.role, company));
+    wrap.appendChild(b);
+  });
+}
+
+function applyCompanyRole(role, company) {
+  companyFilter.role = (role || '').trim();
+  const input = document.getElementById('companyRoleInput');
+  if (input) input.value = companyFilter.role;
+  const target = company || currentState.companyPage;
+  if (target) loadCompanyPeople(target, 'company');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('companyRoleForm');
+  const input = document.getElementById('companyRoleInput');
+  form?.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    applyCompanyRole(input ? input.value : '');
+  });
+  // Clearing the box (the search input's own x, or backspacing to empty)
+  // goes back to everyone.
+  input?.addEventListener('search', () => {
+    if (!input.value.trim() && companyFilter.role) applyCompanyRole('');
+  });
+});
 
 // Profile page: ask the content script which company the person works at,
 // then list their colleagues under the action buttons. The person on screen

@@ -750,7 +750,11 @@ def import_from_linkedin():
         
         # Step 7: Deduct credit
         print(f"[LinkedInImport] Step 9: Deducting credit...")
-        credits_to_deduct = 5
+        # 8 since 2026-09-07 (was 5): one hand-picked person costs the same
+        # on every surface, matching the app deck's reveal (CREDIT_COSTS
+        # reveal_email).
+        from ..config import CREDIT_COSTS as _CC
+        credits_to_deduct = int(_CC.get('reveal_email', 8))
         user_doc = user_ref.get()
         current_credits = 0
         if user_doc.exists:

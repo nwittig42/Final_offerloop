@@ -1741,3 +1741,77 @@ body {
   color: var(--ink);
   border-color: var(--ink-faint);
 }
+
+/* Company tab filter: typed role + chips. */
+.company-filter {
+  display: flex;
+  gap: 6px;
+}
+
+.company-filter__input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--card-edge);
+  border-radius: 8px;
+  background: var(--silver-50);
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.company-filter__input:focus {
+  outline: none;
+  border-color: var(--ink-faint);
+  background: #FFFFFF;
+}
+
+.company-filter__go {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 36px;
+  border: 1px solid var(--card-edge);
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: var(--ink-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.company-filter__go svg {
+  width: 15px;
+  height: 15px;
+}
+
+.company-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 5px 10px;
+  border: 1px solid var(--card-edge);
+  border-radius: 999px;
+  background: #FFFFFF;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.chip:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+.chip--active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #FFFFFF;
+}
