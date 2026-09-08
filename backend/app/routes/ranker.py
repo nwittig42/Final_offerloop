@@ -584,6 +584,25 @@ def reveal_candidate_email(candidate_id):
     if wh_email and _within_ttl(fs.get("work_email_verified_at"), days=WAREHOUSE_EMAIL_TTL_DAYS):
         email, verified, source = wh_email, True, "warehouse"
 
+    # ── 3b2. Hunter fast rung (2026-09-07): one database, 2 to 3 seconds,
+    # accepted at confidence >= REVEAL_CHARGE_MIN_CONFIDENCE. A hit skips the
+    # prefetch wait and the live waterfall; a miss costs a few seconds and
+    # falls through. Same rung the website Find and the extension run
+    # (app.services.email_fast). Stays per user: Hunter scores
+    # deliverability, it does not SMTP-verify, so it never goes on the
+    # shared shelf.
+    if not email:
+        try:
+            from app.services import email_fast as _ef
+            _h = _ef.hunter_email(first, last, company_display)
+            if _h and _h.get("email") and int(_h.get("confidence") or 0) >= REVEAL_CHARGE_MIN_CONFIDENCE:
+                email = _h["email"]
+                verified = False
+                source = "hunter_finder"
+                confidence = int(_h.get("confidence") or 0)
+        except Exception:
+            logger.exception("reveal: hunter fast rung failed uid=%s cid=%s", uid, candidate_id)
+
     # ── 3c. Prefetch lookup: the deck-serve fired one bulk waterfall for
     # the top cards; by swipe time it is usually FINISHED, so this is a
     # read, not a wait. fe_checked=True means the job finished and a

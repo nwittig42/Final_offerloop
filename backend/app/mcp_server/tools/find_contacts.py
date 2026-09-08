@@ -327,6 +327,33 @@ def _fullenrich_pass(contacts: list[dict], db: Any) -> None:
     ][:_FE_PASS_CAP]
     if not missing:
         return
+    # Hunter first (2026-09-07): seconds, in parallel, confidence 90+.
+    # Whoever it finds skips the waterfall. Same ladder as every surface.
+    try:
+        from app.services import email_fast as _ef
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        def _hunt(c):
+            return _ef.hunter_email(
+                (c.get("FirstName") or "").strip(),
+                (c.get("LastName") or "").strip(),
+                (c.get("Company") or "").strip(),
+            )
+        with _TPE(max_workers=max(1, len(missing))) as ex:
+            hunter_hits = list(ex.map(_hunt, missing))
+        for c, h in zip(missing, hunter_hits):
+            if h and h.get("email"):
+                c["Email"] = h["email"]
+                c["WorkEmail"] = h["email"]
+                c["EmailSource"] = "hunter_finder"
+                c["EmailVerified"] = False
+                c["EmailConfidenceScore"] = int(h.get("confidence") or 0)
+        logger.info("[MCP find_contacts] Hunter fast rung: %d/%d found",
+                    sum(1 for h in hunter_hits if h), len(missing))
+    except Exception:
+        logger.warning("[MCP find_contacts] Hunter fast rung failed; everyone goes to FullEnrich")
+    missing = [c for c in missing if not (c.get("Email") or "").strip()]
+    if not missing:
+        return
     try:
         from app.services import fullenrich_client
         people = [

@@ -133,6 +133,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleRevealEmail(request, sendResponse);
       return true;
 
+    case 'emailStatus':
+      handleEmailStatus(request, sendResponse);
+      return true;
+
     case 'getCredits':
       handleGetCredits(request, sendResponse);
       return true;
@@ -213,7 +217,7 @@ async function handleImportLinkedIn(request, sendResponse) {
       return;
     }
     
-    const result = await importLinkedInContact(linkedInUrl, authToken, false, request.createDraft !== false);
+    const result = await importLinkedInContact(linkedInUrl, authToken, false, request.createDraft !== false, request.emailMode || '');
     sendResponse(result);
   } catch (error) {
     console.error('[Offerloop Background] Error in handleImportLinkedIn:', error);
@@ -222,7 +226,7 @@ async function handleImportLinkedIn(request, sendResponse) {
 }
 
 // Import LinkedIn contact via API (with automatic token refresh on 401)
-async function importLinkedInContact(linkedInUrl, authToken, isRetry = false, createDraft = true) {
+async function importLinkedInContact(linkedInUrl, authToken, isRetry = false, createDraft = true, emailMode = '') {
   console.log('[Offerloop Background] Importing LinkedIn contact:', linkedInUrl, 'draft:', createDraft);
 
   try {
@@ -240,6 +244,8 @@ async function importLinkedInContact(linkedInUrl, authToken, isRetry = false, cr
       body: JSON.stringify({
         linkedin_url: linkedInUrl,
         create_draft: createDraft,
+        // fast: shelf or Hunter in seconds, FullEnrich in the background
+        email_mode: emailMode || undefined,
       }),
     }, 90000);
 
@@ -248,7 +254,7 @@ async function importLinkedInContact(linkedInUrl, authToken, isRetry = false, cr
       console.log('[Offerloop Background] Got 401, attempting token refresh...');
       const newToken = await refreshAuthToken();
       if (newToken) {
-        return importLinkedInContact(linkedInUrl, newToken, true, createDraft);
+        return importLinkedInContact(linkedInUrl, newToken, true, createDraft, emailMode);
       }
     }
     
@@ -262,10 +268,12 @@ async function importLinkedInContact(linkedInUrl, authToken, isRetry = false, cr
     return {
       success: true,
       contact: data.contact,
+      contact_id: data.contact_id,
       message: data.message,
       credits_remaining: data.credits_remaining,
       draft_created: data.draft_created,
       email_found: data.email_found,
+      email_pending: data.email_pending === true,
       gmail_draft_url: data.gmail_draft_url,
     };
   } catch (error) {
@@ -482,6 +490,50 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
     console.error('[Offerloop Background] company deck API error:', error);
     throw error;
   }
+}
+
+// Handle the pending-email poll for a profile Find Email that went to the
+// background. GET /api/contacts/<id>/email-status: found | miss | pending.
+async function handleEmailStatus(request, sendResponse) {
+  const { contactId, authToken } = request;
+  try {
+    if (!authToken) {
+      sendResponse({ error: 'Not authenticated' });
+      return;
+    }
+    if (!contactId) {
+      sendResponse({ error: 'Missing contact' });
+      return;
+    }
+    const result = await fetchEmailStatus(contactId, authToken);
+    sendResponse(result);
+  } catch (error) {
+    console.error('[Offerloop Background] Error in handleEmailStatus:', error);
+    sendResponse({ error: error.message || 'Could not check the email' });
+  }
+}
+
+async function fetchEmailStatus(contactId, authToken, isRetry = false) {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/api/contacts/${encodeURIComponent(contactId)}/email-status`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${authToken}` },
+    }, 20000);
+  if (response.status === 401 && !isRetry) {
+    const newToken = await refreshAuthToken();
+    if (newToken) return fetchEmailStatus(contactId, newToken, true);
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || data.error || `API error: ${response.status}`);
+  }
+  return {
+    success: true,
+    status: data.status || 'pending',
+    email: data.email || '',
+    source: data.source || '',
+    refunded: !!data.refunded,
+  };
 }
 
 // Handle reveal for a company-deck row (8 credits, refunded on a miss)

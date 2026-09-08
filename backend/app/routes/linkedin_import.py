@@ -338,6 +338,10 @@ def import_from_linkedin():
         # auto-draft behavior. Skipping the draft also skips the slow enrichment +
         # email generation, so preview returns fast.
         create_draft = bool(data.get('create_draft', True))
+        # email_mode=fast (the extension, 2026-09-07): answer in seconds from
+        # the shelf or Hunter; if only FullEnrich's waterfall is left, start it
+        # in the background and let /contacts/<id>/email-status finish it.
+        email_mode = (str(data.get('email_mode') or '')).strip().lower()
         
         print(f"[LinkedInImport] Request received: resume_provided={bool(user_resume)}")
         
@@ -389,27 +393,59 @@ def import_from_linkedin():
         print(f"[LinkedInImport]   - Title: {pdl_contact.get('Title', 'None')}")
         print(f"[LinkedInImport]   - Location: {pdl_contact.get('City', '')}, {pdl_contact.get('State', '')}")
 
-        # Step 3: Resolve email via FullEnrich (2026-09-01: email sourcing is
-        # FullEnrich-only per the reseller agreement thread; verification is
-        # included in their 1-credit cost, so the old Hunter pipeline paid
-        # twice for the same work).
-        print(f"[LinkedInImport] Step 4: Resolving email via FullEnrich...")
+        # Step 4 (2026-09-07): fastest source first. The shelf (instant: any
+        # student found them in the last 90 days), then Hunter's single
+        # database (2 to 3 seconds, accepted at confidence 90+), then
+        # FullEnrich's waterfall. The waterfall is 15 to 90 seconds and
+        # slowest on a miss, so with email_mode=fast it runs in the
+        # background: this response returns now, the address lands on the
+        # contact and the shelf when the job finishes, and email-status hands
+        # it to the panel. Other callers keep the synchronous waterfall.
+        # See app.services.email_fast, the same ladder the deck reveal and
+        # the website Find run.
+        print(f"[LinkedInImport] Step 4: Resolving email (shelf, Hunter, FullEnrich)...")
         contact_email = None
         email_source = None
+        email_pending = None
         try:
-            from app.services import fullenrich_client
-            _fe_hit = fullenrich_client.find_work_email(
+            from app.services import email_fast
+            _fast = email_fast.fast_email(
                 first_name=pdl_contact.get('FirstName', ''),
                 last_name=pdl_contact.get('LastName', ''),
                 company=pdl_contact.get('Company', ''),
                 linkedin_url=linkedin_url,
                 db=get_db(),
             )
-            if _fe_hit and _fe_hit.get('email'):
-                contact_email = _fe_hit['email']
-                email_source = 'fullenrich'
+            if _fast:
+                contact_email = _fast['email']
+                email_source = _fast['source']
+                print(f"[LinkedInImport] Fast rung hit: source={email_source}")
+            elif email_mode == 'fast':
+                email_pending = email_fast.start_pending(
+                    pdl_contact.get('FirstName', ''), pdl_contact.get('LastName', ''),
+                    pdl_contact.get('Company', ''), linkedin_url, get_db(),
+                )
+                print(f"[LinkedInImport] FullEnrich started in the background: {bool(email_pending)}")
+            if not contact_email and email_pending is None:
+                from app.services import fullenrich_client
+                _fe_hit = fullenrich_client.find_work_email(
+                    first_name=pdl_contact.get('FirstName', ''),
+                    last_name=pdl_contact.get('LastName', ''),
+                    company=pdl_contact.get('Company', ''),
+                    linkedin_url=linkedin_url,
+                    db=get_db(),
+                )
+                if _fe_hit and _fe_hit.get('email'):
+                    contact_email = _fe_hit['email']
+                    email_source = f"fullenrich_{(_fe_hit.get('status') or 'found').lower()}"
         except Exception as fe_err:
-            print(f"[LinkedInImport] FullEnrich lookup failed: {fe_err}")
+            print(f"[LinkedInImport] email lookup failed: {fe_err}")
+        if contact_email and email_source and email_source != 'warehouse':
+            try:
+                from app.services import email_fast as _ef
+                _ef.write_email_to_shelf(linkedin_url, contact_email, email_source, get_db())
+            except Exception:
+                pass
         has_email = contact_email is not None
 
         print(f"[LinkedInImport] Email resolution: found={has_email}, source={email_source or 'None'}")
@@ -737,6 +773,11 @@ def import_from_linkedin():
         if contact_for_email.get('company_description'):
             contact_data['companyDescription'] = contact_for_email['company_description'][:1000]
 
+        if email_pending:
+            # The ticket email-status polls. The charge is recorded so a miss
+            # can give it back.
+            from ..config import CREDIT_COSTS as _CCp
+            contact_data['emailPending'] = {**email_pending, 'charged': int(_CCp.get('reveal_email', 8))}
         print(f"[LinkedInImport]   - Contact Data Prepared:")
         print(f"[LinkedInImport]     - Name: {contact_data['firstName']} {contact_data['lastName']}")
         print(f"[LinkedInImport]     - Email: {contact_data['email'] or 'None'}")
@@ -826,6 +867,7 @@ def import_from_linkedin():
             'contact_id': contact_id,
             'draft_created': draft_result is not None,
             'email_found': has_email,
+            'email_pending': email_pending is not None,
             'message': message,
             'credits_remaining': new_credits
         }
@@ -845,3 +887,96 @@ def import_from_linkedin():
         print(f"{'='*80}\n")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+
+
+
+# ---------------------------------------------------------------------------
+# Email status (2026-09-07): the second half of email_mode=fast.
+#
+# import-linkedin returns at once when only FullEnrich's waterfall is left,
+# with the job ticket stored on the contact as emailPending. The panel polls
+# this route; when the job lands, the address is written to the contact and
+# (verified tiers only) to the shared shelf, and a miss refunds the charge.
+# ---------------------------------------------------------------------------
+
+
+@linkedin_import_bp.route('/contacts/<contact_id>/email-status', methods=['GET'])
+@require_firebase_auth
+def linkedin_import_email_status(contact_id):
+    """GET /api/contacts/<contact_id>/email-status
+
+    Response 200: {"status": "found"|"miss"|"pending", "email": str|null,
+                   "source": str|null, "refunded": bool}
+    Response 404: {"error": "contact_not_found"}
+    """
+    uid = request.firebase_user['uid']
+    contact_id = (contact_id or '').strip()
+    if not contact_id:
+        return jsonify({'error': 'contact_id required'}), 400
+    db = get_db()
+    if db is None:
+        return jsonify({'error': 'Database not initialized'}), 500
+
+    ref = db.collection('users').document(uid).collection('contacts').document(contact_id)
+    try:
+        snap = ref.get()
+    except Exception:
+        snap = None
+    if snap is None or not getattr(snap, 'exists', False):
+        return jsonify({'error': 'contact_not_found'}), 404
+    doc = snap.to_dict() or {}
+
+    email = (doc.get('email') or '').strip()
+    if email and email.lower() != 'not available':
+        return jsonify({'status': 'found', 'email': email,
+                        'source': doc.get('emailSource'), 'refunded': False}), 200
+
+    pending = doc.get('emailPending') or {}
+    if not pending or pending.get('resolved'):
+        return jsonify({'status': 'miss', 'email': None, 'source': None,
+                        'refunded': bool(pending.get('refunded'))}), 200
+
+    from app.services import email_fast
+    state, hit = email_fast.poll_pending(pending, db)
+    if state == 'pending':
+        return jsonify({'status': 'pending', 'email': None, 'source': None, 'refunded': False}), 200
+
+    from google.cloud import firestore as _fs
+    if state == 'found' and hit:
+        try:
+            ref.update({
+                'email': hit['email'],
+                'emailSource': hit['source'],
+                'emailVerified': True,
+                'emailConfidenceScore': 95,
+                'emailPending': {**pending, 'resolved': 'found', 'resolvedAt': email_fast._now_iso()},
+                'updatedAt': _fs.SERVER_TIMESTAMP,
+            })
+        except Exception as e:
+            print(f"[EmailStatus] contact update failed for {contact_id}: {e}")
+        try:
+            email_fast.write_email_to_shelf(doc.get('linkedinUrl') or '', hit['email'], hit['source'], db)
+        except Exception:
+            pass
+        return jsonify({'status': 'found', 'email': hit['email'],
+                        'source': hit['source'], 'refunded': False}), 200
+
+    # A miss: the charge was for the address, so it goes back.
+    refunded = False
+    charged = int(pending.get('charged') or 0)
+    if charged > 0 and not pending.get('refunded'):
+        try:
+            from app.services.auth import refund_credits_atomic
+            ok, _remaining = refund_credits_atomic(uid, charged, 'email_pending_refund')
+            refunded = bool(ok)
+        except Exception as e:
+            print(f"[EmailStatus] refund failed for {contact_id}: {e}")
+    try:
+        ref.update({
+            'emailPending': {**pending, 'resolved': 'miss', 'refunded': refunded,
+                             'resolvedAt': email_fast._now_iso()},
+            'updatedAt': _fs.SERVER_TIMESTAMP,
+        })
+    except Exception as e:
+        print(f"[EmailStatus] contact update failed for {contact_id}: {e}")
+    return jsonify({'status': 'miss', 'email': None, 'source': None, 'refunded': refunded}), 200
