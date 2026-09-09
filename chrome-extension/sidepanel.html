@@ -420,6 +420,11 @@
             </svg>
             <span class="profile-card__text" id="job-url-text">Loading…</span>
           </div>
+          <!-- What the page says the job is, read from the page or the tab title. -->
+          <div id="job-heading" class="job-heading hidden">
+            <span id="job-heading-title" class="job-heading__title"></span>
+            <span id="job-heading-company" class="job-heading__company"></span>
+          </div>
         </div>
 
         <div class="job-status" id="job-status">
@@ -461,9 +466,9 @@
           </button>
         </div>
 
-        <div class="loading-card hidden" id="job-loading">
-          <div class="pulse-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-          <p id="job-loading-text">Processing…</p>
+        <div class="loading-card similar-loading hidden" id="job-loading">
+          <div class="progress" aria-hidden="true"><span class="progress__bar"></span></div>
+          <p id="job-loading-text">Working on it</p>
         </div>
 
         <div class="result-card result-card--success hidden" id="job-results">
@@ -479,30 +484,11 @@
             <span class="badge badge--success">Success</span>
           </div>
           <div class="result-card__sub" id="job-result-details"></div>
-          <div class="result-card__actions">
-            <a href="https://www.offerloop.ai/hiring-manager-tracker" target="_blank" class="result-action result-action--primary">
-              <svg class="result-action__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 7h-3V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v2H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"></path>
-                <line x1="2" y1="13" x2="22" y2="13"></line>
-              </svg>
-              <span class="result-action__label">Hiring Manager Tracker</span>
-              <svg class="result-action__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"></line>
-                <polyline points="7 7 17 7 17 17"></polyline>
-              </svg>
-            </a>
-            <a href="https://mail.google.com/mail/u/0/#drafts" target="_blank" class="result-action result-action--ghost">
-              <svg class="result-action__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                <polyline points="22,6 12,13 2,6"></polyline>
-              </svg>
-              <span class="result-action__label">Open Email Drafts</span>
-              <svg class="result-action__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"></line>
-                <polyline points="7 7 17 7 17 17"></polyline>
-              </svg>
-            </a>
-          </div>
+          <!-- Recruiters as rows, right here: email pill and Open email when a
+               draft exists, Write email when only the address does, Find email
+               when we have the person but not the address. -->
+          <div id="job-recruiter-rows" class="similar-results" role="list"></div>
+          <p class="tracked-note">Everything here is also tracked in <a href="https://www.offerloop.ai/hiring-manager-tracker" target="_blank" rel="noopener">Offerloop</a>.</p>
         </div>
 
         <div class="result-card result-card--success hidden" id="cover-letter-results">
@@ -518,6 +504,8 @@
             <span class="badge badge--success">Done</span>
           </div>
           <div class="result-card__sub" id="cover-letter-details"></div>
+          <!-- A readable preview in place; the PDF is one tap away. -->
+          <div id="cover-letter-preview" class="cover-preview hidden"></div>
           <div class="result-card__actions">
             <a href="#" id="cover-letter-download-link" class="result-action result-action--primary">
               <svg class="result-action__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -535,7 +523,7 @@
                 <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                 <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
               </svg>
-              <span class="result-action__label">Cover Letter Library</span>
+              <span class="result-action__label">Saved in Offerloop</span>
               <svg class="result-action__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="9 18 15 12 9 6"></polyline>
               </svg>

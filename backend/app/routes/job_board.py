@@ -4594,6 +4594,11 @@ def extract_relevant_resume_data_for_cover_letter(resume: Dict[str, Any], max_le
     # Always include name
     if resume.get("name"):
         relevant["name"] = str(resume["name"])
+    # Raw resume text (2026-09-08): present when the user has no structured
+    # resumeParsed. Carried into the prompt so the letter still speaks from
+    # the real resume instead of an empty experience list.
+    if resume.get("raw_text") and not (resume.get("experience") or resume.get("education")):
+        relevant["raw_text"] = str(resume["raw_text"])[:6000]
     
     # Extract top education entries (max 2)
     if resume.get("education"):
@@ -9475,6 +9480,29 @@ def generate_cover_letter():
         
         # Get user's resume - use cached sanitized version if available
         raw_resume = user_data.get("resumeParsed", {})
+        if not raw_resume:
+            # Fallback (2026-09-08): users who onboarded through the app have
+            # resumeText (or a resumeUrl) but never the structured
+            # resumeParsed, and this route sent them to "upload your resume"
+            # although the email drafts already used that same resume. Hand
+            # the generator the raw text; it works from that when the
+            # structured fields are missing.
+            _text = (user_data.get("resumeText") or "").strip()
+            if not _text and user_data.get("resumeUrl"):
+                try:
+                    from app.services.gmail_client import download_resume_from_url as _dl
+                    from app.services.resume_parser import extract_text_from_pdf_bytes as _ex
+                    _bytes, _fname = _dl(user_data.get("resumeUrl"))
+                    if _bytes:
+                        _text = (_ex(_bytes) or "").strip()
+                except Exception as _e:
+                    logger.warning(f"[JobBoard] resume fallback download failed: {_e}")
+            if _text:
+                raw_resume = {
+                    "name": user_data.get("displayName") or user_data.get("name") or "",
+                    "raw_text": _text[:8000],
+                }
+                logger.info(f"[JobBoard] Cover letter using raw resume text ({len(_text)} chars), no resumeParsed on file")
         if not raw_resume:
             return jsonify({
                 "error": "No resume found. Please upload your resume in Account Settings first."

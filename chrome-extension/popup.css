@@ -2388,3 +2388,58 @@ body {
 .tray-pill__more a:hover {
   text-decoration: underline;
 }
+
+/* Job tab (2026-09-08): heading under the URL, cover letter preview, and
+   the one footnote that says where things are tracked. */
+.job-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.job-heading__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.job-heading__company {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.cover-preview {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--indigo-foam);
+  border: 1px solid var(--indigo-100);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.tracked-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.tracked-note a {
+  color: var(--indigo-600);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tracked-note a:hover {
+  text-decoration: underline;
+}
+
+#job-results .similar-results {
+  margin-top: 8px;
+}

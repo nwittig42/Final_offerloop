@@ -507,6 +507,7 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
       reason: data.reason || '',
       chips: Array.isArray(data.chips) ? data.chips : [],
       can_dig: data.can_dig === true,
+      alumni_count: (typeof data.alumni_count === 'number') ? data.alumni_count : null,
     };
   } catch (error) {
     console.error('[Offerloop Background] company deck API error:', error);

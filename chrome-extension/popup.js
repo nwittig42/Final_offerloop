@@ -128,16 +128,21 @@ const CREDITS_CACHE_TTL = 120000; // 2 minutes
 // Initialize Job Tab when switched to
 async function initJobTab() {
   console.log('[Offerloop Popup] Initializing Job tab...');
-  
-  // Reset state
-  hideAllJobResults();
-  hideJobError();
-  hideManualForm();
-  hideJobLoading();
-  
+
   // Get current tab URL
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // Results belong to the posting. Same posting: leave them on screen.
+  const sameJob = !!currentJobUrl && tab.url === currentJobUrl;
+  if (!sameJob) {
+    hideAllJobResults();
+    hideJobError();
+    hideManualForm();
+    hideJobLoading();
+    currentJob = null;
+  }
   currentJobUrl = tab.url;
+  // What the job is, from the page or the tab title, without blocking.
+  readJobHeading(tab);
   
   // Update URL display
   const urlTextEl = document.getElementById('job-url-text');
@@ -236,11 +241,14 @@ function getManualInputData() {
   };
 }
 
-function showJobLoading(message) {
+function showJobLoading(message, stages) {
   const loading = document.getElementById('job-loading');
   const text = document.getElementById('job-loading-text');
-  if (text) text.textContent = message || 'Processing...';
   if (loading) loading.classList.remove('hidden');
+  if (text) {
+    if (Array.isArray(stages) && stages.length) startLoadingStages(text, stages, 4000);
+    else text.textContent = message || 'Working on it';
+  }
 }
 
 function hideJobLoading() {
@@ -275,7 +283,7 @@ function hideJobError() {
   if (errorDiv) errorDiv.classList.add('hidden');
 }
 
-function showJobResults(result) {
+function showJobResults_legacy(result) {
   const resultsDiv = document.getElementById('job-results');
   const detailsDiv = document.getElementById('job-result-details');
   const linksDiv = document.querySelector('#job-results .result-links');
@@ -331,7 +339,7 @@ function truncateUrl(url) {
 // FIND & EMAIL RECRUITERS (URL-FIRST)
 // ============================================
 
-async function handleFindRecruiters() {
+async function handleFindRecruiters_legacy() {
   if (_actionInProgress) return;
   _actionInProgress = true;
   const btn = document.getElementById('find-recruiters-btn');
@@ -441,7 +449,7 @@ async function handleFindRecruiters() {
 // GENERATE COVER LETTER (URL-FIRST + DOWNLOAD)
 // ============================================
 
-async function handleGenerateCoverLetter() {
+async function handleGenerateCoverLetter_legacy() {
   const btn = document.getElementById('cover-letter-btn');
 
   // Get auth token
@@ -560,6 +568,21 @@ async function handleGenerateCoverLetter() {
   }
 }
 
+// The letter's text out of whatever shape the server sent (string, or an
+// object with the body under one of a few keys). Same rules the PDF uses.
+function _coverLetterText(cl) {
+  if (!cl) return '';
+  if (typeof cl === 'string') return cl.trim();
+  if (typeof cl === 'object') {
+    const direct = cl.content || cl.text || cl.letter || cl.body || cl.coverLetter || cl.cover_letter || cl.message;
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+    for (const key of Object.keys(cl)) {
+      if (typeof cl[key] === 'string' && cl[key].length > 100) return cl[key].trim();
+    }
+  }
+  return '';
+}
+
 function showCoverLetterResults(data, company, jobTitle) {
   const resultsDiv = document.getElementById('cover-letter-results');
   const detailsDiv = document.getElementById('cover-letter-details');
@@ -580,6 +603,13 @@ function showCoverLetterResults(data, company, jobTitle) {
   
   if (detailsDiv) {
     detailsDiv.textContent = `Cover letter for ${title || 'Position'} at ${companyName || 'Company'}`;
+  }
+  // The letter itself, readable in place (2026-09-08). The PDF stays one tap away.
+  const preview = document.getElementById('cover-letter-preview');
+  if (preview) {
+    const text = _coverLetterText(data.coverLetter);
+    preview.textContent = text;
+    preview.classList.toggle('hidden', !text);
   }
   
   // Store cover letter data for re-download
@@ -742,6 +772,280 @@ function triggerCoverLetterDownload(pdfUrl, company, jobTitle) {
 // ============================================
 // JOB TAB EVENT LISTENERS
 // ============================================
+
+// ============================================
+// JOB TAB, 2026-09-08 rebuild: everything happens in the panel.
+// The page tells us what the job is (content script, else the tab title),
+// the server re-reads the posting from its URL, recruiters render as rows
+// with the same email and draft actions as everywhere else, and the cover
+// letter shows in place with a Download button. One footnote says it is
+// all tracked in Offerloop; nothing bounces the student to the website.
+// ============================================
+
+let currentJob = null; // { title, company, description, source }
+
+function _tabTitleJob(tab) {
+  // LinkedIn: "(25) Compensation Business Partner | Snap Inc. | LinkedIn"
+  const t = (tab && tab.title || '').replace(/^\(\d+\)\s*/, '').trim();
+  const parts = t.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length >= 3 && /linkedin/i.test(parts[parts.length - 1])) {
+    return { title: parts[0], company: parts[1] };
+  }
+  // Greenhouse / Lever / Ashby: "Job Title - Company" or "Company - Job Title"
+  const dash = t.split(/\s+[-–]\s+/).map((s) => s.trim()).filter(Boolean);
+  if (dash.length === 2) return { title: dash[0], company: dash[1] };
+  return { title: '', company: '' };
+}
+
+function _renderJobHeading() {
+  const wrap = document.getElementById('job-heading');
+  const t = document.getElementById('job-heading-title');
+  const c = document.getElementById('job-heading-company');
+  if (!wrap || !t || !c) return;
+  const has = currentJob && (currentJob.title || currentJob.company);
+  wrap.classList.toggle('hidden', !has);
+  if (!has) return;
+  t.textContent = currentJob.title || 'This posting';
+  c.textContent = currentJob.company ? `at ${currentJob.company}` : '';
+  if (currentJob.title) currentState.lastJobTitle = currentJob.title;
+}
+
+async function readJobHeading(tab) {
+  const fromTitle = _tabTitleJob(tab);
+  currentJob = { ...(currentJob || {}), ...fromTitle, source: 'title' };
+  _renderJobHeading();
+  // The page itself, when the content script is there. Never blocks.
+  try {
+    const res = await Promise.race([
+      chrome.tabs.sendMessage(tab.id, { action: 'scrapeJob' }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (res && (res.jobTitle || res.title || res.company)) {
+      currentJob = {
+        title: res.jobTitle || res.title || currentJob.title || '',
+        company: res.company || currentJob.company || '',
+        description: res.description || res.jobDescription || '',
+        source: 'page',
+      };
+      _renderJobHeading();
+    }
+  } catch (e) { /* content script not on this page yet; the title carries it */ }
+}
+
+function _jobRequestBody() {
+  // Manual form wins when the page is not a posting we recognise.
+  if (manualInputRequired) {
+    const data = getManualInputData();
+    return {
+      company: data.company || undefined,
+      jobTitle: data.jobTitle || undefined,
+      jobDescription: data.jobDescription || undefined,
+      jobUrl: data.jobUrl || undefined,
+    };
+  }
+  const j = currentJob || {};
+  // The URL is what the server parses (it reads LinkedIn postings fine);
+  // the page's own words ride along so nothing is lost if parsing is thin.
+  return {
+    jobUrl: currentJobUrl,
+    jobTitle: j.title || undefined,
+    company: j.company || undefined,
+    jobDescription: (j.description && j.description.length > 100) ? j.description : undefined,
+  };
+}
+
+async function handleFindRecruiters() {
+  if (_actionInProgress) return;
+  _actionInProgress = true;
+  const btn = document.getElementById('find-recruiters-btn');
+  const authData = await chrome.storage.local.get(['authToken']);
+  if (!DEV_BYPASS_AUTH && !authData.authToken) {
+    _actionInProgress = false;
+    showJobErrorWithSignin('Please sign in to use this feature.');
+    return;
+  }
+  const requestBody = _jobRequestBody();
+  if (manualInputRequired && !requestBody.company) {
+    _actionInProgress = false;
+    showJobError('Company name is required');
+    return;
+  }
+  btn?.classList.add('loading');
+  if (btn) btn.disabled = true;
+  hideJobError();
+  hideAllJobResults();
+  showJobLoading('', [
+    'Reading the posting',
+    'Finding who recruits for this team',
+    'Checking who is already on file',
+    'Looking up their emails',
+    'Writing your drafts',
+    'Almost there',
+  ]);
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/find-recruiter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authData.authToken}` },
+      body: JSON.stringify(requestBody),
+    }, 120000);
+    const result = await response.json();
+    if (response.ok && (result.success || result.recruiters)) {
+      const recruiters = result.recruiters || [];
+      if (recruiters.length) {
+        // Tracker save is a side effect; it never blocks the rows.
+        fetchWithTimeout(`${API_BASE_URL}/api/job-board/save-recruiters`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authData.authToken}` },
+          body: JSON.stringify({
+            recruiters,
+            draftsCreated: result.draftsCreated || [],
+            companyCleaned: result.companyCleaned || '',
+            associatedJobUrl: currentJobUrl || '',
+            associatedJobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
+            jobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
+          }),
+        }, 30000).catch(() => {});
+      }
+      renderRecruiterResults(result);
+      if (result.creditsRemaining !== undefined) {
+        updateCredits(result.creditsRemaining);
+        _creditsCacheTime = Date.now();
+      }
+    } else if (result.needsManualInput || (result.error || '').match(/extract|company/i)) {
+      showJobError('Could not read this posting. Add the company below.');
+      showManualForm(result.partialData);
+    } else {
+      showJobError(result.error || 'Could not find recruiters. Please try again.');
+    }
+  } catch (error) {
+    console.error('[Offerloop Popup] Find recruiters error:', error);
+    showJobError('Something went wrong. Please try again.');
+  } finally {
+    hideJobLoading();
+    btn?.classList.remove('loading');
+    if (btn) btn.disabled = false;
+    _actionInProgress = false;
+  }
+}
+
+function renderRecruiterResults(result) {
+  const card = document.getElementById('job-results');
+  const details = document.getElementById('job-result-details');
+  const list = document.getElementById('job-recruiter-rows');
+  if (!card || !list) return;
+  const recruiters = result.recruiters || [];
+  const company = result.companyCleaned || (currentJob && currentJob.company) || '';
+  const drafts = new Map();
+  (result.draftsCreated || []).forEach((d) => {
+    const key = (d.recruiter_email || d.email || '').toLowerCase();
+    if (key) drafts.set(key, d.draft_url || d.draftUrl || '');
+  });
+  if (details) {
+    const n = recruiters.length;
+    details.textContent = n
+      ? `${n} ${n === 1 ? 'person' : 'people'} who recruit${n === 1 ? 's' : ''} for this team${company ? ` at ${company}` : ''}`
+      : 'Nobody on file for this team yet.';
+  }
+  list.innerHTML = '';
+  recruiters.forEach((r) => {
+    const email = (r.Email || r.email || '').trim();
+    const row = {
+      firstName: r.FirstName || r.firstName || '',
+      lastName: r.LastName || r.lastName || '',
+      title: r.Title || r.title || 'Recruiter',
+      company: r.Company || r.company || company,
+      linkedinUrl: r.LinkedIn || r.linkedin || r.linkedinUrl || '',
+      school: r.College || r.college || '',
+      email: email && email.toLowerCase() !== 'not available' ? email : '',
+      caption: '',
+      category: '',
+    };
+    const el = buildSimilarRowEl(row);
+    const draftUrl = row.email ? drafts.get(row.email.toLowerCase()) : '';
+    if (draftUrl) {
+      // A draft already exists for this person: swap the Draft button for Open email.
+      const btn = el.querySelector('.similar-row__action--draft');
+      if (btn) {
+        btn.textContent = 'Open email';
+        const fresh = btn.cloneNode(true);
+        btn.replaceWith(fresh);
+        fresh.addEventListener('click', () => chrome.tabs.create({ url: draftUrl }));
+      }
+    }
+    list.appendChild(el);
+  });
+  card.classList.remove('hidden');
+}
+
+async function handleGenerateCoverLetter() {
+  if (_actionInProgress) return;
+  _actionInProgress = true;
+  const btn = document.getElementById('cover-letter-btn');
+  const authData = await chrome.storage.local.get(['authToken']);
+  if (!DEV_BYPASS_AUTH && !authData.authToken) {
+    _actionInProgress = false;
+    showJobErrorWithSignin('Please sign in to use this feature.');
+    return;
+  }
+  const requestBody = _jobRequestBody();
+  if (manualInputRequired && !requestBody.jobDescription) {
+    _actionInProgress = false;
+    showJobError('Paste the job description below so the letter has something to say.');
+    return;
+  }
+  const company = requestBody.company || '';
+  const jobTitle = requestBody.jobTitle || '';
+  btn?.classList.add('loading');
+  if (btn) btn.disabled = true;
+  hideJobError();
+  hideAllJobResults();
+  showJobLoading('', [
+    'Reading the posting',
+    'Matching it against your resume',
+    'Writing the letter',
+    'Polishing the opening',
+    'Almost there',
+  ]);
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/generate-cover-letter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authData.authToken}` },
+      body: JSON.stringify(requestBody),
+    }, 120000);
+    const result = await response.json();
+    if (response.ok && (result.coverLetter || result.pdfUrl)) {
+      showCoverLetterResults(result, company, jobTitle);
+      if (result.creditsRemaining !== undefined) {
+        updateCredits(result.creditsRemaining);
+        _creditsCacheTime = Date.now();
+      }
+      // Into the tray, so it is reachable after you move on.
+      const t = jobTitle || (currentJob && currentJob.title) || 'this role';
+      const c = company || (currentJob && currentJob.company) || '';
+      trayUpsert({
+        id: `cover:${currentJobUrl || t}`, kind: 'prep', status: 'found',
+        name: `Cover letter · ${t}`, company: c,
+        pdfUrl: result.pdfUrl || '', linkedInUrl: currentJobUrl || '',
+        coverLetter: result.coverLetter || null,
+      });
+    } else if ((result.error || '').match(/description|required/i)) {
+      showJobError('We could not read the posting. Paste the description below.');
+      showManualForm({ company, jobTitle });
+    } else if ((result.error || '').match(/resume/i)) {
+      showJobError('Add a resume to your Offerloop profile first, then try again.');
+    } else {
+      showJobError(result.error || 'Could not write the letter. Please try again.');
+    }
+  } catch (error) {
+    console.error('[Offerloop Popup] Cover letter error:', error);
+    showJobError('Something went wrong. Please try again.');
+  } finally {
+    hideJobLoading();
+    btn?.classList.remove('loading');
+    if (btn) btn.disabled = false;
+    _actionInProgress = false;
+  }
+}
 
 function initJobTabListeners() {
   // Find & Email Recruiters button
@@ -2504,6 +2808,14 @@ function renderTray() {
       dl.rel = 'noopener';
       dl.textContent = 'Download PDF';
       actions.appendChild(dl);
+    } else if (it.kind === 'prep' && it.coverLetter) {
+      // A cover letter the server returned as text: build the PDF on tap.
+      const dl = document.createElement('button');
+      dl.type = 'button';
+      dl.className = 'tray-pill__btn';
+      dl.textContent = 'Download PDF';
+      dl.addEventListener('click', () => downloadCoverLetterAsPDF(it.coverLetter, it.company, it.name));
+      actions.appendChild(dl);
     }
     if (it.kind === 'email' && it.status === 'found' && it.person) {
       // Two states, said plainly: "Write email" runs the draft in the
@@ -2793,6 +3105,10 @@ async function loadCompanyPeople(company, prefix = 'company', opts = {}) {
     state.rows = (response.contacts || []).map((r) => ({ ...r, deckId: response.deck_id || '' }));
     if (prefix === 'company' && Array.isArray(response.chips) && response.chips.length) {
       companyFilter.chips = response.chips;
+    }
+    if (prefix === 'company') {
+      // LinkedIn's "N from your school work here", as Coresignal counts it.
+      companyFilter.alumniCount = (typeof response.alumni_count === 'number') ? response.alumni_count : null;
       renderCompanyChips(company);
     }
     if (state.rows.length === 0) {
@@ -2841,8 +3157,16 @@ function renderCompanyEmpty(prefix, company, response, dig) {
   let copy = '';
   let showDig = false;
   if (reason === 'shelf_empty' && response.can_dig && prefix === 'company') {
-    copy = `No one on file yet at ${name}.`;
+    const alumniFocus = companyFilter.focus === 'alumni';
+    const n = companyFilter.alumniCount;
+    copy = alumniFocus
+      ? (typeof n === 'number' && n > 0
+          ? `None of the ${n >= 50 ? '50+' : n} alumni at ${name} are on file yet.`
+          : `No alumni on file yet at ${name}.`)
+      : `No one on file yet at ${name}.`;
     showDig = true;
+    const btnLabel = btn ? btn.querySelector('span') : null;
+    if (btnLabel) btnLabel.textContent = alumniFocus ? 'Look for alumni here' : 'Look for people here';
   } else if (reason === 'dig_cap') {
     copy = `You have pulled new people enough for today. ${name} will be here tomorrow, or open any profile there and we start from that person.`;
   } else if (filtered) {
@@ -2960,11 +3284,14 @@ function renderCompanyChips(company) {
   const chips = [];
   const active = companyFilter.role || companyFilter.focus;
   if (active) chips.push({ label: 'Everyone', role: '', focus: '' });
-  (companyFilter.chips || DEFAULT_CHIPS).forEach((c) => chips.push({
-    label: c.label || '',
-    role: (c.role || '').trim(),
-    focus: (c.focus || '').trim(),
-  }));
+  (companyFilter.chips || DEFAULT_CHIPS).forEach((c) => {
+    let label = c.label || '';
+    // The alumni chip carries the live count when we have one: "USC alumni · 24".
+    if ((c.focus || '') === 'alumni' && typeof companyFilter.alumniCount === 'number') {
+      label = `${label} · ${companyFilter.alumniCount >= 50 ? '50+' : companyFilter.alumniCount}`;
+    }
+    chips.push({ label, role: (c.role || '').trim(), focus: (c.focus || '').trim() });
+  });
   const lastJob = (currentState.lastJobTitle || '').trim();
   if (lastJob && !chips.some((c) => c.role.toLowerCase() === lastJob.toLowerCase())) {
     chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob, focus: '' });
