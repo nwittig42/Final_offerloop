@@ -841,16 +841,54 @@ async function readJobHeading(tab) {
       chrome.tabs.sendMessage(tab.id, { action: 'scrapeJob' }),
       new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
-    if (res && (res.jobTitle || res.title || res.company)) {
+    const adopt = (r) => {
+      if (!r || !(r.jobTitle || r.title || r.company)) return;
       currentJob = {
-        title: res.jobTitle || res.title || currentJob.title || '',
-        company: res.company || currentJob.company || '',
-        description: res.description || res.jobDescription || '',
+        title: r.jobTitle || r.title || currentJob.title || '',
+        company: r.company || currentJob.company || '',
+        description: r.description || r.jobDescription || '',
         source: 'page',
       };
       _renderJobHeading();
-    }
+    };
+    adopt(res);
+    // LinkedIn's job list swaps the open posting in a beat after the URL
+    // changes; a second read catches the one the student actually clicked.
+    const url = currentJobUrl;
+    setTimeout(async () => {
+      if (currentJobUrl !== url) return;
+      try { adopt(await chrome.tabs.sendMessage(tab.id, { action: 'scrapeJob' })); } catch (e) { /* same as above */ }
+    }, 1800);
   } catch (e) { /* content script not on this page yet; the title carries it */ }
+}
+
+// LinkedIn's search page carries the open posting as ?currentJobId=. The
+// server fetches the URL it is given and reads the posting's own JSON-LD;
+// handed the search page it gets the search page. Send the posting.
+function _canonicalJobUrl(url) {
+  try {
+    const u = new URL(url || '');
+    if (/linkedin\.com$/i.test(u.hostname) && /\/jobs\//.test(u.pathname)) {
+      const id = u.searchParams.get('currentJobId');
+      if (id && /^\d+$/.test(id)) return `https://www.linkedin.com/jobs/view/${id}/`;
+      const m = u.pathname.match(/\/jobs\/view\/(\d+)/);
+      if (m) return `https://www.linkedin.com/jobs/view/${m[1]}/`;
+    }
+  } catch (e) { /* not a URL */ }
+  return url;
+}
+
+// After a server call, the heading shows the posting the server actually
+// read (companyCleaned, jobTypeDetected / jobTitle), so the card above and
+// the people below never disagree.
+function _adoptServerJob(result) {
+  if (!result) return;
+  const company = result.companyCleaned || result.company || '';
+  const title = result.jobTitle || result.jobTitleDetected || '';
+  if (!company && !title) return;
+  currentJob = { ...(currentJob || {}), company: company || (currentJob && currentJob.company) || '',
+                 title: title || (currentJob && currentJob.title) || '', source: 'server' };
+  _renderJobHeading();
 }
 
 function _jobRequestBody() {
@@ -867,10 +905,15 @@ function _jobRequestBody() {
   const j = currentJob || {};
   // The URL is what the server parses (it reads LinkedIn postings fine);
   // the page's own words ride along so nothing is lost if parsing is thin.
+  // Title and company ride along only when the page itself said them. The
+  // tab title lags a click in LinkedIn's job list, and a stale company
+  // name from it beat the server's own parse of the posting (a Favored
+  // heading over Pink Sparrow recruiters, 2026-09-08).
+  const fromPage = j.source === 'page';
   return {
-    jobUrl: currentJobUrl,
-    jobTitle: j.title || undefined,
-    company: j.company || undefined,
+    jobUrl: _canonicalJobUrl(currentJobUrl),
+    jobTitle: (fromPage && j.title) || undefined,
+    company: (fromPage && j.company) || undefined,
     jobDescription: (j.description && j.description.length > 100) ? j.description : undefined,
   };
 }
@@ -909,6 +952,7 @@ async function handleFindRecruiters() {
     const result = response.data || {};
     if (response.ok && (result.success || result.recruiters)) {
       const recruiters = result.recruiters || [];
+      _adoptServerJob(result);
       if (recruiters.length) {
         // Tracker save is a side effect; it never blocks the rows.
         apiCall('/api/job-board/save-recruiters', 'POST', {
@@ -992,8 +1036,9 @@ function renderRecruiterResults(result) {
     // paid to find were gone from view. In the tray they stay reachable
     // with the same Write email / Open email actions.
     const displayName = `${row.firstName} ${row.lastName}`.trim() || row.title;
+    row.trayId = `recruiter:${(row.email || row.linkedinUrl || displayName).toLowerCase()}`;
     trayUpsert({
-      id: `recruiter:${(row.email || row.linkedinUrl || displayName).toLowerCase()}`,
+      id: row.trayId,
       kind: 'email',
       status: row.email ? 'found' : 'miss',
       statusText: row.email ? '' : 'No email on file',
@@ -1043,7 +1088,8 @@ async function handleGenerateCoverLetter() {
     const response = await apiCall('/api/job-board/generate-cover-letter', 'POST', requestBody, 120000);
     const result = response.data || {};
     if (response.ok && (result.coverLetter || result.pdfUrl)) {
-      showCoverLetterResults(result, company, jobTitle);
+      _adoptServerJob(result);
+      showCoverLetterResults(result, result.company || company, result.jobTitle || jobTitle);
       if (result.creditsRemaining !== undefined) {
         updateCredits(result.creditsRemaining);
         _creditsCacheTime = Date.now();
@@ -2751,6 +2797,7 @@ function startEmailPolling(shown) {
       refreshCredits().catch(() => {});
     }
     if (stillHere) showResults(shown);
+    if (typeof shown.onDone === 'function') { try { shown.onDone(res); } catch (e) {} }
   };
   job.timer = setInterval(tick, EMAIL_POLL_EVERY_MS);
   emailPolls.set(contactId, job);
@@ -2979,13 +3026,22 @@ async function findEmailForRow(row, btn, rowEl) {
       _creditsCacheTime = 0;
       refreshCredits().catch(() => {});
     } else {
+      // Fast ladder (2026-09-08): shelf or Hunter answer in seconds. If only
+      // FullEnrich's slow waterfall is left, the server starts it and the
+      // tray pill polls for the address while you keep going. The old call
+      // waited on the whole waterfall and outlived the panel's 90-second
+      // limit, so the button just snapped back to "Find email" with no word.
+      const trayId = row.trayId || '';
+      if (trayId) trayUpsert({ id: trayId, status: 'pending' });
       const response = await chrome.runtime.sendMessage({
         action: 'importLinkedIn',
         linkedInUrl: row.linkedinUrl,
         authToken: currentState.authToken,
         createDraft: false,
+        emailMode: 'fast',
       });
       if (!response || response.error) {
+        if (trayId) trayUpsert({ id: trayId, status: 'miss', statusText: 'No email on file' });
         throw new Error((response && response.error) || 'Find-email failed');
       }
       if (response.credits_remaining !== undefined) {
@@ -2995,6 +3051,47 @@ async function findEmailForRow(row, btn, rowEl) {
       }
       const found = response.contact || response;
       email = (found.email || '').trim();
+      const contactId = response.contact_id || '';
+      if (!email && response.email_pending === true && contactId) {
+        // The pill for this person becomes the pending pill (one pill, not two).
+        if (trayId) trayRemove(trayId);
+        const shown = {
+          full_name: found.full_name || `${row.firstName || ''} ${row.lastName || ''}`.trim(),
+          firstName: found.firstName || row.firstName || '',
+          lastName: found.lastName || row.lastName || '',
+          company: found.company || row.company || '',
+          jobTitle: found.jobTitle || found.title || row.title || '',
+          linkedinUrl: row.linkedinUrl,
+          profileUrl: row.linkedinUrl,
+          pending: true,
+          contactId,
+          onDone: (res) => {
+            if (res.status === 'found' && res.email) {
+              row.email = res.email;
+              if (rowEl.isConnected) {
+                const actions = document.createElement('div');
+                actions.className = 'similar-row__actions';
+                actions.appendChild(buildEmailPill(res.email));
+                actions.appendChild(buildDraftBtn(row));
+                btn.replaceWith(actions);
+              }
+            } else if (rowEl.isConnected) {
+              rowEl.classList.add('similar-row--no-email');
+              btn.textContent = 'No email';
+              btn.disabled = true;
+            }
+          },
+        };
+        startEmailPolling(shown);
+        btn.textContent = 'Searching…';
+        btn.disabled = true;
+        return;
+      }
+      if (trayId) {
+        trayUpsert(email
+          ? { id: trayId, status: 'found', email, source: found.email_source || '', person: { ...row, email } }
+          : { id: trayId, status: 'miss', statusText: response.refunded ? 'No email. Credits refunded.' : 'No email found.' });
+      }
     }
     if (email) {
       row.email = email;

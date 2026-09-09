@@ -321,13 +321,25 @@ function scrapeLinkedInJobs() {
     ]
   };
 
-  return {
+  const out = {
     jobTitle: findFirst(selectors.jobTitle),
     company: findFirst(selectors.company),
     location: findFirst(selectors.location),
     description: findFirst(selectors.description),
     platform: 'linkedin-jobs'
   };
+  // LinkedIn's 2026 job pages carry hashed class names, so every selector
+  // above can miss. The document title still reads
+  // "Job title | Company | LinkedIn" for the open posting, and unlike the
+  // tab title the panel sees, it is read here at the moment of the click.
+  if (!out.jobTitle || !out.company) {
+    const parts = (document.title || '').replace(/^\(\d+\)\s*/, '').split(/\s*\|\s*/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length >= 3 && /linkedin/i.test(parts[parts.length - 1])) {
+      out.jobTitle = out.jobTitle || parts[0];
+      out.company = out.company || parts[1];
+    }
+  }
+  return out;
 }
 
 // --------------------------------------------
