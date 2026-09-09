@@ -37,6 +37,15 @@
       "collectionGroup": "jobs",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "search_terms", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "posted_at", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "type", "order": "ASCENDING" },
         { "fieldPath": "posted_at", "order": "DESCENDING" }
       ]

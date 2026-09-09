@@ -304,6 +304,29 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower()).strip()
 
 
+def _interleave_by_company(contacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Round-robin the list by company, preserving each company's internal
+    order. One company (or none) returns the list untouched."""
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    keys: List[str] = []
+    for c in contacts:
+        k = _norm(c.get("Company") or "")
+        if k not in buckets:
+            buckets[k] = []
+            keys.append(k)
+        buckets[k].append(c)
+    if len(keys) < 2:
+        return contacts
+    out: List[Dict[str, Any]] = []
+    i = 0
+    while len(out) < len(contacts):
+        bucket = buckets[keys[i % len(keys)]]
+        if bucket:
+            out.append(bucket.pop(0))
+        i += 1
+    return out
+
+
 def _filter_contacts(contacts: List[Dict[str, Any]], parsed: Dict[str, Any], user_id: str) -> List[Dict[str, Any]]:
     """Drop what no student would want to email, and log why."""
     targets = [
@@ -673,6 +696,13 @@ def search_people(
         # Ordering and reasons are a nicety. A scorer that throws must not cost
         # the user the search they already waited for.
         logger.exception("people-deck warmth scoring failed for uid=%s", user_id)
+
+    # Spread the companies (Rylan 2026-09-08: "consultants at Big Four firms"
+    # came back all Deloitte because the provider returns one firm's block
+    # first). Round-robin by company, keeping each company's own order, so a
+    # multi-firm search reads as a mix from the first card. The warm-first
+    # sort below is stable, so the mix survives it within each readiness tier.
+    contacts = _interleave_by_company(contacts)
 
     # Stash the whole haul. The addresses live here and only here until a reveal
     # pays for one.
