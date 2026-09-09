@@ -24,6 +24,7 @@ from app.services.credit_ledger import get_balance_breakdown
 from app.config import (
     TIER_CONFIGS,
     CREDIT_COSTS,
+    COFFEE_CHAT_CREDITS,
     STRIPE_PRICE_CATALOG,
     SLIDER_STOPS,
     ANNUAL_PRICING,
