@@ -2121,3 +2121,325 @@ body {
   width: 13px;
   height: 13px;
 }
+
+/* Find similar row: the eye-catcher. Gold frame, the company logo at
+   left, gold arrow. Scout stays on the avatar. */
+.similar-toggle {
+  padding: 10px 12px;
+  border: 1.5px solid var(--gold);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, #FFFDF6, #FFF8E6);
+  box-shadow: 0 0 0 3px var(--gold-soft);
+  color: var(--ink);
+}
+
+.similar-toggle:hover {
+  box-shadow: 0 0 0 4px var(--gold-soft);
+}
+
+.similar-toggle__logo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #FFFFFF;
+  border: 1px solid var(--gold-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.similar-toggle__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 2px;
+}
+
+.similar-toggle__label {
+  flex: 1;
+  text-align: left;
+}
+
+.similar-toggle__chevron {
+  color: var(--gold);
+}
+
+/* The avatar is Scout again; the earlier logo-ring rule is inert. */
+.result-card__scout-avatar--logo {
+  border: 1.5px solid var(--indigo-200);
+  box-shadow: 0 2px 6px rgba(74, 96, 168, 0.16);
+}
+
+/* In progress tray (2026-09-08): background email searches and finished
+   meeting preps as pills, above the tabs content. */
+.tray {
+  margin: 10px 14px 0;
+  padding: 8px 10px 6px;
+  background: #FFFFFF;
+  border: 1px solid var(--indigo-100);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-rest);
+}
+
+.tray__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.tray__title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.tray__clear {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--indigo-600);
+  cursor: pointer;
+}
+
+.tray__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tray-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--indigo-foam);
+  border: 1px solid var(--indigo-100);
+  animation: rise 220ms var(--ease-out);
+}
+
+.tray-pill__avatar {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--indigo-100), var(--indigo-200));
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+.tray-pill--pending .tray-pill__avatar::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid var(--indigo-200);
+  border-top-color: var(--jade-500);
+  animation: tray-spin 0.9s linear infinite;
+}
+
+@keyframes tray-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tray-pill--found .tray-pill__avatar {
+  background: var(--jade-100);
+  color: var(--jade-700);
+}
+
+.tray-pill--miss .tray-pill__avatar {
+  background: var(--terra-100);
+  color: var(--terra-700);
+}
+
+.tray-pill__who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.tray-pill__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-pill__status {
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-pill__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tray-pill__btn {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--indigo-200);
+  background: #FFFFFF;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--indigo-700);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.tray-pill__btn:hover {
+  background: var(--indigo-foam);
+}
+
+.tray-pill__x {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: none;
+  width: 20px;
+  height: 20px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Company list: tier labels and the count line. */
+.similar-group {
+  margin: 6px 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.similar-count {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* Tray breathing room (Rylan 2026-09-08: it sat jammed against the tabs
+   and the profile card). */
+.tray {
+  margin: 14px 14px 4px;
+  padding: 10px 12px 8px;
+}
+
+.tray + .tab-content {
+  padding-top: 6px;
+}
+
+.tray__items {
+  gap: 8px;
+}
+
+.tray-pill {
+  padding: 8px 10px;
+  flex-wrap: wrap;
+}
+
+.tray-pill__more {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--indigo-100);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.tray-pill__more a {
+  color: var(--indigo-600);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tray-pill__more a:hover {
+  text-decoration: underline;
+}
+
+/* Job tab (2026-09-08): heading under the URL, cover letter preview, and
+   the one footnote that says where things are tracked. */
+.job-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.job-heading__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.job-heading__company {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.cover-preview {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--indigo-foam);
+  border: 1px solid var(--indigo-100);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.tracked-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.tracked-note a {
+  color: var(--indigo-600);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tracked-note a:hover {
+  text-decoration: underline;
+}
+
+#job-results .similar-results {
+  margin-top: 8px;
+}

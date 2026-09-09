@@ -4,15 +4,6 @@ console.log('[Offerloop Popup] Loaded');
 // API Configuration
 const API_BASE_URL = 'https://www.offerloop.ai';
 
-// ⚠️ DEV ONLY — skips the sign-in gate so you can work on the UI/UX
-// without logging in. Set to false before shipping. API calls that need a
-// real Firebase token will still fail; this only unlocks the screens.
-const DEV_BYPASS_AUTH = false;
-
-// ⚠️ DEV ONLY — paste a fresh Firebase ID token here to authenticate without OAuth.
-// Grab it from www.offerloop.ai (Network tab → any /api request → Authorization: Bearer <token>).
-// Expires ~1 hour; replace it when API calls start returning 401. Set to '' to disable.
-const DEV_TOKEN = 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImIyNDg2Mzc0OTVjYjM4N2U0OWViNmRlMThkZjk5N2VlOGU1YWUyOTciLCJ0eXAiOiJKV1QifQ.eyJuYW1lIjoiU2lkIEJhbmRpIiwicGljdHVyZSI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xGWXVmZEt3ZXRDZGxIcnhzbm5jMjcxNllfUUVhb3Z4T1p4R1oxQUI4QWgtaHVEUT1zOTYtYyIsImlzcyI6Imh0dHBzOi8vc2VjdXJldG9rZW4uZ29vZ2xlLmNvbS9vZmZlcmxvb3AtbmF0aXZlIiwiYXVkIjoib2ZmZXJsb29wLW5hdGl2ZSIsImF1dGhfdGltZSI6MTc4NDE1NTkwMSwidXNlcl9pZCI6IlFBSzRIcHZiZ05TV3lPMHhhZDRDYUhrNUZrWDIiLCJzdWIiOiJRQUs0SHB2YmdOU1d5TzB4YWQ0Q2FIazVGa1gyIiwiaWF0IjoxNzg0NzU2NzYyLCJleHAiOjE3ODQ3NjAzNjIsImVtYWlsIjoic2lkQG9mZmVybG9vcC5haSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJmaXJlYmFzZSI6eyJpZGVudGl0aWVzIjp7Imdvb2dsZS5jb20iOlsiMTExMTE4Mzc0NTAyOTU2OTc0MDkxIl0sImVtYWlsIjpbInNpZEBvZmZlcmxvb3AuYWkiXX0sInNpZ25faW5fcHJvdmlkZXIiOiJnb29nbGUuY29tIn19.gjf45o7FvLSMcccik8jzqat8LnRW74MiGl68x4xDQv6NXy3xdYvakP0yrpS991tPgqN233k4KaM1Nh7crZ7yg9tl_ZPypJIlKZTV-S8cy0U80tTGBU1DzHFMhdjh26c8AuEcmMO4NUAdiPrsottebQvHSZbQ3XXtX3-7ENqTraPIDktXShHKSJbtCCl0dcz3SQPRI8h55XIa6l62CQUhVoiRNveiAa8088p0DtXrjJgXNsVo5mNSd_yCeZCVa7pSY2ngI6xNk2cTwjs9i-gyGhWzkq_m29baeyiIFQ-YmLP5WvG7zuV5IrC2bXuSjPRLW4HxabKRbeK50CzlQ7Jvmg';
 
 // Shared job URL patterns — used by detectMode() and isJobUrl()
 const JOB_URL_PATTERNS = [
@@ -50,6 +41,16 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
     if (err.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs}ms`);
     throw err;
   }
+}
+
+// Authenticated calls go through the background, which owns the token and
+// retries once after a refresh on 401. Resolves {ok, status, data}; never
+// throws on HTTP errors, only when the extension itself cannot reach the
+// background.
+async function apiCall(path, method = 'POST', body = undefined, timeoutMs = 90000) {
+  const resp = await chrome.runtime.sendMessage({ action: 'apiRequest', path, method, body, timeoutMs });
+  if (!resp) return { ok: false, status: 0, data: { error: 'No response from extension' } };
+  return resp;
 }
 
 // Tab Detection and Switching
@@ -121,6 +122,16 @@ let currentJobUrl = null;
 let manualInputRequired = false;
 let _actionInProgress = false;
 
+// After the extension is reloaded in chrome://extensions, a side panel that
+// was already open keeps its pixels but loses its extension context: every
+// chrome.* call throws, the first click leaves the in-progress flag stuck,
+// and every click after that silently does nothing. Say so instead.
+function _panelAlive(showFn) {
+  if (chrome.runtime && chrome.runtime.id) return true;
+  try { showFn('Offerloop was updated. Close this panel and open it again.'); } catch (e) {}
+  return false;
+}
+
 // Credits cache — avoid redundant API calls when popup reopens quickly
 let _creditsCacheTime = 0;
 const CREDITS_CACHE_TTL = 120000; // 2 minutes
@@ -128,16 +139,21 @@ const CREDITS_CACHE_TTL = 120000; // 2 minutes
 // Initialize Job Tab when switched to
 async function initJobTab() {
   console.log('[Offerloop Popup] Initializing Job tab...');
-  
-  // Reset state
-  hideAllJobResults();
-  hideJobError();
-  hideManualForm();
-  hideJobLoading();
-  
+
   // Get current tab URL
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // Results belong to the posting. Same posting: leave them on screen.
+  const sameJob = !!currentJobUrl && tab.url === currentJobUrl;
+  if (!sameJob) {
+    hideAllJobResults();
+    hideJobError();
+    hideManualForm();
+    hideJobLoading();
+    currentJob = null;
+  }
   currentJobUrl = tab.url;
+  // What the job is, from the page or the tab title, without blocking.
+  readJobHeading(tab);
   
   // Update URL display
   const urlTextEl = document.getElementById('job-url-text');
@@ -236,11 +252,14 @@ function getManualInputData() {
   };
 }
 
-function showJobLoading(message) {
+function showJobLoading(message, stages) {
   const loading = document.getElementById('job-loading');
   const text = document.getElementById('job-loading-text');
-  if (text) text.textContent = message || 'Processing...';
   if (loading) loading.classList.remove('hidden');
+  if (text) {
+    if (Array.isArray(stages) && stages.length) startLoadingStages(text, stages, 4000);
+    else text.textContent = message || 'Working on it';
+  }
 }
 
 function hideJobLoading() {
@@ -275,7 +294,7 @@ function hideJobError() {
   if (errorDiv) errorDiv.classList.add('hidden');
 }
 
-function showJobResults(result) {
+function showJobResults_legacy(result) {
   const resultsDiv = document.getElementById('job-results');
   const detailsDiv = document.getElementById('job-result-details');
   const linksDiv = document.querySelector('#job-results .result-links');
@@ -331,7 +350,7 @@ function truncateUrl(url) {
 // FIND & EMAIL RECRUITERS (URL-FIRST)
 // ============================================
 
-async function handleFindRecruiters() {
+async function handleFindRecruiters_legacy() {
   if (_actionInProgress) return;
   _actionInProgress = true;
   const btn = document.getElementById('find-recruiters-btn');
@@ -441,7 +460,7 @@ async function handleFindRecruiters() {
 // GENERATE COVER LETTER (URL-FIRST + DOWNLOAD)
 // ============================================
 
-async function handleGenerateCoverLetter() {
+async function handleGenerateCoverLetter_legacy() {
   const btn = document.getElementById('cover-letter-btn');
 
   // Get auth token
@@ -560,6 +579,21 @@ async function handleGenerateCoverLetter() {
   }
 }
 
+// The letter's text out of whatever shape the server sent (string, or an
+// object with the body under one of a few keys). Same rules the PDF uses.
+function _coverLetterText(cl) {
+  if (!cl) return '';
+  if (typeof cl === 'string') return cl.trim();
+  if (typeof cl === 'object') {
+    const direct = cl.content || cl.text || cl.letter || cl.body || cl.coverLetter || cl.cover_letter || cl.message;
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+    for (const key of Object.keys(cl)) {
+      if (typeof cl[key] === 'string' && cl[key].length > 100) return cl[key].trim();
+    }
+  }
+  return '';
+}
+
 function showCoverLetterResults(data, company, jobTitle) {
   const resultsDiv = document.getElementById('cover-letter-results');
   const detailsDiv = document.getElementById('cover-letter-details');
@@ -580,6 +614,13 @@ function showCoverLetterResults(data, company, jobTitle) {
   
   if (detailsDiv) {
     detailsDiv.textContent = `Cover letter for ${title || 'Position'} at ${companyName || 'Company'}`;
+  }
+  // The letter itself, readable in place (2026-09-08). The PDF stays one tap away.
+  const preview = document.getElementById('cover-letter-preview');
+  if (preview) {
+    const text = _coverLetterText(data.coverLetter);
+    preview.textContent = text;
+    preview.classList.toggle('hidden', !text);
   }
   
   // Store cover letter data for re-download
@@ -664,14 +705,21 @@ async function downloadCoverLetterAsPDF(coverLetterData, company, jobTitle) {
   
   try {
     // Call backend to generate PDF
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/cover-letter-pdf`, {
+    // This one stays a direct fetch because the reply is a PDF blob, which
+    // cannot travel over the message bridge. A 401 refreshes and retries once.
+    const pdfFetch = (token) => fetchWithTimeout(`${API_BASE_URL}/api/job-board/cover-letter-pdf`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authData.authToken}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({ content: text, company: company })
-    });
+    }, 60000);
+    let response = await pdfFetch(authData.authToken);
+    if (response.status === 401) {
+      const fresh = await chrome.runtime.sendMessage({ action: 'refreshToken' }).catch(() => null);
+      if (fresh && fresh.token) response = await pdfFetch(fresh.token);
+    }
     
     if (!response.ok) {
       throw new Error(`PDF generation failed: ${response.status}`);
@@ -742,6 +790,270 @@ function triggerCoverLetterDownload(pdfUrl, company, jobTitle) {
 // ============================================
 // JOB TAB EVENT LISTENERS
 // ============================================
+
+// ============================================
+// JOB TAB, 2026-09-08 rebuild: everything happens in the panel.
+// The page tells us what the job is (content script, else the tab title),
+// the server re-reads the posting from its URL, recruiters render as rows
+// with the same email and draft actions as everywhere else, and the cover
+// letter shows in place with a Download button. One footnote says it is
+// all tracked in Offerloop; nothing bounces the student to the website.
+// ============================================
+
+let currentJob = null; // { title, company, description, source }
+
+function _tabTitleJob(tab) {
+  // LinkedIn: "(25) Compensation Business Partner | Snap Inc. | LinkedIn"
+  const t = (tab && tab.title || '').replace(/^\(\d+\)\s*/, '').trim();
+  const parts = t.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length >= 3 && /linkedin/i.test(parts[parts.length - 1])) {
+    return { title: parts[0], company: parts[1] };
+  }
+  // Greenhouse / Lever / Ashby: "Job Title - Company" or "Company - Job Title"
+  const dash = t.split(/\s+[-–]\s+/).map((s) => s.trim()).filter(Boolean);
+  if (dash.length === 2) return { title: dash[0], company: dash[1] };
+  return { title: '', company: '' };
+}
+
+function _renderJobHeading() {
+  const wrap = document.getElementById('job-heading');
+  const t = document.getElementById('job-heading-title');
+  const c = document.getElementById('job-heading-company');
+  if (!wrap || !t || !c) return;
+  const has = currentJob && (currentJob.title || currentJob.company);
+  wrap.classList.toggle('hidden', !has);
+  if (!has) return;
+  t.textContent = currentJob.title || 'This posting';
+  c.textContent = currentJob.company ? `at ${currentJob.company}` : '';
+  if (currentJob.title) currentState.lastJobTitle = currentJob.title;
+}
+
+async function readJobHeading(tab) {
+  const fromTitle = _tabTitleJob(tab);
+  currentJob = { ...(currentJob || {}), ...fromTitle, source: 'title' };
+  _renderJobHeading();
+  // The page itself, when the content script is there. Never blocks.
+  try {
+    const res = await Promise.race([
+      chrome.tabs.sendMessage(tab.id, { action: 'scrapeJob' }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (res && (res.jobTitle || res.title || res.company)) {
+      currentJob = {
+        title: res.jobTitle || res.title || currentJob.title || '',
+        company: res.company || currentJob.company || '',
+        description: res.description || res.jobDescription || '',
+        source: 'page',
+      };
+      _renderJobHeading();
+    }
+  } catch (e) { /* content script not on this page yet; the title carries it */ }
+}
+
+function _jobRequestBody() {
+  // Manual form wins when the page is not a posting we recognise.
+  if (manualInputRequired) {
+    const data = getManualInputData();
+    return {
+      company: data.company || undefined,
+      jobTitle: data.jobTitle || undefined,
+      jobDescription: data.jobDescription || undefined,
+      jobUrl: data.jobUrl || undefined,
+    };
+  }
+  const j = currentJob || {};
+  // The URL is what the server parses (it reads LinkedIn postings fine);
+  // the page's own words ride along so nothing is lost if parsing is thin.
+  return {
+    jobUrl: currentJobUrl,
+    jobTitle: j.title || undefined,
+    company: j.company || undefined,
+    jobDescription: (j.description && j.description.length > 100) ? j.description : undefined,
+  };
+}
+
+async function handleFindRecruiters() {
+  if (_actionInProgress) return;
+  if (!_panelAlive(showJobError)) return;
+  _actionInProgress = true;
+  const btn = document.getElementById('find-recruiters-btn');
+  const authData = await chrome.storage.local.get(['authToken']);
+  if (!DEV_BYPASS_AUTH && !authData.authToken) {
+    _actionInProgress = false;
+    showJobErrorWithSignin('Please sign in to use this feature.');
+    return;
+  }
+  const requestBody = _jobRequestBody();
+  if (manualInputRequired && !requestBody.company) {
+    _actionInProgress = false;
+    showJobError('Company name is required');
+    return;
+  }
+  btn?.classList.add('loading');
+  if (btn) btn.disabled = true;
+  hideJobError();
+  hideAllJobResults();
+  showJobLoading('', [
+    'Reading the posting',
+    'Finding who recruits for this team',
+    'Checking who is already on file',
+    'Looking up their emails',
+    'Writing your drafts',
+    'Almost there',
+  ]);
+  try {
+    const response = await apiCall('/api/job-board/find-recruiter', 'POST', requestBody, 120000);
+    const result = response.data || {};
+    if (response.ok && (result.success || result.recruiters)) {
+      const recruiters = result.recruiters || [];
+      if (recruiters.length) {
+        // Tracker save is a side effect; it never blocks the rows.
+        apiCall('/api/job-board/save-recruiters', 'POST', {
+          recruiters,
+          draftsCreated: result.draftsCreated || [],
+          companyCleaned: result.companyCleaned || '',
+          associatedJobUrl: currentJobUrl || '',
+          associatedJobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
+          jobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
+        }, 30000).catch(() => {});
+      }
+      renderRecruiterResults(result);
+      if (result.creditsRemaining !== undefined) {
+        updateCredits(result.creditsRemaining);
+        _creditsCacheTime = Date.now();
+      }
+    } else if (result.needsManualInput || (result.error || '').match(/extract|company/i)) {
+      showJobError('Could not read this posting. Add the company below.');
+      showManualForm(result.partialData);
+    } else {
+      showJobError(result.error || 'Could not find recruiters. Please try again.');
+    }
+  } catch (error) {
+    console.error('[Offerloop Popup] Find recruiters error:', error);
+    showJobError('Something went wrong. Please try again.');
+  } finally {
+    hideJobLoading();
+    btn?.classList.remove('loading');
+    if (btn) btn.disabled = false;
+    _actionInProgress = false;
+  }
+}
+
+function renderRecruiterResults(result) {
+  const card = document.getElementById('job-results');
+  const details = document.getElementById('job-result-details');
+  const list = document.getElementById('job-recruiter-rows');
+  if (!card || !list) return;
+  const recruiters = result.recruiters || [];
+  const company = result.companyCleaned || (currentJob && currentJob.company) || '';
+  const drafts = new Map();
+  (result.draftsCreated || []).forEach((d) => {
+    const key = (d.recruiter_email || d.email || '').toLowerCase();
+    if (key) drafts.set(key, d.draft_url || d.draftUrl || '');
+  });
+  if (details) {
+    const n = recruiters.length;
+    details.textContent = n
+      ? `${n} ${n === 1 ? 'person' : 'people'} who recruit${n === 1 ? 's' : ''} for this team${company ? ` at ${company}` : ''}`
+      : 'Nobody on file for this team yet.';
+  }
+  list.innerHTML = '';
+  recruiters.forEach((r) => {
+    const email = (r.Email || r.email || '').trim();
+    const row = {
+      firstName: r.FirstName || r.firstName || '',
+      lastName: r.LastName || r.lastName || '',
+      title: r.Title || r.title || 'Recruiter',
+      company: r.Company || r.company || company,
+      linkedinUrl: r.LinkedIn || r.linkedin || r.linkedinUrl || '',
+      school: r.College || r.college || '',
+      email: email && email.toLowerCase() !== 'not available' ? email : '',
+      caption: '',
+      category: '',
+    };
+    const el = buildSimilarRowEl(row);
+    const draftUrl = row.email ? drafts.get(row.email.toLowerCase()) : '';
+    if (draftUrl) {
+      // A draft already exists for this person: swap the Draft button for Open email.
+      const btn = el.querySelector('.similar-row__action--draft');
+      if (btn) {
+        btn.textContent = 'Open email';
+        const fresh = btn.cloneNode(true);
+        btn.replaceWith(fresh);
+        fresh.addEventListener('click', () => chrome.tabs.create({ url: draftUrl }));
+      }
+    }
+    list.appendChild(el);
+  });
+  card.classList.remove('hidden');
+}
+
+async function handleGenerateCoverLetter() {
+  if (_actionInProgress) return;
+  if (!_panelAlive(showJobError)) return;
+  _actionInProgress = true;
+  const btn = document.getElementById('cover-letter-btn');
+  const authData = await chrome.storage.local.get(['authToken']);
+  if (!DEV_BYPASS_AUTH && !authData.authToken) {
+    _actionInProgress = false;
+    showJobErrorWithSignin('Please sign in to use this feature.');
+    return;
+  }
+  const requestBody = _jobRequestBody();
+  if (manualInputRequired && !requestBody.jobDescription) {
+    _actionInProgress = false;
+    showJobError('Paste the job description below so the letter has something to say.');
+    return;
+  }
+  const company = requestBody.company || '';
+  const jobTitle = requestBody.jobTitle || '';
+  btn?.classList.add('loading');
+  if (btn) btn.disabled = true;
+  hideJobError();
+  hideAllJobResults();
+  showJobLoading('', [
+    'Reading the posting',
+    'Matching it against your resume',
+    'Writing the letter',
+    'Polishing the opening',
+    'Almost there',
+  ]);
+  try {
+    const response = await apiCall('/api/job-board/generate-cover-letter', 'POST', requestBody, 120000);
+    const result = response.data || {};
+    if (response.ok && (result.coverLetter || result.pdfUrl)) {
+      showCoverLetterResults(result, company, jobTitle);
+      if (result.creditsRemaining !== undefined) {
+        updateCredits(result.creditsRemaining);
+        _creditsCacheTime = Date.now();
+      }
+      // Into the tray, so it is reachable after you move on.
+      const t = jobTitle || (currentJob && currentJob.title) || 'this role';
+      const c = company || (currentJob && currentJob.company) || '';
+      trayUpsert({
+        id: `cover:${currentJobUrl || t}`, kind: 'prep', status: 'found',
+        name: `Cover letter · ${t}`, company: c,
+        pdfUrl: result.pdfUrl || '', linkedInUrl: currentJobUrl || '',
+        coverLetter: result.coverLetter || null,
+      });
+    } else if ((result.error || '').match(/description|required/i)) {
+      showJobError('We could not read the posting. Paste the description below.');
+      showManualForm({ company, jobTitle });
+    } else if ((result.error || '').match(/resume/i)) {
+      showJobError('Add a resume to your Offerloop profile first, then try again.');
+    } else {
+      showJobError(result.error || 'Could not write the letter. Please try again.');
+    }
+  } catch (error) {
+    console.error('[Offerloop Popup] Cover letter error:', error);
+    showJobError('Something went wrong. Please try again.');
+  } finally {
+    hideJobLoading();
+    btn?.classList.remove('loading');
+    if (btn) btn.disabled = false;
+    _actionInProgress = false;
+  }
+}
 
 function initJobTabListeners() {
   // Find & Email Recruiters button
@@ -852,6 +1164,7 @@ function updateCoffeeChatButtonState() {
 
 // Coffee Chat Prep handler - Full workflow (matches website behavior)
 async function handleCoffeeChatPrep() {
+  if (!_panelAlive(showCoffeeChatError)) return;
   const btn = document.getElementById('coffeeChatBtn');
   
   // Get current LinkedIn URL
@@ -893,16 +1206,8 @@ async function handleCoffeeChatPrep() {
     // Step 1: Start the prep
     console.log('[Offerloop Popup] Starting Coffee Chat Prep for:', linkedinUrl);
     
-    const startResponse = await fetchWithTimeout(`${API_BASE_URL}/api/coffee-chat-prep`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authData.authToken}`
-      },
-      body: JSON.stringify({ linkedinUrl })
-    });
-    
-    const errorData = await startResponse.json().catch(() => ({}));
+    const startResponse = await apiCall('/api/coffee-chat-prep', 'POST', { linkedinUrl }, 60000);
+    const errorData = startResponse.data || {};
     
     if (!startResponse.ok) {
       // Map backend errors to friendly messages (same as website)
@@ -980,17 +1285,13 @@ function pollCoffeeChatStatus(prepId, authToken, btn) {
     }
 
     try {
-      const statusResponse = await fetchWithTimeout(`${API_BASE_URL}/api/coffee-chat-prep/${prepId}`, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
+      const statusResponse = await apiCall(`/api/coffee-chat-prep/${prepId}`, 'GET', undefined, 30000);
 
       if (!statusResponse.ok) {
         throw new Error('Failed to check status');
       }
 
-      const statusData = await statusResponse.json();
+      const statusData = statusResponse.data || {};
       console.log('[Offerloop Popup] Poll status:', statusData.status, `(attempt ${attempts})`);
 
       // Update loading message based on status
@@ -1094,8 +1395,20 @@ function showCoffeeChatResults(data) {
   if (data.pdfUrl && downloadLink) {
     downloadLink.href = data.pdfUrl;
   }
-  
+
   if (resultsDiv) resultsDiv.style.display = 'block';
+
+  // Into the tray as well, so the prep stays reachable after you move on
+  // to the next person and this card leaves the main area.
+  try {
+    const cd = data.contactData || {};
+    const fullName = cd.name || `${cd.firstName || ''} ${cd.lastName || ''}`.trim() || 'Meeting prep';
+    trayUpsert({
+      id: `prep:${data.pdfUrl || fullName}`, kind: 'prep', status: 'found',
+      name: fullName, company: cd.company || '', pdfUrl: data.pdfUrl || '',
+      linkedInUrl: currentState.linkedInUrl || '',
+    });
+  } catch (e) { /* tray is a convenience */ }
 }
 
 function hideCoffeeChatResults() {
@@ -1304,8 +1617,12 @@ function showResults(contact) {
     elements.resultStatus.classList.add('pending');
     if (metaEl) metaEl.textContent = 'Finding their email';
   } else if (contact.email) {
-    elements.resultStatus.textContent = 'Found';
-    if (metaEl) metaEl.textContent = 'Ready to reach out';
+    // Catch-all domains (Apple, Qualcomm, most of big tech) accept any
+    // address, so nobody can verify one. When the server serves those, say
+    // "Likely" instead of "Found" so the student knows what they have.
+    const likely = /catch_all/i.test(contact.email_source || '');
+    elements.resultStatus.textContent = likely ? 'Likely' : 'Found';
+    if (metaEl) metaEl.textContent = likely ? 'Best match, not verified' : 'Ready to reach out';
   } else {
     elements.resultStatus.textContent = 'No Email';
     elements.resultStatus.classList.add('no-email');
@@ -1336,29 +1653,28 @@ function showResults(contact) {
   primeSimilarSection(contact);
 }
 
-// The result card's avatar: the person's company logo in a gold ring when
-// the page gave us one, Scout otherwise.
+// The company logo lives on the "Find similar at X" row (gold frame, gold
+// arrow), the eye-catcher under the found email. Scout keeps the avatar.
 let _pendingStagesStop = null;
 
 function applyResultAvatar() {
-  const wrap = document.getElementById('resultAvatar');
-  const img = document.getElementById('resultAvatarImg');
+  const wrap = document.getElementById('similarToggleLogo');
+  const img = wrap ? wrap.querySelector('img') : null;
   if (!wrap || !img) return;
   const logo = (currentState.profileCompanyLogo || '').trim();
   if (logo) {
     if (img.getAttribute('src') !== logo) {
       img.onerror = () => {
         img.onerror = null;
-        img.src = 'images/yeti-mascot.png';
-        wrap.classList.remove('result-card__scout-avatar--logo');
+        wrap.classList.add('hidden');
       };
       img.src = logo;
     }
-    wrap.classList.add('result-card__scout-avatar--logo');
+    wrap.classList.remove('hidden');
   } else {
     img.onerror = null;
-    if (!/yeti-mascot/.test(img.getAttribute('src') || '')) img.src = 'images/yeti-mascot.png';
-    wrap.classList.remove('result-card__scout-avatar--logo');
+    img.removeAttribute('src');
+    wrap.classList.add('hidden');
   }
 }
 
@@ -1526,8 +1842,10 @@ async function handleSignOut() {
 // Handle Find Email button click
 async function handleFindEmail() {
   if (_actionInProgress) return;
+  if (!_panelAlive(showError)) return;
   _actionInProgress = true;
   if (!currentState.linkedInUrl) {
+    _actionInProgress = false;
     showError('No LinkedIn URL detected. Please navigate to a profile page.');
     return;
   }
@@ -1571,14 +1889,20 @@ async function handleFindEmail() {
     // Show the email; the draft button appears next to it. Pending: show
     // the person now and let the poll fill the address in.
     const contact = response.contact || response;
+    // Keyed by the panel's own URL for this page, not the server's
+    // normalized one: the two can differ by a trailing dash or case, and
+    // a mismatch left cards stuck on "Searching" after the email landed.
+    const pageUrl = currentState.linkedInUrl || '';
     const shown = {
       full_name: contact.full_name,
       firstName: contact.firstName,
       lastName: contact.lastName,
       email: contact.email,
+      email_source: contact.email_source || '',
       company: contact.company,
       jobTitle: contact.jobTitle || contact.title,
-      linkedinUrl: contact.linkedinUrl || contact.linkedin_url || currentState.linkedInUrl,
+      linkedinUrl: pageUrl || contact.linkedinUrl || contact.linkedin_url,
+      profileUrl: contact.linkedinUrl || contact.linkedin_url || pageUrl,
       draft_url: response.draft_url || contact.draft_url,
       gmail_draft_url: response.gmail_draft_url || contact.gmail_draft_url,
       gmailDraftUrl: response.gmailDraftUrl,
@@ -1586,8 +1910,17 @@ async function handleFindEmail() {
       contactId: response.contact_id || '',
     };
     showResults(shown);
+    cardsByUrl[shown.linkedinUrl || currentState.linkedInUrl || ''] = shown;
     if (shown.pending && shown.contactId) {
       startEmailPolling(shown);
+    } else if (shown.email && shown.contactId) {
+      // Instant finds go in the tray too, so a queue of finds reads as one list.
+      trayUpsert({
+        id: shown.contactId, kind: 'email', status: 'found',
+        name: shown.full_name || `${shown.firstName || ''} ${shown.lastName || ''}`.trim(),
+        company: shown.company || '', linkedInUrl: shown.linkedinUrl,
+        email: shown.email, source: shown.email_source || '', person: shown,
+      });
     }
 
   } catch (error) {
@@ -1690,6 +2023,21 @@ async function checkAndShowContent() {
   
   console.log('[Offerloop Popup] On LinkedIn profile:', linkedInUrl);
   showSection('profile');
+
+  // A new person: the previous person's result card and prep card leave
+  // the main area (they live on in the tray). Coming back to a person whose
+  // card we still have restores it.
+  const priorUrl = currentState.lastFound && currentState.lastFound.linkedinUrl;
+  if (priorUrl && priorUrl !== linkedInUrl) {
+    elements.resultsSection?.classList.add('hidden');
+    elements.errorSection?.classList.add('hidden');
+    hideCoffeeChatResults();
+    currentState.lastFound = null;
+  }
+  const savedCard = cardsByUrl[linkedInUrl];
+  if (savedCard && (!currentState.lastFound || currentState.lastFound.linkedinUrl !== linkedInUrl)) {
+    showResults(savedCard);
+  }
 
   // Update UI with LinkedIn URL
   if (elements.profileUrl && linkedInUrl) {
@@ -1814,8 +2162,12 @@ async function init() {
   // use it directly for all authenticated API calls and SKIP the OAuth refresh,
   // which fails locally because the manifest oauth2 client id is invalid for this
   // unpacked extension. Token expires ~1h — re-paste a fresh one when calls 401.
+  // Only an explicitly injected devBypassToken counts. The hardcoded DEV_TOKEN
+  // that used to sit here (a real July 2026 Firebase token) ran on every
+  // start for every user and overwrote their sign-in; calls that bypassed
+  // the background then failed with "Invalid or expired token".
   const devAuth = await chrome.storage.local.get(['devBypassToken']);
-  const devToken = devAuth.devBypassToken || DEV_TOKEN;
+  const devToken = devAuth.devBypassToken || '';
   if (devToken) {
     console.log('[Offerloop Popup] Using dev token — skipping OAuth refresh');
     currentState.authToken = devToken;
@@ -2316,65 +2668,228 @@ async function draftForContact(person) {
   return response.gmail_draft_url || 'https://mail.google.com/mail/u/0/#drafts';
 }
 
-// ── Pending email: poll until FullEnrich lands, then fill the card in ──
-// One poll at a time. Survives tab changes (the result belongs to the
-// profile it was started on); the card is only refreshed when that profile
-// is still the one on screen.
-const emailPoll = { timer: null, contactId: '', linkedInUrl: '', tries: 0 };
+// ── Pending emails: poll until FullEnrich lands, as many at once as you
+// like (2026-09-08). Each search is its own job on the server and its own
+// poll here. The card is refreshed only when its profile is on screen; the
+// tray shows every job wherever you are, so you can queue a few and keep
+// browsing.
+const emailPolls = new Map(); // contactId -> { timer, tries, shown }
+const cardsByUrl = {};        // profile URL -> the shown card, restored on return
 const EMAIL_POLL_EVERY_MS = 5000;
 const EMAIL_POLL_MAX_TRIES = 84; // seven minutes, the server's own ceiling
 
-function stopEmailPolling() {
-  if (emailPoll.timer) clearInterval(emailPoll.timer);
-  emailPoll.timer = null;
-  emailPoll.contactId = '';
-  emailPoll.tries = 0;
+function stopEmailPolling(contactId) {
+  const job = emailPolls.get(contactId);
+  if (job && job.timer) clearInterval(job.timer);
+  emailPolls.delete(contactId);
 }
 
 function startEmailPolling(shown) {
-  stopEmailPolling();
-  emailPoll.contactId = shown.contactId;
-  emailPoll.linkedInUrl = shown.linkedinUrl || currentState.linkedInUrl || '';
-  emailPoll.tries = 0;
+  const contactId = shown.contactId;
+  if (!contactId) return;
+  stopEmailPolling(contactId);
+  const linkedInUrl = shown.linkedinUrl || currentState.linkedInUrl || '';
+  shown.linkedinUrl = linkedInUrl;
+  cardsByUrl[linkedInUrl] = shown;
+  trayUpsert({
+    id: contactId, kind: 'email', status: 'pending',
+    name: shown.full_name || `${shown.firstName || ''} ${shown.lastName || ''}`.trim() || 'Someone',
+    company: shown.company || '', linkedInUrl, person: shown,
+  });
+  const job = { timer: null, tries: 0, shown };
   const tick = async () => {
-    if (!emailPoll.contactId) return;
-    emailPoll.tries += 1;
+    if (!emailPolls.has(contactId)) return;
+    job.tries += 1;
     let res = null;
     try {
       res = await chrome.runtime.sendMessage({
-        action: 'emailStatus',
-        contactId: emailPoll.contactId,
-        authToken: currentState.authToken,
+        action: 'emailStatus', contactId, authToken: currentState.authToken,
       });
     } catch (e) {
       res = null;
     }
-    if (!res || res.error) {
-      if (emailPoll.tries >= EMAIL_POLL_MAX_TRIES) stopEmailPolling();
+    if (!res || res.error || res.status === 'pending') {
+      if (job.tries >= EMAIL_POLL_MAX_TRIES) {
+        stopEmailPolling(contactId);
+        trayUpsert({ id: contactId, status: 'miss', statusText: 'Took too long. Try again later.' });
+      }
       return;
     }
-    if (res.status === 'pending') {
-      if (emailPoll.tries >= EMAIL_POLL_MAX_TRIES) stopEmailPolling();
-      return;
-    }
-    stopEmailPolling();
-    const stillHere = (currentState.linkedInUrl || '') === emailPoll.linkedInUrl;
+    stopEmailPolling(contactId);
+    const stillHere = (currentState.linkedInUrl || '') === linkedInUrl;
+    shown.pending = false;
     if (res.status === 'found' && res.email) {
-      shown.pending = false;
       shown.email = res.email;
-      if (stillHere) showResults(shown);
+      shown.email_source = res.source || '';
+      trayUpsert({ id: contactId, status: 'found', email: res.email, source: res.source || '' });
     } else {
-      shown.pending = false;
       shown.email = '';
       shown.refunded = !!res.refunded;
-      if (stillHere) showResults(shown);
+      trayUpsert({ id: contactId, status: 'miss', statusText: res.refunded ? 'No email. Credits refunded.' : 'No email found.' });
       _creditsCacheTime = 0;
       refreshCredits().catch(() => {});
     }
+    if (stillHere) showResults(shown);
   };
-  emailPoll.timer = setInterval(tick, EMAIL_POLL_EVERY_MS);
+  job.timer = setInterval(tick, EMAIL_POLL_EVERY_MS);
+  emailPolls.set(contactId, job);
   setTimeout(tick, 2500);
 }
+
+// ── The tray ───────────────────────────────────────────────────────────
+// Pills for background work: email searches (pending / found / miss) and
+// finished meeting preps. Lives above the tab content, so it is visible on
+// every tab. Session-only; pills go when dismissed or on Clear done.
+const trayItems = new Map();
+
+function trayUpsert(patch) {
+  if (!patch || !patch.id) return;
+  const cur = trayItems.get(patch.id) || {};
+  trayItems.set(patch.id, { ...cur, ...patch });
+  renderTray();
+}
+
+function trayRemove(id) {
+  trayItems.delete(id);
+  renderTray();
+}
+
+function _initialsOf(name) {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+  const s = ((parts[0] || ' ')[0] + (parts[1] || ' ')[0]).toUpperCase().trim();
+  return s || '?';
+}
+
+function renderTray() {
+  const tray = document.getElementById('tray');
+  const list = document.getElementById('trayItems');
+  if (!tray || !list) return;
+  const items = Array.from(trayItems.values());
+  tray.classList.toggle('hidden', items.length === 0);
+  list.innerHTML = '';
+  items.forEach((it) => {
+    const pill = document.createElement('div');
+    pill.className = `tray-pill tray-pill--${it.status || 'pending'}`;
+    pill.setAttribute('role', 'listitem');
+
+    const avatar = document.createElement('span');
+    avatar.className = 'tray-pill__avatar';
+    avatar.textContent = it.kind === 'prep' ? 'MP' : _initialsOf(it.name);
+
+    const who = document.createElement('div');
+    who.className = 'tray-pill__who';
+    const name = document.createElement('span');
+    name.className = 'tray-pill__name';
+    name.textContent = it.name || 'Someone';
+    const status = document.createElement('span');
+    status.className = 'tray-pill__status';
+    if (it.kind === 'prep') {
+      status.textContent = it.company ? `Meeting prep ready · ${it.company}` : 'Meeting prep ready';
+    } else if (it.status === 'pending') {
+      status.textContent = 'Finding their email';
+    } else if (it.status === 'found') {
+      status.textContent = it.email + (/catch_all/i.test(it.source || '') ? ' · likely' : '');
+    } else {
+      status.textContent = it.statusText || 'No email found.';
+    }
+    who.append(name, status);
+    // Tapping the name opens a small detail strip in place (company, the
+    // address, a link to the profile) instead of leaving the page. The
+    // tray is for staying where you are.
+    who.title = 'Details';
+    who.addEventListener('click', () => {
+      trayUpsert({ id: it.id, open: !it.open });
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'tray-pill__actions';
+    if (it.kind === 'prep' && it.pdfUrl) {
+      const dl = document.createElement('a');
+      dl.className = 'tray-pill__btn';
+      dl.href = it.pdfUrl;
+      dl.target = '_blank';
+      dl.rel = 'noopener';
+      dl.textContent = 'Download PDF';
+      actions.appendChild(dl);
+    } else if (it.kind === 'prep' && it.coverLetter) {
+      // A cover letter the server returned as text: build the PDF on tap.
+      const dl = document.createElement('button');
+      dl.type = 'button';
+      dl.className = 'tray-pill__btn';
+      dl.textContent = 'Download PDF';
+      dl.addEventListener('click', () => downloadCoverLetterAsPDF(it.coverLetter, it.company, it.name));
+      actions.appendChild(dl);
+    }
+    if (it.kind === 'email' && it.status === 'found' && it.person) {
+      // Two states, said plainly: "Write email" runs the draft in the
+      // background right here; "Open email" opens the Gmail draft.
+      const draft = document.createElement('button');
+      draft.type = 'button';
+      draft.className = 'tray-pill__btn';
+      draft.textContent = it.draftUrl ? 'Open email' : (it.writing ? 'Writing…' : 'Write email');
+      draft.disabled = !!it.writing;
+      draft.addEventListener('click', async () => {
+        if (it.draftUrl) { chrome.tabs.create({ url: it.draftUrl }); return; }
+        trayUpsert({ id: it.id, writing: true });
+        try {
+          const url = await draftForContact({ ...it.person, email: it.email, linkedinUrl: it.person.profileUrl || it.person.linkedinUrl });
+          trayUpsert({ id: it.id, writing: false, draftUrl: url });
+          chrome.tabs.create({ url });
+        } catch (e) {
+          trayUpsert({ id: it.id, writing: false });
+        }
+      });
+      actions.appendChild(draft);
+    }
+    if (it.status !== 'pending') {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'tray-pill__x';
+      x.setAttribute('aria-label', 'Dismiss');
+      x.textContent = '×';
+      x.addEventListener('click', () => trayRemove(it.id));
+      actions.appendChild(x);
+    }
+
+    pill.append(avatar, who, actions);
+    if (it.open) {
+      const more = document.createElement('div');
+      more.className = 'tray-pill__more';
+      const lines = [];
+      if (it.person && (it.person.jobTitle || it.company)) {
+        lines.push([it.person.jobTitle, it.company].filter(Boolean).join(' · '));
+      } else if (it.company) {
+        lines.push(it.company);
+      }
+      if (it.kind === 'email' && it.status === 'found' && it.email) {
+        lines.push(/catch_all/i.test(it.source || '') ? 'Best match at this company, not verified' : 'Verified address');
+      }
+      lines.forEach((t) => {
+        const p = document.createElement('span');
+        p.textContent = t;
+        more.appendChild(p);
+      });
+      if (it.linkedInUrl) {
+        const a = document.createElement('a');
+        a.href = it.linkedInUrl;
+        a.textContent = 'Open their profile';
+        a.addEventListener('click', (ev) => { ev.preventDefault(); openPersonOnLinkedIn(it.linkedInUrl); });
+        more.appendChild(a);
+      }
+      pill.appendChild(more);
+    }
+    list.appendChild(pill);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('trayClear')?.addEventListener('click', () => {
+    Array.from(trayItems.values())
+      .filter((it) => it.status !== 'pending')
+      .forEach((it) => trayItems.delete(it.id));
+    renderTray();
+  });
+});
 
 // Profile page, step two: the Draft button under the found email.
 async function handleDraftEmail() {
@@ -2593,6 +3108,10 @@ async function loadCompanyPeople(company, prefix = 'company', opts = {}) {
     state.rows = (response.contacts || []).map((r) => ({ ...r, deckId: response.deck_id || '' }));
     if (prefix === 'company' && Array.isArray(response.chips) && response.chips.length) {
       companyFilter.chips = response.chips;
+    }
+    if (prefix === 'company') {
+      // LinkedIn's "N from your school work here", as Coresignal counts it.
+      companyFilter.alumniCount = (typeof response.alumni_count === 'number') ? response.alumni_count : null;
       renderCompanyChips(company);
     }
     if (state.rows.length === 0) {
@@ -2641,8 +3160,16 @@ function renderCompanyEmpty(prefix, company, response, dig) {
   let copy = '';
   let showDig = false;
   if (reason === 'shelf_empty' && response.can_dig && prefix === 'company') {
-    copy = `No one on file yet at ${name}.`;
+    const alumniFocus = companyFilter.focus === 'alumni';
+    const n = companyFilter.alumniCount;
+    copy = alumniFocus
+      ? (typeof n === 'number' && n > 0
+          ? `None of the ${n >= 50 ? '50+' : n} alumni at ${name} are on file yet.`
+          : `No alumni on file yet at ${name}.`)
+      : `No one on file yet at ${name}.`;
     showDig = true;
+    const btnLabel = btn ? btn.querySelector('span') : null;
+    if (btnLabel) btnLabel.textContent = alumniFocus ? 'Look for alumni here' : 'Look for people here';
   } else if (reason === 'dig_cap') {
     copy = `You have pulled new people enough for today. ${name} will be here tomorrow, or open any profile there and we start from that person.`;
   } else if (filtered) {
@@ -2677,8 +3204,46 @@ function renderCompanyRows(rows, prefix = 'company') {
   // Deck rows carry the ranker's reason as their caption; no bucket caption.
   // Five up front, the rest behind one line: shorter list, same data, no
   // extra request (rows are already in hand).
-  const els = rows.map((row) => buildSimilarRowEl({ ...row, category: '' }));
+  // Tier labels (Company tab, unfiltered view): alumni first, then people
+  // in recruiting, then everyone else, each group in ranked order. A
+  // typed role or chip already says what the list is, so no labels then.
+  const recruiterRe = /recruit|talent|people (ops|operations|partner)|human resources|\bhr\b|campus|university relations|early career|staffing/i;
+  const tierOf = (row) => {
+    if ((row.reasonTypes || []).includes('alumni')) return 'alumni';
+    if (recruiterRe.test(row.title || '')) return 'recruiting';
+    return 'other';
+  };
+  const filtered = prefix === 'company' && !!(companyFilter.role || companyFilter.focus);
+  let ordered = rows;
+  let groupLabels = null;
+  if (prefix === 'company' && !filtered && rows.length > 1) {
+    const groups = { alumni: [], recruiting: [], other: [] };
+    rows.forEach((r) => groups[tierOf(r)].push(r));
+    ordered = [...groups.alumni, ...groups.recruiting, ...groups.other];
+    groupLabels = { alumni: 'Alumni', recruiting: 'Recruiting', other: (groups.alumni.length || groups.recruiting.length) ? 'Also here' : '' };
+    // One real-data line at the top; parts with a zero are left out.
+    const parts = [`${rows.length} on file`];
+    if (groups.alumni.length) parts.push(`${groups.alumni.length} alumni`);
+    if (groups.recruiting.length) parts.push(`${groups.recruiting.length} in recruiting`);
+    const count = document.createElement('p');
+    count.className = 'similar-count';
+    count.textContent = parts.join(' · ');
+    results.appendChild(count);
+  }
+  const els = ordered.map((row) => buildSimilarRowEl({ ...row, category: '' }));
+  let lastTier = null;
   els.forEach((el, i) => {
+    if (groupLabels) {
+      const t = tierOf(ordered[i]);
+      if (t !== lastTier && groupLabels[t]) {
+        const h = document.createElement('div');
+        h.className = 'similar-group';
+        h.textContent = groupLabels[t];
+        if (prefix === 'company' && i >= COMPANY_ROWS_FIRST) h.classList.add('hidden', 'similar-row--folded');
+        results.appendChild(h);
+      }
+      lastTier = t;
+    }
     if (prefix === 'company' && i >= COMPANY_ROWS_FIRST) el.classList.add('hidden', 'similar-row--folded');
     results.appendChild(el);
   });
@@ -2722,11 +3287,14 @@ function renderCompanyChips(company) {
   const chips = [];
   const active = companyFilter.role || companyFilter.focus;
   if (active) chips.push({ label: 'Everyone', role: '', focus: '' });
-  (companyFilter.chips || DEFAULT_CHIPS).forEach((c) => chips.push({
-    label: c.label || '',
-    role: (c.role || '').trim(),
-    focus: (c.focus || '').trim(),
-  }));
+  (companyFilter.chips || DEFAULT_CHIPS).forEach((c) => {
+    let label = c.label || '';
+    // The alumni chip carries the live count when we have one: "USC alumni · 24".
+    if ((c.focus || '') === 'alumni' && typeof companyFilter.alumniCount === 'number') {
+      label = `${label} · ${companyFilter.alumniCount >= 50 ? '50+' : companyFilter.alumniCount}`;
+    }
+    chips.push({ label, role: (c.role || '').trim(), focus: (c.focus || '').trim() });
+  });
   const lastJob = (currentState.lastJobTitle || '').trim();
   if (lastJob && !chips.some((c) => c.role.toLowerCase() === lastJob.toLowerCase())) {
     chips.push({ label: lastJob.length > 28 ? `${lastJob.slice(0, 27)}…` : lastJob, role: lastJob, focus: '' });

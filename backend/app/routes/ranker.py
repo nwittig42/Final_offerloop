@@ -244,11 +244,22 @@ def get_ranked_candidates():
                 _dig_firm = _firms[0]
             if _dig_firm and getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
                 _dig_name = company if company else _dig_firm.replace("-", " ")
+                # Alumni lead the dig (2026-09-08). The school filter is free
+                # at search time; only the collects cost, so the six people we
+                # pull are the six a student most wants to meet. LinkedIn shows
+                # "24 from your school were hired here" while our shelf had none
+                # of them; this is how the shelf catches up.
+                _prof = _ctx.get("profile") or {}
+                _school_name = ((_prof.get("academics") or {}).get("university")
+                                or (_prof.get("academics") or {}).get("school")
+                                or _prof.get("university") or _prof.get("school") or "")
+                _school_name = str(_school_name).strip() or None
                 _dug, _rl, _sv, _meta = coresignal_client.search_contacts_from_prompt(
                     {"companies": [{"name": _dig_name}],
                      "title_variations": [role] if role else [],
                      "locations": ["United States"]},
                     dig_collects,
+                    alumni_school=_school_name,
                 )
                 # Keep only people whose employer actually IS the firm. A
                 # one-word firm name like Stripe token-matches "Kleen Stripe"
@@ -382,12 +393,36 @@ def get_ranked_candidates():
     # The company deck also returns the chips the panel should offer, predicted
     # from the student's year, school and saved roles (person_ranker.suggest_chips).
     chips = []
+    alumni_count = None
     if company:
+        _chip_ctx = None
         try:
-            chips = suggest_chips(_load_user_context(uid, db))
+            _chip_ctx = _load_user_context(uid, db)
+            chips = suggest_chips(_chip_ctx)
         except Exception:
             logger.exception("ranker: chips failed uid=%s", uid)
             chips = []
+        # How many of the student's school work here, per Coresignal's index.
+        # A search, not a collect: free, and it tells the student what the
+        # alumni chip could pull before anyone spends anything. Capped at 50
+        # by page size; the panel shows "50+".
+        try:
+            from app.services import coresignal_client as _csc
+            _p = (_chip_ctx or {}).get("profile") or {}
+            _sch = ((_p.get("academics") or {}).get("university")
+                    or (_p.get("academics") or {}).get("school")
+                    or _p.get("university") or _p.get("school") or "")
+            _sch = str(_sch).strip()
+            if _sch and getattr(_csc, "CORESIGNAL_API_KEY", ""):
+                _ids = _csc.alumni_first_ids(
+                    {"companies": [{"name": company}], "title_variations": [],
+                     "locations": ["United States"]},
+                    _sch, page_size=50,
+                )
+                alumni_count = len(_ids or [])
+        except Exception:
+            logger.exception("ranker: alumni count failed uid=%s", uid)
+            alumni_count = None
 
     if not candidates:
         # shelf_empty: nothing on file and no dig was run; the panel may ask
@@ -401,6 +436,7 @@ def get_ranked_candidates():
             "reason":      reason,
             "can_dig":     bool(company) and dig_state == "not_asked",
             "chips":       chips,
+            "alumni_count": alumni_count,
             "generatedAt": generated_at,
         })
     return jsonify({
@@ -408,6 +444,7 @@ def get_ranked_candidates():
         "count":       len(candidates),
         "deck_id":     deck_id,
         "chips":       chips,
+        "alumni_count": alumni_count,
         "generatedAt": generated_at,
     })
 
