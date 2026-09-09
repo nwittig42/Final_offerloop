@@ -2274,3 +2274,35 @@ def people_search_reveal_route():
         action=action,
     )
     return jsonify(payload), status
+
+
+@mobile_bp.route('/resume/name', methods=['PATCH'])
+@require_firebase_auth
+def rename_resume_route():
+    """Rename the resume on file (Rylan 2026-09-08).
+
+    resumeFileName is the name recruiters see on the email attachment
+    (emails.py reads it) and the name the app shows; the stored object keeps
+    its path, so nothing else moves. The original extension is preserved and
+    characters that break attachment headers are dropped.
+    """
+    import os as _os
+    import re as _re
+    data = request.get_json(silent=True) or {}
+    name = str(data.get('name') or '').strip()[:80]
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    db = get_db()
+    if not db:
+        return jsonify({'error': 'Database not initialized'}), 500
+    uid = request.firebase_user['uid']
+    ref = db.collection('users').document(uid)
+    u = ref.get().to_dict() or {}
+    if not u.get('resumeUrl'):
+        return jsonify({'error': 'No resume on file'}), 404
+    ext = _os.path.splitext(u.get('resumeFileName') or '')[1] or '.pdf'
+    name = _re.sub(r'[\\/:*?"<>|\r\n]+', ' ', name).strip()
+    if not name.lower().endswith(ext.lower()):
+        name = f"{name}{ext}"
+    ref.update({'resumeFileName': name})
+    return jsonify({'ok': True, 'name': name}), 200
