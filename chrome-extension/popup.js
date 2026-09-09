@@ -4,15 +4,6 @@ console.log('[Offerloop Popup] Loaded');
 // API Configuration
 const API_BASE_URL = 'https://www.offerloop.ai';
 
-// ⚠️ DEV ONLY — skips the sign-in gate so you can work on the UI/UX
-// without logging in. Set to false before shipping. API calls that need a
-// real Firebase token will still fail; this only unlocks the screens.
-const DEV_BYPASS_AUTH = false;
-
-// ⚠️ DEV ONLY — paste a fresh Firebase ID token here to authenticate without OAuth.
-// Grab it from www.offerloop.ai (Network tab → any /api request → Authorization: Bearer <token>).
-// Expires ~1 hour; replace it when API calls start returning 401. Set to '' to disable.
-const DEV_TOKEN = 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImIyNDg2Mzc0OTVjYjM4N2U0OWViNmRlMThkZjk5N2VlOGU1YWUyOTciLCJ0eXAiOiJKV1QifQ.eyJuYW1lIjoiU2lkIEJhbmRpIiwicGljdHVyZSI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0xGWXVmZEt3ZXRDZGxIcnhzbm5jMjcxNllfUUVhb3Z4T1p4R1oxQUI4QWgtaHVEUT1zOTYtYyIsImlzcyI6Imh0dHBzOi8vc2VjdXJldG9rZW4uZ29vZ2xlLmNvbS9vZmZlcmxvb3AtbmF0aXZlIiwiYXVkIjoib2ZmZXJsb29wLW5hdGl2ZSIsImF1dGhfdGltZSI6MTc4NDE1NTkwMSwidXNlcl9pZCI6IlFBSzRIcHZiZ05TV3lPMHhhZDRDYUhrNUZrWDIiLCJzdWIiOiJRQUs0SHB2YmdOU1d5TzB4YWQ0Q2FIazVGa1gyIiwiaWF0IjoxNzg0NzU2NzYyLCJleHAiOjE3ODQ3NjAzNjIsImVtYWlsIjoic2lkQG9mZmVybG9vcC5haSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJmaXJlYmFzZSI6eyJpZGVudGl0aWVzIjp7Imdvb2dsZS5jb20iOlsiMTExMTE4Mzc0NTAyOTU2OTc0MDkxIl0sImVtYWlsIjpbInNpZEBvZmZlcmxvb3AuYWkiXX0sInNpZ25faW5fcHJvdmlkZXIiOiJnb29nbGUuY29tIn19.gjf45o7FvLSMcccik8jzqat8LnRW74MiGl68x4xDQv6NXy3xdYvakP0yrpS991tPgqN233k4KaM1Nh7crZ7yg9tl_ZPypJIlKZTV-S8cy0U80tTGBU1DzHFMhdjh26c8AuEcmMO4NUAdiPrsottebQvHSZbQ3XXtX3-7ENqTraPIDktXShHKSJbtCCl0dcz3SQPRI8h55XIa6l62CQUhVoiRNveiAa8088p0DtXrjJgXNsVo5mNSd_yCeZCVa7pSY2ngI6xNk2cTwjs9i-gyGhWzkq_m29baeyiIFQ-YmLP5WvG7zuV5IrC2bXuSjPRLW4HxabKRbeK50CzlQ7Jvmg';
 
 // Shared job URL patterns — used by detectMode() and isJobUrl()
 const JOB_URL_PATTERNS = [
@@ -50,6 +41,16 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
     if (err.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs}ms`);
     throw err;
   }
+}
+
+// Authenticated calls go through the background, which owns the token and
+// retries once after a refresh on 401. Resolves {ok, status, data}; never
+// throws on HTTP errors, only when the extension itself cannot reach the
+// background.
+async function apiCall(path, method = 'POST', body = undefined, timeoutMs = 90000) {
+  const resp = await chrome.runtime.sendMessage({ action: 'apiRequest', path, method, body, timeoutMs });
+  if (!resp) return { ok: false, status: 0, data: { error: 'No response from extension' } };
+  return resp;
 }
 
 // Tab Detection and Switching
@@ -694,14 +695,21 @@ async function downloadCoverLetterAsPDF(coverLetterData, company, jobTitle) {
   
   try {
     // Call backend to generate PDF
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/cover-letter-pdf`, {
+    // This one stays a direct fetch because the reply is a PDF blob, which
+    // cannot travel over the message bridge. A 401 refreshes and retries once.
+    const pdfFetch = (token) => fetchWithTimeout(`${API_BASE_URL}/api/job-board/cover-letter-pdf`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authData.authToken}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({ content: text, company: company })
-    });
+    }, 60000);
+    let response = await pdfFetch(authData.authToken);
+    if (response.status === 401) {
+      const fresh = await chrome.runtime.sendMessage({ action: 'refreshToken' }).catch(() => null);
+      if (fresh && fresh.token) response = await pdfFetch(fresh.token);
+    }
     
     if (!response.ok) {
       throw new Error(`PDF generation failed: ${response.status}`);
@@ -883,27 +891,19 @@ async function handleFindRecruiters() {
     'Almost there',
   ]);
   try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/find-recruiter`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authData.authToken}` },
-      body: JSON.stringify(requestBody),
-    }, 120000);
-    const result = await response.json();
+    const response = await apiCall('/api/job-board/find-recruiter', 'POST', requestBody, 120000);
+    const result = response.data || {};
     if (response.ok && (result.success || result.recruiters)) {
       const recruiters = result.recruiters || [];
       if (recruiters.length) {
         // Tracker save is a side effect; it never blocks the rows.
-        fetchWithTimeout(`${API_BASE_URL}/api/job-board/save-recruiters`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authData.authToken}` },
-          body: JSON.stringify({
-            recruiters,
-            draftsCreated: result.draftsCreated || [],
-            companyCleaned: result.companyCleaned || '',
-            associatedJobUrl: currentJobUrl || '',
-            associatedJobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
-            jobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
-          }),
+        apiCall('/api/job-board/save-recruiters', 'POST', {
+          recruiters,
+          draftsCreated: result.draftsCreated || [],
+          companyCleaned: result.companyCleaned || '',
+          associatedJobUrl: currentJobUrl || '',
+          associatedJobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
+          jobTitle: (currentJob && currentJob.title) || result.jobTypeDetected || '',
         }, 30000).catch(() => {});
       }
       renderRecruiterResults(result);
@@ -1007,12 +1007,8 @@ async function handleGenerateCoverLetter() {
     'Almost there',
   ]);
   try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/generate-cover-letter`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authData.authToken}` },
-      body: JSON.stringify(requestBody),
-    }, 120000);
-    const result = await response.json();
+    const response = await apiCall('/api/job-board/generate-cover-letter', 'POST', requestBody, 120000);
+    const result = response.data || {};
     if (response.ok && (result.coverLetter || result.pdfUrl)) {
       showCoverLetterResults(result, company, jobTitle);
       if (result.creditsRemaining !== undefined) {
@@ -1197,16 +1193,8 @@ async function handleCoffeeChatPrep() {
     // Step 1: Start the prep
     console.log('[Offerloop Popup] Starting Coffee Chat Prep for:', linkedinUrl);
     
-    const startResponse = await fetchWithTimeout(`${API_BASE_URL}/api/coffee-chat-prep`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authData.authToken}`
-      },
-      body: JSON.stringify({ linkedinUrl })
-    });
-    
-    const errorData = await startResponse.json().catch(() => ({}));
+    const startResponse = await apiCall('/api/coffee-chat-prep', 'POST', { linkedinUrl }, 60000);
+    const errorData = startResponse.data || {};
     
     if (!startResponse.ok) {
       // Map backend errors to friendly messages (same as website)
@@ -1284,17 +1272,13 @@ function pollCoffeeChatStatus(prepId, authToken, btn) {
     }
 
     try {
-      const statusResponse = await fetchWithTimeout(`${API_BASE_URL}/api/coffee-chat-prep/${prepId}`, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
+      const statusResponse = await apiCall(`/api/coffee-chat-prep/${prepId}`, 'GET', undefined, 30000);
 
       if (!statusResponse.ok) {
         throw new Error('Failed to check status');
       }
 
-      const statusData = await statusResponse.json();
+      const statusData = statusResponse.data || {};
       console.log('[Offerloop Popup] Poll status:', statusData.status, `(attempt ${attempts})`);
 
       // Update loading message based on status
@@ -2163,8 +2147,12 @@ async function init() {
   // use it directly for all authenticated API calls and SKIP the OAuth refresh,
   // which fails locally because the manifest oauth2 client id is invalid for this
   // unpacked extension. Token expires ~1h — re-paste a fresh one when calls 401.
+  // Only an explicitly injected devBypassToken counts. The hardcoded DEV_TOKEN
+  // that used to sit here (a real July 2026 Firebase token) ran on every
+  // start for every user and overwrote their sign-in; calls that bypassed
+  // the background then failed with "Invalid or expired token".
   const devAuth = await chrome.storage.local.get(['devBypassToken']);
-  const devToken = devAuth.devBypassToken || DEV_TOKEN;
+  const devToken = devAuth.devBypassToken || '';
   if (devToken) {
     console.log('[Offerloop Popup] Using dev token — skipping OAuth refresh');
     currentState.authToken = devToken;

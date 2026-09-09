@@ -137,6 +137,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleEmailStatus(request, sendResponse);
       return true;
 
+    case 'apiRequest':
+      handleApiRequest(request, sendResponse);
+      return true;
+
     case 'getCredits':
       handleGetCredits(request, sendResponse);
       return true;
@@ -513,6 +517,46 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
     console.error('[Offerloop Background] company deck API error:', error);
     throw error;
   }
+}
+
+// One door for every authenticated call the panel makes (2026-09-08). The
+// token comes from storage, a 401 refreshes it once and retries, and the
+// panel gets {ok, status, data}. The Job tab and meeting prep used to fetch
+// the server directly with whatever token was in storage, which is how a
+// stale token turned into "Invalid or expired token" while the rest of the
+// panel kept working.
+async function handleApiRequest(request, sendResponse) {
+  try {
+    const { authToken } = await chrome.storage.local.get(['authToken']);
+    const token = request.authToken || authToken;
+    if (!token) {
+      sendResponse({ ok: false, status: 401, data: { error: 'Not authenticated' } });
+      return;
+    }
+    const result = await apiRequest(request.path, request.method || 'POST', request.body, token, request.timeoutMs || 90000);
+    sendResponse(result);
+  } catch (error) {
+    console.error('[Offerloop Background] apiRequest failed:', error);
+    sendResponse({ ok: false, status: 0, data: { error: error.message || 'Request failed' } });
+  }
+}
+
+async function apiRequest(path, method, body, token, timeoutMs, isRetry = false) {
+  const headers = { 'Authorization': `Bearer ${token}` };
+  const init = { method, headers };
+  if (body !== undefined && method !== 'GET') {
+    headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, init, timeoutMs);
+  if (response.status === 401 && !isRetry) {
+    console.log('[Offerloop Background] 401 on', path, ', refreshing token...');
+    const fresh = await refreshAuthToken();
+    if (fresh) return apiRequest(path, method, body, fresh, timeoutMs, true);
+  }
+  let data = null;
+  try { data = await response.json(); } catch (e) { data = {}; }
+  return { ok: response.ok, status: response.status, data };
 }
 
 // Handle the pending-email poll for a profile Find Email that went to the
