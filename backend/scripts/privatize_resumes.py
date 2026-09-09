@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import urllib.parse
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -63,7 +64,13 @@ def main() -> int:
             logger.warning("%s: file missing at %s", snap.id, path)
             continue
         updates: dict = {}
-        was_public = "storage.googleapis.com" in url and "firebasestorage" not in url
+        # Old public form is host storage.googleapis.com; the token form is
+        # host firebasestorage.googleapis.com. Test the HOST, not the whole
+        # URL: the bucket is named offerloop-native.firebasestorage.app, so a
+        # substring test on the URL called every public link "token form"
+        # and the first live run locked 121 files without rewriting their
+        # links (2026-09-08, Rylan hit AccessDenied in the viewer).
+        was_public = urllib.parse.urlparse(url).netloc == "storage.googleapis.com"
         # Revoke anonymous read on EVERY file, not only those whose stored link
         # is the old public form: the dry run found all 149 links already in
         # token form while the objects themselves could still carry the ACL
