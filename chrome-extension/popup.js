@@ -122,6 +122,16 @@ let currentJobUrl = null;
 let manualInputRequired = false;
 let _actionInProgress = false;
 
+// After the extension is reloaded in chrome://extensions, a side panel that
+// was already open keeps its pixels but loses its extension context: every
+// chrome.* call throws, the first click leaves the in-progress flag stuck,
+// and every click after that silently does nothing. Say so instead.
+function _panelAlive(showFn) {
+  if (chrome.runtime && chrome.runtime.id) return true;
+  try { showFn('Offerloop was updated. Close this panel and open it again.'); } catch (e) {}
+  return false;
+}
+
 // Credits cache — avoid redundant API calls when popup reopens quickly
 let _creditsCacheTime = 0;
 const CREDITS_CACHE_TTL = 120000; // 2 minutes
@@ -864,6 +874,7 @@ function _jobRequestBody() {
 
 async function handleFindRecruiters() {
   if (_actionInProgress) return;
+  if (!_panelAlive(showJobError)) return;
   _actionInProgress = true;
   const btn = document.getElementById('find-recruiters-btn');
   const authData = await chrome.storage.local.get(['authToken']);
@@ -979,6 +990,7 @@ function renderRecruiterResults(result) {
 
 async function handleGenerateCoverLetter() {
   if (_actionInProgress) return;
+  if (!_panelAlive(showJobError)) return;
   _actionInProgress = true;
   const btn = document.getElementById('cover-letter-btn');
   const authData = await chrome.storage.local.get(['authToken']);
@@ -1152,6 +1164,7 @@ function updateCoffeeChatButtonState() {
 
 // Coffee Chat Prep handler - Full workflow (matches website behavior)
 async function handleCoffeeChatPrep() {
+  if (!_panelAlive(showCoffeeChatError)) return;
   const btn = document.getElementById('coffeeChatBtn');
   
   // Get current LinkedIn URL
@@ -1829,8 +1842,10 @@ async function handleSignOut() {
 // Handle Find Email button click
 async function handleFindEmail() {
   if (_actionInProgress) return;
+  if (!_panelAlive(showError)) return;
   _actionInProgress = true;
   if (!currentState.linkedInUrl) {
+    _actionInProgress = false;
     showError('No LinkedIn URL detected. Please navigate to a profile page.');
     return;
   }
