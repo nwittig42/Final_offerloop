@@ -413,7 +413,10 @@ def me():
         'creditsPerSwipe': CREDIT_COSTS['find_contact'],
         'gmailConnected': gmail_connected,
         'gmailAddress': gmail_address,
-        'resume': ({'name': resume_name, 'url': resume_url} if resume_name else None),
+        'resume': (
+            {'name': resume_name, 'url': resume_url, 'thumbUrl': u.get('resumeThumbUrl') or prof.get('resumeThumbUrl') or None}
+            if resume_name else None
+        ),
         'linkedinUrl': u.get('linkedinUrl') or prof.get('linkedinUrl') or '',
         # Phone for pre-filling the auto-apply Application Profile. Same source
         # order job_board.py uses: resume-parsed contact, then the user doc.
