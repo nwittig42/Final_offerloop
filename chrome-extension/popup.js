@@ -4,6 +4,9 @@ console.log('[Offerloop Popup] Loaded');
 // API Configuration
 const API_BASE_URL = 'https://www.offerloop.ai';
 
+// Dev only: skips the sign-in gate so the screens can be worked on without
+// logging in. Must stay false in any shipped build.
+const DEV_BYPASS_AUTH = false;
 
 // Shared job URL patterns — used by detectMode() and isJobUrl()
 const JOB_URL_PATTERNS = [
