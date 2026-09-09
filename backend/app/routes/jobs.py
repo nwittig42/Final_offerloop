@@ -1365,6 +1365,20 @@ def _job_seniority(job: dict) -> str | None:
     return None
 
 
+# Words a student types in a search sentence that never sit in a job title:
+# the ask itself, the level words the app already turned into seniority/type,
+# and time. They used to be required tokens, so "Entry level finance roles in
+# New York" demanded "roles", "level" and "york" in search_terms and found
+# nothing (Rylan 2026-09-08). Dropped before the primary token is chosen.
+_SEARCH_FILLER = frozenset({
+    "role", "roles", "job", "jobs", "position", "positions", "opening", "openings",
+    "opportunity", "opportunities", "entry", "level", "new", "grad", "graduate", "junior",
+    "intern", "interns", "internship", "internships", "full", "part", "time", "remote",
+    "this", "summer", "fall", "spring", "winter", "hiring", "looking", "find", "me", "near",
+    "company", "companies", "firm", "firms", "startup", "startups",
+})
+
+
 def _matches_post_filters(
     job: dict,
     extra_tokens: list[str],
@@ -1377,7 +1391,10 @@ def _matches_post_filters(
         if not isinstance(terms, list):
             return False
         term_set = set(terms)
-        if not all(t in term_set for t in extra_tokens):
+        # Half the extra tokens is enough (rounded up). All of them was the
+        # rule, and one stray word in the sentence emptied the whole search.
+        need = max(1, (len(extra_tokens) + 1) // 2)
+        if sum(1 for t in extra_tokens if t in term_set) < need:
             return False
     if location_q:
         loc = job.get("location") or ""
@@ -1474,6 +1491,9 @@ def search_jobs():
     # Tokenize the user's query. Pick the rarest-looking token (longest)
     # for the Firestore filter so we minimize the post-filter set.
     tokens = build_search_terms(raw_q, None, None)
+    meaningful = [t for t in tokens if t not in _SEARCH_FILLER]
+    if meaningful:
+        tokens = meaningful
     primary_token: str | None = None
     extra_tokens: list[str] = []
     if tokens:
