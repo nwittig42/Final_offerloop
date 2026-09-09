@@ -2346,3 +2346,45 @@ body {
   font-size: 12px;
   color: var(--ink-muted);
 }
+
+/* Tray breathing room (Rylan 2026-09-08: it sat jammed against the tabs
+   and the profile card). */
+.tray {
+  margin: 14px 14px 4px;
+  padding: 10px 12px 8px;
+}
+
+.tray + .tab-content {
+  padding-top: 6px;
+}
+
+.tray__items {
+  gap: 8px;
+}
+
+.tray-pill {
+  padding: 8px 10px;
+  flex-wrap: wrap;
+}
+
+.tray-pill__more {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--indigo-100);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.tray-pill__more a {
+  color: var(--indigo-600);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tray-pill__more a:hover {
+  text-decoration: underline;
+}

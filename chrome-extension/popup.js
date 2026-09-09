@@ -1586,6 +1586,10 @@ async function handleFindEmail() {
     // Show the email; the draft button appears next to it. Pending: show
     // the person now and let the poll fill the address in.
     const contact = response.contact || response;
+    // Keyed by the panel's own URL for this page, not the server's
+    // normalized one: the two can differ by a trailing dash or case, and
+    // a mismatch left cards stuck on "Searching" after the email landed.
+    const pageUrl = currentState.linkedInUrl || '';
     const shown = {
       full_name: contact.full_name,
       firstName: contact.firstName,
@@ -1594,7 +1598,8 @@ async function handleFindEmail() {
       email_source: contact.email_source || '',
       company: contact.company,
       jobTitle: contact.jobTitle || contact.title,
-      linkedinUrl: contact.linkedinUrl || contact.linkedin_url || currentState.linkedInUrl,
+      linkedinUrl: pageUrl || contact.linkedinUrl || contact.linkedin_url,
+      profileUrl: contact.linkedinUrl || contact.linkedin_url || pageUrl,
       draft_url: response.draft_url || contact.draft_url,
       gmail_draft_url: response.gmail_draft_url || contact.gmail_draft_url,
       gmailDraftUrl: response.gmailDraftUrl,
@@ -2481,10 +2486,13 @@ function renderTray() {
       status.textContent = it.statusText || 'No email found.';
     }
     who.append(name, status);
-    if (it.linkedInUrl) {
-      who.title = 'Open their profile';
-      who.addEventListener('click', () => openPersonOnLinkedIn(it.linkedInUrl));
-    }
+    // Tapping the name opens a small detail strip in place (company, the
+    // address, a link to the profile) instead of leaving the page. The
+    // tray is for staying where you are.
+    who.title = 'Details';
+    who.addEventListener('click', () => {
+      trayUpsert({ id: it.id, open: !it.open });
+    });
 
     const actions = document.createElement('div');
     actions.className = 'tray-pill__actions';
@@ -2494,25 +2502,26 @@ function renderTray() {
       dl.href = it.pdfUrl;
       dl.target = '_blank';
       dl.rel = 'noopener';
-      dl.textContent = 'Download';
+      dl.textContent = 'Download PDF';
       actions.appendChild(dl);
     }
     if (it.kind === 'email' && it.status === 'found' && it.person) {
+      // Two states, said plainly: "Write email" runs the draft in the
+      // background right here; "Open email" opens the Gmail draft.
       const draft = document.createElement('button');
       draft.type = 'button';
       draft.className = 'tray-pill__btn';
-      draft.textContent = it.draftUrl ? 'Open draft' : 'Draft';
+      draft.textContent = it.draftUrl ? 'Open email' : (it.writing ? 'Writing…' : 'Write email');
+      draft.disabled = !!it.writing;
       draft.addEventListener('click', async () => {
         if (it.draftUrl) { chrome.tabs.create({ url: it.draftUrl }); return; }
-        draft.disabled = true;
-        draft.textContent = 'Writing…';
+        trayUpsert({ id: it.id, writing: true });
         try {
-          const url = await draftForContact({ ...it.person, email: it.email });
-          trayUpsert({ id: it.id, draftUrl: url });
+          const url = await draftForContact({ ...it.person, email: it.email, linkedinUrl: it.person.profileUrl || it.person.linkedinUrl });
+          trayUpsert({ id: it.id, writing: false, draftUrl: url });
           chrome.tabs.create({ url });
         } catch (e) {
-          draft.disabled = false;
-          draft.textContent = 'Draft';
+          trayUpsert({ id: it.id, writing: false });
         }
       });
       actions.appendChild(draft);
@@ -2528,6 +2537,32 @@ function renderTray() {
     }
 
     pill.append(avatar, who, actions);
+    if (it.open) {
+      const more = document.createElement('div');
+      more.className = 'tray-pill__more';
+      const lines = [];
+      if (it.person && (it.person.jobTitle || it.company)) {
+        lines.push([it.person.jobTitle, it.company].filter(Boolean).join(' · '));
+      } else if (it.company) {
+        lines.push(it.company);
+      }
+      if (it.kind === 'email' && it.status === 'found' && it.email) {
+        lines.push(/catch_all/i.test(it.source || '') ? 'Best match at this company, not verified' : 'Verified address');
+      }
+      lines.forEach((t) => {
+        const p = document.createElement('span');
+        p.textContent = t;
+        more.appendChild(p);
+      });
+      if (it.linkedInUrl) {
+        const a = document.createElement('a');
+        a.href = it.linkedInUrl;
+        a.textContent = 'Open their profile';
+        a.addEventListener('click', (ev) => { ev.preventDefault(); openPersonOnLinkedIn(it.linkedInUrl); });
+        more.appendChild(a);
+      }
+      pill.appendChild(more);
+    }
     list.appendChild(pill);
   });
 }
