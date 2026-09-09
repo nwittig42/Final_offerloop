@@ -85,6 +85,16 @@ async function refreshAuthToken() {
 
 // Listen for extension installation
 chrome.runtime.onInstalled.addListener((details) => {
+  // LinkedIn tabs that were open before an install or update keep running
+  // the old content script (or none). Put the current one in, so the
+  // panel can read the page without a tab refresh.
+  chrome.tabs.query({ url: ['https://www.linkedin.com/*', 'https://linkedin.com/*'] }, (tabs) => {
+    (tabs || []).forEach((t) => {
+      if (!t.id) return;
+      chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content.js'] }).catch(() => {});
+      chrome.scripting.insertCSS({ target: { tabId: t.id }, files: ['content.css'] }).catch(() => {});
+    });
+  });
   if (details.reason === 'install') {
     console.log('[Offerloop Background] Extension installed');
     // Initialize storage

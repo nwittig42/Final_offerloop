@@ -297,40 +297,6 @@ function hideJobError() {
   if (errorDiv) errorDiv.classList.add('hidden');
 }
 
-function showJobResults_legacy(result) {
-  const resultsDiv = document.getElementById('job-results');
-  const detailsDiv = document.getElementById('job-result-details');
-  const linksDiv = document.querySelector('#job-results .result-links');
-
-  if (detailsDiv) {
-    if (result.recruiters && result.recruiters.length > 0) {
-      let text = `Found ${result.recruiters.length} recruiter${result.recruiters.length > 1 ? 's' : ''}`;
-      if (result._savedToTracker) {
-        text += ` • ${result._savedToTracker} saved to Hiring Manager Tracker`;
-      }
-      detailsDiv.textContent = text;
-    } else {
-      detailsDiv.textContent = 'Contact saved to your library';
-    }
-  }
-
-  if (linksDiv && result._savedToTracker) {
-    const trackerP = document.createElement('p');
-    trackerP.textContent = 'Saved to Hiring Manager Tracker. ';
-    const trackerLink = document.createElement('a');
-    trackerLink.href = 'https://www.offerloop.ai/hiring-manager-tracker';
-    trackerLink.target = '_blank';
-    trackerLink.rel = 'noopener';
-    trackerLink.textContent = 'View in Tracker';
-    trackerP.appendChild(trackerLink);
-    if (!linksDiv.querySelector('a[href*="hiring-manager-tracker"]')) {
-      linksDiv.insertBefore(trackerP, linksDiv.firstChild);
-    }
-  }
-
-  if (resultsDiv) resultsDiv.classList.remove('hidden');
-}
-
 function hideAllJobResults() {
   document.getElementById('job-results')?.classList.add('hidden');
   document.getElementById('cover-letter-results')?.classList.add('hidden');
@@ -353,237 +319,10 @@ function truncateUrl(url) {
 // FIND & EMAIL RECRUITERS (URL-FIRST)
 // ============================================
 
-async function handleFindRecruiters_legacy() {
-  if (_actionInProgress) return;
-  _actionInProgress = true;
-  const btn = document.getElementById('find-recruiters-btn');
-
-  // Get auth token
-  const authData = await chrome.storage.local.get(['authToken']);
-  if (!DEV_BYPASS_AUTH && !authData.authToken) {
-    showJobErrorWithSignin('Please sign in to use this feature.');
-    return;
-  }
-
-  // Build request body
-  let requestBody = {};
-
-  if (manualInputRequired) {
-    // Use manual input
-    const data = getManualInputData();
-    if (!data.company) {
-      showJobError('Company name is required');
-      return;
-    }
-    requestBody = {
-      company: data.company,
-      jobTitle: data.jobTitle || undefined,
-      jobDescription: data.jobDescription || undefined,
-      jobUrl: data.jobUrl || undefined
-    };
-  } else {
-    // Use URL - backend will parse
-    requestBody = {
-      jobUrl: currentJobUrl
-    };
-  }
-  
-  // Show loading
-  btn.classList.add('loading');
-  btn.disabled = true;
-  hideJobError();
-  hideAllJobResults();
-  showJobLoading('Finding recruiters...');
-  
-  try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/find-recruiter`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authData.authToken}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    const result = await response.json();
-    
-    if (response.ok && (result.success || result.recruiters)) {
-      // Save recruiters to Hiring Manager Tracker (same as website)
-      if (result.recruiters && result.recruiters.length > 0) {
-        try {
-          const jobTitleForSave = (manualInputRequired ? getManualInputData().jobTitle : null) || result.jobTypeDetected || '';
-          const saveBody = {
-            recruiters: result.recruiters,
-            draftsCreated: result.draftsCreated || [],
-            companyCleaned: result.companyCleaned || '',
-            associatedJobUrl: currentJobUrl || '',
-            associatedJobTitle: jobTitleForSave,
-            jobTitle: jobTitleForSave,
-          };
-          const saveRes = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/save-recruiters`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${authData.authToken}`,
-            },
-            body: JSON.stringify(saveBody),
-          });
-          const saveData = await saveRes.json().catch(() => ({}));
-          if (saveData.saved > 0) {
-            result._savedToTracker = saveData.saved;
-          }
-        } catch (e) {
-          console.warn('[Offerloop Popup] Save to tracker failed:', e);
-        }
-      }
-      showJobResults(result);
-      if (result.creditsRemaining !== undefined) {
-        updateCredits(result.creditsRemaining);
-        _creditsCacheTime = Date.now();
-      }
-    } else if (result.needsManualInput || result.error?.includes('extract') || result.error?.includes('company')) {
-      // Backend couldn't parse URL - show manual form
-      showJobError('Could not extract job details from URL. Please enter manually.');
-      showManualForm(result.partialData);
-    } else {
-      showJobError(result.error || 'Failed to find recruiters. Please try again.');
-    }
-  } catch (error) {
-    console.error('[Offerloop Popup] Find recruiters error:', error);
-    showJobError('Something went wrong. Please try again.');
-  } finally {
-    hideJobLoading();
-    btn.classList.remove('loading');
-    btn.disabled = false;
-    _actionInProgress = false;
-  }
-}
-
 // ============================================
 // GENERATE COVER LETTER (URL-FIRST + DOWNLOAD)
 // ============================================
 
-async function handleGenerateCoverLetter_legacy() {
-  const btn = document.getElementById('cover-letter-btn');
-
-  // Get auth token
-  const authData = await chrome.storage.local.get(['authToken']);
-  if (!DEV_BYPASS_AUTH && !authData.authToken) {
-    showJobErrorWithSignin('Please sign in to use this feature.');
-    return;
-  }
-
-  // Build request body
-  let requestBody = {
-    jobUrl: currentJobUrl
-  };
-  let company = '';
-  let jobTitle = '';
-  
-  if (manualInputRequired) {
-    // Use manual input - job description is required
-    const data = getManualInputData();
-    if (!data.jobDescription) {
-      showJobError('Job description is required for cover letter generation');
-      return;
-    }
-    requestBody = {
-      jobDescription: data.jobDescription,
-      company: data.company || undefined,
-      jobTitle: data.jobTitle || undefined,
-      jobUrl: data.jobUrl || undefined
-    };
-    company = data.company || '';
-    jobTitle = data.jobTitle || '';
-  } else {
-    // Try to scrape job description from the page
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const response = await Promise.race([
-        chrome.tabs.sendMessage(tab.id, { action: 'scrapeJobDescription' }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Content script timeout')), 5000))
-      ]);
-      
-      if (response && response.description && response.description.length > 100) {
-        requestBody = {
-          jobDescription: response.description,
-          jobUrl: currentJobUrl
-        };
-      } else {
-        // No description scraped - need manual input
-        showJobError('Could not extract job description. Please paste it manually.');
-        showManualForm();
-        return;
-      }
-    } catch (e) {
-      console.error('[Offerloop Popup] Scraping failed:', e);
-      // Scraping failed - need manual input
-      showJobError('Could not extract job description. Please paste it manually.');
-      showManualForm();
-      return;
-    }
-  }
-  
-  // Show loading
-  btn.classList.add('loading');
-  btn.disabled = true;
-  hideJobError();
-  hideAllJobResults();
-  showJobLoading('Generating cover letter...');
-  
-  try {
-    const response = await fetchWithTimeout(`${API_BASE_URL}/api/job-board/generate-cover-letter`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authData.authToken}`
-      },
-      body: JSON.stringify(requestBody)
-    });
-    
-    const result = await response.json();
-    console.log('[Offerloop Popup] Cover letter API response:', result);
-    console.log('[Offerloop Popup] coverLetter type:', typeof result.coverLetter);
-    
-    if (response.ok && result.coverLetter) {
-      // Success - download the cover letter as a PDF
-      hideJobLoading();
-      showCoverLetterResults(result, company, jobTitle);
-      downloadCoverLetterAsPDF(result.coverLetter, company, jobTitle);
-
-      if (result.creditsRemaining !== undefined) {
-        updateCredits(result.creditsRemaining);
-        _creditsCacheTime = Date.now();
-      }
-    } else if (response.ok && result.pdfUrl) {
-      // If backend returns PDF URL (future support)
-      hideJobLoading();
-      showCoverLetterResults(result, company, jobTitle);
-      triggerCoverLetterDownload(result.pdfUrl, company, jobTitle);
-
-      if (result.creditsRemaining !== undefined) {
-        updateCredits(result.creditsRemaining);
-        _creditsCacheTime = Date.now();
-      }
-    } else if (result.error?.includes('description') || result.error?.includes('required')) {
-      // Need job description
-      showJobError('Please paste the job description below');
-      showManualForm();
-    } else {
-      showJobError(result.error || 'Failed to generate cover letter. Please try again.');
-    }
-  } catch (error) {
-    console.error('[Offerloop Popup] Cover letter error:', error);
-    showJobError('Something went wrong. Please try again.');
-  } finally {
-    hideJobLoading();
-    btn.classList.remove('loading');
-    btn.disabled = false;
-  }
-}
-
-// The letter's text out of whatever shape the server sent (string, or an
-// object with the body under one of a few keys). Same rules the PDF uses.
 function _coverLetterText(cl) {
   if (!cl) return '';
   if (typeof cl === 'string') return cl.trim();
@@ -2190,6 +1929,7 @@ async function init() {
   initEventListeners();
   initTabSwitcher();
   initJobTabListeners();
+  await trayRestore();
   
   // Get current tab URL and detect mode
   try {
@@ -2810,16 +2550,49 @@ function startEmailPolling(shown) {
 // every tab. Session-only; pills go when dismissed or on Clear done.
 const trayItems = new Map();
 
+// The tray outlives the panel (2026-09-08): closing the side panel used to
+// drop every queued search from view while the server kept working. Items
+// are mirrored to chrome.storage.session (cleared when Chrome quits) and
+// restored on open; pending ones resume polling.
+const _traySave = () => {
+  try {
+    const plain = Array.from(trayItems.values()).map((it) => {
+      const { onDone, writing, open, ...rest } = it;
+      if (rest.person && typeof rest.person === 'object') {
+        const { onDone: _od, ...person } = rest.person;
+        rest.person = person;
+      }
+      return rest;
+    });
+    chrome.storage.session?.set({ trayItems: plain });
+  } catch (e) { /* storage.session missing on very old Chrome */ }
+};
+
+async function trayRestore() {
+  try {
+    const { trayItems: saved } = await chrome.storage.session.get(['trayItems']);
+    (saved || []).forEach((it) => trayItems.set(it.id, it));
+    renderTray();
+    (saved || []).forEach((it) => {
+      if (it.kind === 'email' && it.status === 'pending' && it.person && it.person.contactId) {
+        startEmailPolling({ ...it.person, pending: true, contactId: it.person.contactId });
+      }
+    });
+  } catch (e) { /* nothing saved */ }
+}
+
 function trayUpsert(patch) {
   if (!patch || !patch.id) return;
   const cur = trayItems.get(patch.id) || {};
   trayItems.set(patch.id, { ...cur, ...patch });
   renderTray();
+  _traySave();
 }
 
 function trayRemove(id) {
   trayItems.delete(id);
   renderTray();
+  _traySave();
 }
 
 function _initialsOf(name) {
@@ -2956,6 +2729,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .filter((it) => it.status !== 'pending')
       .forEach((it) => trayItems.delete(it.id));
     renderTray();
+    _traySave();
   });
 });
 
@@ -3516,8 +3290,22 @@ async function loadProfileCompanyPeople(tab) {
       }
     }
   } catch (e) {
-    // Content script not ready on this page yet; nothing to show.
-    return;
+    // Content script not ready on this page yet; the shelf may still know.
+  }
+  if (!company && currentState.linkedInUrl) {
+    // The shelf (free, no vendor call): anyone a student found before
+    // carries company, title and photo. Covers profile layouts the page
+    // reader cannot parse.
+    try {
+      const glance = await apiCall(`/api/contacts/profile-glance?url=${encodeURIComponent(currentState.linkedInUrl)}`, 'GET', undefined, 15000);
+      if (glance.ok && glance.data && glance.data.company) {
+        company = String(glance.data.company).trim();
+        if (!currentState.profileCompanyLogo && glance.data.logo_url) {
+          currentState.profileCompanyLogo = glance.data.logo_url;
+          applyResultAvatar();
+        }
+      }
+    } catch (e) { /* not on the shelf */ }
   }
   if (!company) return;
   block.classList.remove('hidden');
