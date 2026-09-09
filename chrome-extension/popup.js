@@ -987,6 +987,24 @@ function renderRecruiterResults(result) {
       }
     }
     list.appendChild(el);
+    // Into the tray as well (2026-09-08). The next action on this posting
+    // (a cover letter, say) clears the result card, and the people you just
+    // paid to find were gone from view. In the tray they stay reachable
+    // with the same Write email / Open email actions.
+    const displayName = `${row.firstName} ${row.lastName}`.trim() || row.title;
+    trayUpsert({
+      id: `recruiter:${(row.email || row.linkedinUrl || displayName).toLowerCase()}`,
+      kind: 'email',
+      status: row.email ? 'found' : 'miss',
+      statusText: row.email ? '' : 'No email on file',
+      name: displayName,
+      company: row.company || '',
+      linkedInUrl: row.linkedinUrl || '',
+      email: row.email || '',
+      draftUrl: draftUrl || '',
+      person: { firstName: row.firstName, lastName: row.lastName, jobTitle: row.title,
+                company: row.company, linkedinUrl: row.linkedinUrl, email: row.email },
+    });
   });
   card.classList.remove('hidden');
 }
