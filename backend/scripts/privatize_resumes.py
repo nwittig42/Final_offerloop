@@ -64,12 +64,15 @@ def main() -> int:
             continue
         updates: dict = {}
         was_public = "storage.googleapis.com" in url and "firebasestorage" not in url
-        if was_public:
-            if not args.dry_run and revoke_public(blob):
-                public_fixed += 1
-            if not args.dry_run:
-                updates["resumeUrl"] = token_url(blob)
-                rewritten += 1
+        # Revoke anonymous read on EVERY file, not only those whose stored link
+        # is the old public form: the dry run found all 149 links already in
+        # token form while the objects themselves could still carry the ACL
+        # make_public() added. Idempotent; counts only real changes.
+        if not args.dry_run and revoke_public(blob):
+            public_fixed += 1
+        if was_public and not args.dry_run:
+            updates["resumeUrl"] = token_url(blob)
+            rewritten += 1
         if not u.get("resumeThumbUrl") and path.lower().endswith(".pdf"):
             if args.dry_run:
                 thumbed += 1
