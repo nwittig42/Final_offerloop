@@ -21,17 +21,23 @@ resume_bp = Blueprint('resume', __name__, url_prefix='/api')
 
 
 def upload_resume_to_firebase_storage(user_id, file):
-    """Upload resume to Firebase Storage"""
+    """Upload the resume PRIVATELY and return (url, thumb_url).
+
+    2026-09-08: this used to call blob.make_public(), which left every resume
+    readable by anyone with the path while the app promised "only you can
+    see it". The token-secured Firebase URL keeps every existing reader
+    (Gmail attachments, auto-apply, the website) working without a public
+    ACL, and a page-one thumbnail is rendered once so previews never load
+    the whole PDF. See app/services/resume_storage.py.
+    """
     try:
-        from firebase_admin import storage
-        bucket = storage.bucket()
-        blob = bucket.blob(f'resumes/{user_id}/{file.filename}')
-        blob.upload_from_file(file)
-        blob.make_public()
-        return blob.public_url
+        from app.services.resume_storage import store_resume
+        data = file.read()
+        out = store_resume(user_id, file.filename, data, getattr(file, 'mimetype', '') or '')
+        return out.get('url'), out.get('thumb_url')
     except Exception as e:
         print(f"Storage upload failed: {e}")
-        return None
+        return None, None
 
 
 def extract_storage_path_from_url(storage_url):
@@ -149,6 +155,9 @@ def save_resume_to_firebase(user_id, resume_text, resume_url, parsed_info=None, 
                 'resumeUploadedAt': resume_metadata.get('resumeUploadedAt'),
                 'resumeCapabilities': resume_metadata.get('resumeCapabilities', {})
             })
+            # Page-one preview image (token URL), absent for DOCX uploads.
+            if resume_metadata.get('resumeThumbUrl'):
+                update_data['resumeThumbUrl'] = resume_metadata['resumeThumbUrl']
             print(f"[Resume] Saving capabilities: {resume_metadata.get('resumeCapabilities', {}).get('recommendedMode', 'unknown')}")
         
         # Save parsed resume data with full structure (v2 format)
@@ -275,7 +284,7 @@ def parse_resume():
                         # STEP 4A: Upload file to Firebase Storage
                         print("\n📤 Uploading to Firebase Storage...")
                         file.seek(0)  # Reset file pointer for re-reading
-                        resume_url = upload_resume_to_firebase_storage(user_id, file)
+                        resume_url, resume_thumb_url = upload_resume_to_firebase_storage(user_id, file)
                         
                         if not resume_url:
                             print("⚠️  File upload failed, continuing without URL")
@@ -287,6 +296,8 @@ def parse_resume():
                             filename=file.filename,
                             extension=extension
                         )
+                        if resume_thumb_url:
+                            resume_metadata['resumeThumbUrl'] = resume_thumb_url
                         
                         # STEP 4C: Save both text, URL, parsed data, and capabilities to Firebase
                         print("\n💾 Saving to Firestore...")
@@ -388,6 +399,11 @@ def delete_resume():
                 except Exception as e:
                     print(f"[Resume] Warning: Failed to delete storage file {url[:50] if url else 'None'}...: {e}")
                     # Continue even if storage deletion fails
+        try:
+            from app.services.resume_storage import delete_thumbnail
+            delete_thumbnail(user_id)
+        except Exception as e:
+            print(f"[Resume] Warning: thumbnail delete skipped: {e}")
         
         # 2. Delete ALL resume fields from Firestore using DELETE_FIELD
         # This completely removes the fields instead of setting them to null
@@ -396,6 +412,7 @@ def delete_resume():
             'resumeParsed': firestore.DELETE_FIELD,
             'resumeText': firestore.DELETE_FIELD,
             'resumeUrl': firestore.DELETE_FIELD,
+            'resumeThumbUrl': firestore.DELETE_FIELD,
             'resumeFileName': firestore.DELETE_FIELD,
             'resumeUpdatedAt': firestore.DELETE_FIELD,
             'resumeParseVersion': firestore.DELETE_FIELD,

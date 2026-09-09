@@ -82,24 +82,25 @@ def _thin_check(resume: CanonicalResume):
 
 
 def _upload_pdf(uid: str, pdf_bytes: bytes):
-    """Upload the generated PDF to the same bucket/path uploaded resumes use."""
+    """Upload the generated PDF privately to the same bucket/path uploaded
+    resumes use. Returns (url, thumb_url); see app/services/resume_storage.py
+    for why this no longer calls make_public (2026-09-08)."""
     try:
-        from firebase_admin import storage
-        bucket = storage.bucket()
-        blob = bucket.blob(f'resumes/{uid}/{RESUME_FILENAME}')
-        blob.upload_from_string(pdf_bytes, content_type='application/pdf')
-        blob.make_public()
-        return blob.public_url
+        from app.services.resume_storage import store_resume
+        out = store_resume(uid, RESUME_FILENAME, pdf_bytes, 'application/pdf')
+        return out.get('url'), out.get('thumb_url')
     except Exception as e:
         print(f"[ResumeBuilder] Storage upload failed: {e}")
-        return None
+        return None, None
 
 
 def _render_save_respond(uid: str, resume: CanonicalResume):
     result = render_one_page(resume)
-    resume_url = _upload_pdf(uid, result.pdf_bytes)
+    resume_url, thumb_url = _upload_pdf(uid, result.pdf_bytes)
     parsed = canonical_to_parsed_info(resume)
     metadata = build_resume_metadata(url=resume_url or '', filename=RESUME_FILENAME, extension='pdf')
+    if thumb_url:
+        metadata['resumeThumbUrl'] = thumb_url
     save_resume_to_firebase(uid, canonical_to_text(resume), resume_url, parsed, metadata)
     return jsonify({'success': True, 'resumeUrl': resume_url, 'parsed': parsed})
 
