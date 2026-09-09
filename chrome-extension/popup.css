@@ -2121,3 +2121,53 @@ body {
   width: 13px;
   height: 13px;
 }
+
+/* Find similar row: the eye-catcher. Gold frame, the company logo at
+   left, gold arrow. Scout stays on the avatar. */
+.similar-toggle {
+  padding: 10px 12px;
+  border: 1.5px solid var(--gold);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, #FFFDF6, #FFF8E6);
+  box-shadow: 0 0 0 3px var(--gold-soft);
+  color: var(--ink);
+}
+
+.similar-toggle:hover {
+  box-shadow: 0 0 0 4px var(--gold-soft);
+}
+
+.similar-toggle__logo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #FFFFFF;
+  border: 1px solid var(--gold-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.similar-toggle__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 2px;
+}
+
+.similar-toggle__label {
+  flex: 1;
+  text-align: left;
+}
+
+.similar-toggle__chevron {
+  color: var(--gold);
+}
+
+/* The avatar is Scout again; the earlier logo-ring rule is inert. */
+.result-card__scout-avatar--logo {
+  border: 1.5px solid var(--indigo-200);
+  box-shadow: 0 2px 6px rgba(74, 96, 168, 0.16);
+}

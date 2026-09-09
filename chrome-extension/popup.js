@@ -1304,8 +1304,12 @@ function showResults(contact) {
     elements.resultStatus.classList.add('pending');
     if (metaEl) metaEl.textContent = 'Finding their email';
   } else if (contact.email) {
-    elements.resultStatus.textContent = 'Found';
-    if (metaEl) metaEl.textContent = 'Ready to reach out';
+    // Catch-all domains (Apple, Qualcomm, most of big tech) accept any
+    // address, so nobody can verify one. When the server serves those, say
+    // "Likely" instead of "Found" so the student knows what they have.
+    const likely = /catch_all/i.test(contact.email_source || '');
+    elements.resultStatus.textContent = likely ? 'Likely' : 'Found';
+    if (metaEl) metaEl.textContent = likely ? 'Best match, not verified' : 'Ready to reach out';
   } else {
     elements.resultStatus.textContent = 'No Email';
     elements.resultStatus.classList.add('no-email');
@@ -1336,29 +1340,28 @@ function showResults(contact) {
   primeSimilarSection(contact);
 }
 
-// The result card's avatar: the person's company logo in a gold ring when
-// the page gave us one, Scout otherwise.
+// The company logo lives on the "Find similar at X" row (gold frame, gold
+// arrow), the eye-catcher under the found email. Scout keeps the avatar.
 let _pendingStagesStop = null;
 
 function applyResultAvatar() {
-  const wrap = document.getElementById('resultAvatar');
-  const img = document.getElementById('resultAvatarImg');
+  const wrap = document.getElementById('similarToggleLogo');
+  const img = wrap ? wrap.querySelector('img') : null;
   if (!wrap || !img) return;
   const logo = (currentState.profileCompanyLogo || '').trim();
   if (logo) {
     if (img.getAttribute('src') !== logo) {
       img.onerror = () => {
         img.onerror = null;
-        img.src = 'images/yeti-mascot.png';
-        wrap.classList.remove('result-card__scout-avatar--logo');
+        wrap.classList.add('hidden');
       };
       img.src = logo;
     }
-    wrap.classList.add('result-card__scout-avatar--logo');
+    wrap.classList.remove('hidden');
   } else {
     img.onerror = null;
-    if (!/yeti-mascot/.test(img.getAttribute('src') || '')) img.src = 'images/yeti-mascot.png';
-    wrap.classList.remove('result-card__scout-avatar--logo');
+    img.removeAttribute('src');
+    wrap.classList.add('hidden');
   }
 }
 
@@ -1576,6 +1579,7 @@ async function handleFindEmail() {
       firstName: contact.firstName,
       lastName: contact.lastName,
       email: contact.email,
+      email_source: contact.email_source || '',
       company: contact.company,
       jobTitle: contact.jobTitle || contact.title,
       linkedinUrl: contact.linkedinUrl || contact.linkedin_url || currentState.linkedInUrl,
@@ -2362,6 +2366,7 @@ function startEmailPolling(shown) {
     if (res.status === 'found' && res.email) {
       shown.pending = false;
       shown.email = res.email;
+      shown.email_source = res.source || '';
       if (stillHere) showResults(shown);
     } else {
       shown.pending = false;
