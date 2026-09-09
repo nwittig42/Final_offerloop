@@ -525,7 +525,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parts0 = self.path.split("?")[0].strip("/").split("/")
         host = (self.headers.get("Host") or "").split(":")[0].lower()
-        if host.startswith("go.") and parts0 and parts0[0] and parts0[0] != "go":
+        if host.startswith("go.") and parts0 and parts0[0] and parts0[0] not in ("go", "qr", "health"):
             parts0 = ["go"] + parts0          # go.offerloop.ai/josiah == studio.offerloop.ai/go/josiah
         if host.startswith("go.") and (not parts0 or not parts0[0]):
             self.send_response(302); self.send_header("Location", "https://offerloop.ai/"); self.end_headers(); return
