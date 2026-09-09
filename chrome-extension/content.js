@@ -45,6 +45,21 @@ function getProfileCurrentCompany() {
       }
       if (lines.length) return lines[0];
     }
+    // LinkedIn's 2026 profile pages use scrambled class names and can
+    // drop the anchors above. Two class-free reads: the page's own meta
+    // description ("... · Experience: Acme · Education: ...") and the
+    // embedded profile data, where the current position's companyName
+    // comes first.
+    const meta = (document.querySelector('meta[name="description"]')?.content
+      || document.querySelector('meta[property="og:description"]')?.content || '');
+    const m = meta.match(/Experience:\s*([^·|]+?)\s*(?:·|$)/);
+    if (m && m[1].trim()) return m[1].trim();
+    for (const code of Array.from(document.querySelectorAll('code')).slice(0, 60)) {
+      const t = code.textContent || '';
+      if (t.length < 200 || !t.includes('"companyName"')) continue;
+      const cm = t.match(/"companyName"\s*:\s*"([^"]{1,80})"/);
+      if (cm && cm[1].trim()) return cm[1].replace(/\\u0026/g, '&').trim();
+    }
   } catch (e) {
     console.warn('[Offerloop] company scrape failed:', e);
   }

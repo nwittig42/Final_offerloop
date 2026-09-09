@@ -980,3 +980,35 @@ def linkedin_import_email_status(contact_id):
     except Exception as e:
         print(f"[EmailStatus] contact update failed for {contact_id}: {e}")
     return jsonify({'status': 'miss', 'email': None, 'source': None, 'refunded': refunded}), 200
+
+
+# ── Profile glance (2026-09-08) ────────────────────────────────────────
+# The extension's profile page asks the page for the person's company to
+# list their colleagues. LinkedIn's 2026 layouts hide that behind scrambled
+# class names, so the panel also asks the shelf: anyone a student found
+# before carries company, title and photo. Free, no vendor call, no charge.
+@linkedin_import_bp.route('/profile-glance', methods=['GET'])
+@require_firebase_auth
+def profile_glance():
+    try:
+        from ..services.email_fast import linkedin_slug
+        from ..services.firm_cache.schema import FIRM_EMPLOYEES_COLLECTION
+        slug = linkedin_slug(request.args.get('url') or '')
+        db = get_db()
+        if not slug or db is None:
+            return jsonify({"found": False}), 200
+        snap = db.collection(FIRM_EMPLOYEES_COLLECTION).document(slug).get()
+        if not getattr(snap, "exists", False):
+            return jsonify({"found": False}), 200
+        d = snap.to_dict() or {}
+        return jsonify({
+            "found": True,
+            "name": d.get("name") or "",
+            "company": d.get("company_display") or "",
+            "title": d.get("headline") or "",
+            "photo_url": d.get("photo_url") or "",
+            "logo_url": "",
+        }), 200
+    except Exception as e:
+        print(f"[LinkedInImport] profile-glance failed: {e}")
+        return jsonify({"found": False}), 200

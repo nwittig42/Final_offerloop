@@ -1297,6 +1297,37 @@ def find_recruiters(
             _fe_need = [c for c in final_recruiters
                         if not (c.get("EmailVerified") or c.get("email_verified"))]
             if _fe_need:
+                # Hunter first (2026-09-08): one database, 2 to 3 seconds each,
+                # in parallel, accepted at confidence 90+. Whoever it finds
+                # skips the waterfall. Same ladder as the website Find, the
+                # deck reveal and the extension (email_fast).
+                try:
+                    from app.services import email_fast as _ef
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
+                    def _hunt(_c):
+                        return _ef.hunter_email(
+                            (_c.get("FirstName") or "").strip(),
+                            (_c.get("LastName") or "").strip(),
+                            (_c.get("Company") or cleaned_company or "").strip(),
+                        )
+                    with _TPE(max_workers=max(1, min(8, len(_fe_need)))) as _ex:
+                        _hunter_hits = list(_ex.map(_hunt, _fe_need))
+                    _found = 0
+                    for _c, _h in zip(_fe_need, _hunter_hits):
+                        if _h and _h.get("email"):
+                            _c["Email"] = _h["email"]
+                            _c["WorkEmail"] = _h["email"]
+                            _c["EmailSource"] = "hunter_finder"
+                            _c["email_source"] = "hunter_finder"
+                            _c["EmailVerified"] = False
+                            _c["EmailConfidenceScore"] = int(_h.get("confidence") or 0)
+                            _found += 1
+                    print(f"[RecruiterFinder] Hunter fast rung: {_found}/{len(_fe_need)} found")
+                    _fe_need = [c for c in _fe_need if not (c.get("Email") or "").strip()
+                                or c.get("Email") == "Not available"]
+                except Exception:
+                    print(f"[RecruiterFinder] Hunter fast rung errored; everyone goes to FullEnrich")
+            if _fe_need:
                 try:
                     from . import fullenrich_client
                     from app.extensions import get_db as _fe_get_db
@@ -2190,6 +2221,37 @@ def find_hiring_manager(
         _fe_need = ([c for c in final_hiring_managers
                      if not (c.get("EmailVerified") or c.get("email_verified"))]
                     if allow_vendor_spend else [])
+        if _fe_need:
+            # Hunter first (2026-09-08): one database, 2 to 3 seconds each,
+            # in parallel, accepted at confidence 90+. Whoever it finds
+            # skips the waterfall. Same ladder as the website Find, the
+            # deck reveal and the extension (email_fast).
+            try:
+                from app.services import email_fast as _ef
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                def _hunt(_c):
+                    return _ef.hunter_email(
+                        (_c.get("FirstName") or "").strip(),
+                        (_c.get("LastName") or "").strip(),
+                        (_c.get("Company") or cleaned_company or "").strip(),
+                    )
+                with _TPE(max_workers=max(1, min(8, len(_fe_need)))) as _ex:
+                    _hunter_hits = list(_ex.map(_hunt, _fe_need))
+                _found = 0
+                for _c, _h in zip(_fe_need, _hunter_hits):
+                    if _h and _h.get("email"):
+                        _c["Email"] = _h["email"]
+                        _c["WorkEmail"] = _h["email"]
+                        _c["EmailSource"] = "hunter_finder"
+                        _c["email_source"] = "hunter_finder"
+                        _c["EmailVerified"] = False
+                        _c["EmailConfidenceScore"] = int(_h.get("confidence") or 0)
+                        _found += 1
+                print(f"[HiringManagerFinder] Hunter fast rung: {_found}/{len(_fe_need)} found")
+                _fe_need = [c for c in _fe_need if not (c.get("Email") or "").strip()
+                            or c.get("Email") == "Not available"]
+            except Exception:
+                print(f"[HiringManagerFinder] Hunter fast rung errored; everyone goes to FullEnrich")
         if _fe_need:
             try:
                 from . import fullenrich_client
