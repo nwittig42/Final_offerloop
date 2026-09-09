@@ -475,7 +475,11 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
           : (typeof r === 'string' ? r : ''))
         .map((s) => s.trim())
         .filter(Boolean);
+      const reasonTypes = (Array.isArray(c.reasons) ? c.reasons : [])
+        .map((r) => (r && typeof r === 'object' ? (r.type || '') : ''))
+        .filter(Boolean);
       return {
+        reasonTypes,
         candidateId: p.id || '',
         firstName: p.firstName || '',
         lastName: p.lastName || '',

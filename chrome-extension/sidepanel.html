@@ -45,6 +45,16 @@
     <!-- ============================ Content ============================ -->
     <main class="content">
 
+      <!-- In progress tray: email searches and meeting preps keep going while
+           you browse; each lands here as a pill you can act on or dismiss. -->
+      <div id="tray" class="tray hidden">
+        <div class="tray__header">
+          <span class="tray__title">In progress</span>
+          <button id="trayClear" type="button" class="tray__clear">Clear done</button>
+        </div>
+        <div id="trayItems" class="tray__items" role="list"></div>
+      </div>
+
       <!-- ====================== Contact Tab ====================== -->
       <div class="tab-content" id="contact-tab">
 

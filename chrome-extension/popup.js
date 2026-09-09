@@ -1094,8 +1094,20 @@ function showCoffeeChatResults(data) {
   if (data.pdfUrl && downloadLink) {
     downloadLink.href = data.pdfUrl;
   }
-  
+
   if (resultsDiv) resultsDiv.style.display = 'block';
+
+  // Into the tray as well, so the prep stays reachable after you move on
+  // to the next person and this card leaves the main area.
+  try {
+    const cd = data.contactData || {};
+    const fullName = cd.name || `${cd.firstName || ''} ${cd.lastName || ''}`.trim() || 'Meeting prep';
+    trayUpsert({
+      id: `prep:${data.pdfUrl || fullName}`, kind: 'prep', status: 'found',
+      name: fullName, company: cd.company || '', pdfUrl: data.pdfUrl || '',
+      linkedInUrl: currentState.linkedInUrl || '',
+    });
+  } catch (e) { /* tray is a convenience */ }
 }
 
 function hideCoffeeChatResults() {
@@ -1590,8 +1602,17 @@ async function handleFindEmail() {
       contactId: response.contact_id || '',
     };
     showResults(shown);
+    cardsByUrl[shown.linkedinUrl || currentState.linkedInUrl || ''] = shown;
     if (shown.pending && shown.contactId) {
       startEmailPolling(shown);
+    } else if (shown.email && shown.contactId) {
+      // Instant finds go in the tray too, so a queue of finds reads as one list.
+      trayUpsert({
+        id: shown.contactId, kind: 'email', status: 'found',
+        name: shown.full_name || `${shown.firstName || ''} ${shown.lastName || ''}`.trim(),
+        company: shown.company || '', linkedInUrl: shown.linkedinUrl,
+        email: shown.email, source: shown.email_source || '', person: shown,
+      });
     }
 
   } catch (error) {
@@ -1694,6 +1715,21 @@ async function checkAndShowContent() {
   
   console.log('[Offerloop Popup] On LinkedIn profile:', linkedInUrl);
   showSection('profile');
+
+  // A new person: the previous person's result card and prep card leave
+  // the main area (they live on in the tray). Coming back to a person whose
+  // card we still have restores it.
+  const priorUrl = currentState.lastFound && currentState.lastFound.linkedinUrl;
+  if (priorUrl && priorUrl !== linkedInUrl) {
+    elements.resultsSection?.classList.add('hidden');
+    elements.errorSection?.classList.add('hidden');
+    hideCoffeeChatResults();
+    currentState.lastFound = null;
+  }
+  const savedCard = cardsByUrl[linkedInUrl];
+  if (savedCard && (!currentState.lastFound || currentState.lastFound.linkedinUrl !== linkedInUrl)) {
+    showResults(savedCard);
+  }
 
   // Update UI with LinkedIn URL
   if (elements.profileUrl && linkedInUrl) {
@@ -2320,66 +2356,190 @@ async function draftForContact(person) {
   return response.gmail_draft_url || 'https://mail.google.com/mail/u/0/#drafts';
 }
 
-// ── Pending email: poll until FullEnrich lands, then fill the card in ──
-// One poll at a time. Survives tab changes (the result belongs to the
-// profile it was started on); the card is only refreshed when that profile
-// is still the one on screen.
-const emailPoll = { timer: null, contactId: '', linkedInUrl: '', tries: 0 };
+// ── Pending emails: poll until FullEnrich lands, as many at once as you
+// like (2026-09-08). Each search is its own job on the server and its own
+// poll here. The card is refreshed only when its profile is on screen; the
+// tray shows every job wherever you are, so you can queue a few and keep
+// browsing.
+const emailPolls = new Map(); // contactId -> { timer, tries, shown }
+const cardsByUrl = {};        // profile URL -> the shown card, restored on return
 const EMAIL_POLL_EVERY_MS = 5000;
 const EMAIL_POLL_MAX_TRIES = 84; // seven minutes, the server's own ceiling
 
-function stopEmailPolling() {
-  if (emailPoll.timer) clearInterval(emailPoll.timer);
-  emailPoll.timer = null;
-  emailPoll.contactId = '';
-  emailPoll.tries = 0;
+function stopEmailPolling(contactId) {
+  const job = emailPolls.get(contactId);
+  if (job && job.timer) clearInterval(job.timer);
+  emailPolls.delete(contactId);
 }
 
 function startEmailPolling(shown) {
-  stopEmailPolling();
-  emailPoll.contactId = shown.contactId;
-  emailPoll.linkedInUrl = shown.linkedinUrl || currentState.linkedInUrl || '';
-  emailPoll.tries = 0;
+  const contactId = shown.contactId;
+  if (!contactId) return;
+  stopEmailPolling(contactId);
+  const linkedInUrl = shown.linkedinUrl || currentState.linkedInUrl || '';
+  shown.linkedinUrl = linkedInUrl;
+  cardsByUrl[linkedInUrl] = shown;
+  trayUpsert({
+    id: contactId, kind: 'email', status: 'pending',
+    name: shown.full_name || `${shown.firstName || ''} ${shown.lastName || ''}`.trim() || 'Someone',
+    company: shown.company || '', linkedInUrl, person: shown,
+  });
+  const job = { timer: null, tries: 0, shown };
   const tick = async () => {
-    if (!emailPoll.contactId) return;
-    emailPoll.tries += 1;
+    if (!emailPolls.has(contactId)) return;
+    job.tries += 1;
     let res = null;
     try {
       res = await chrome.runtime.sendMessage({
-        action: 'emailStatus',
-        contactId: emailPoll.contactId,
-        authToken: currentState.authToken,
+        action: 'emailStatus', contactId, authToken: currentState.authToken,
       });
     } catch (e) {
       res = null;
     }
-    if (!res || res.error) {
-      if (emailPoll.tries >= EMAIL_POLL_MAX_TRIES) stopEmailPolling();
+    if (!res || res.error || res.status === 'pending') {
+      if (job.tries >= EMAIL_POLL_MAX_TRIES) {
+        stopEmailPolling(contactId);
+        trayUpsert({ id: contactId, status: 'miss', statusText: 'Took too long. Try again later.' });
+      }
       return;
     }
-    if (res.status === 'pending') {
-      if (emailPoll.tries >= EMAIL_POLL_MAX_TRIES) stopEmailPolling();
-      return;
-    }
-    stopEmailPolling();
-    const stillHere = (currentState.linkedInUrl || '') === emailPoll.linkedInUrl;
+    stopEmailPolling(contactId);
+    const stillHere = (currentState.linkedInUrl || '') === linkedInUrl;
+    shown.pending = false;
     if (res.status === 'found' && res.email) {
-      shown.pending = false;
       shown.email = res.email;
       shown.email_source = res.source || '';
-      if (stillHere) showResults(shown);
+      trayUpsert({ id: contactId, status: 'found', email: res.email, source: res.source || '' });
     } else {
-      shown.pending = false;
       shown.email = '';
       shown.refunded = !!res.refunded;
-      if (stillHere) showResults(shown);
+      trayUpsert({ id: contactId, status: 'miss', statusText: res.refunded ? 'No email. Credits refunded.' : 'No email found.' });
       _creditsCacheTime = 0;
       refreshCredits().catch(() => {});
     }
+    if (stillHere) showResults(shown);
   };
-  emailPoll.timer = setInterval(tick, EMAIL_POLL_EVERY_MS);
+  job.timer = setInterval(tick, EMAIL_POLL_EVERY_MS);
+  emailPolls.set(contactId, job);
   setTimeout(tick, 2500);
 }
+
+// ── The tray ───────────────────────────────────────────────────────────
+// Pills for background work: email searches (pending / found / miss) and
+// finished meeting preps. Lives above the tab content, so it is visible on
+// every tab. Session-only; pills go when dismissed or on Clear done.
+const trayItems = new Map();
+
+function trayUpsert(patch) {
+  if (!patch || !patch.id) return;
+  const cur = trayItems.get(patch.id) || {};
+  trayItems.set(patch.id, { ...cur, ...patch });
+  renderTray();
+}
+
+function trayRemove(id) {
+  trayItems.delete(id);
+  renderTray();
+}
+
+function _initialsOf(name) {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+  const s = ((parts[0] || ' ')[0] + (parts[1] || ' ')[0]).toUpperCase().trim();
+  return s || '?';
+}
+
+function renderTray() {
+  const tray = document.getElementById('tray');
+  const list = document.getElementById('trayItems');
+  if (!tray || !list) return;
+  const items = Array.from(trayItems.values());
+  tray.classList.toggle('hidden', items.length === 0);
+  list.innerHTML = '';
+  items.forEach((it) => {
+    const pill = document.createElement('div');
+    pill.className = `tray-pill tray-pill--${it.status || 'pending'}`;
+    pill.setAttribute('role', 'listitem');
+
+    const avatar = document.createElement('span');
+    avatar.className = 'tray-pill__avatar';
+    avatar.textContent = it.kind === 'prep' ? 'MP' : _initialsOf(it.name);
+
+    const who = document.createElement('div');
+    who.className = 'tray-pill__who';
+    const name = document.createElement('span');
+    name.className = 'tray-pill__name';
+    name.textContent = it.name || 'Someone';
+    const status = document.createElement('span');
+    status.className = 'tray-pill__status';
+    if (it.kind === 'prep') {
+      status.textContent = it.company ? `Meeting prep ready · ${it.company}` : 'Meeting prep ready';
+    } else if (it.status === 'pending') {
+      status.textContent = 'Finding their email';
+    } else if (it.status === 'found') {
+      status.textContent = it.email + (/catch_all/i.test(it.source || '') ? ' · likely' : '');
+    } else {
+      status.textContent = it.statusText || 'No email found.';
+    }
+    who.append(name, status);
+    if (it.linkedInUrl) {
+      who.title = 'Open their profile';
+      who.addEventListener('click', () => openPersonOnLinkedIn(it.linkedInUrl));
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'tray-pill__actions';
+    if (it.kind === 'prep' && it.pdfUrl) {
+      const dl = document.createElement('a');
+      dl.className = 'tray-pill__btn';
+      dl.href = it.pdfUrl;
+      dl.target = '_blank';
+      dl.rel = 'noopener';
+      dl.textContent = 'Download';
+      actions.appendChild(dl);
+    }
+    if (it.kind === 'email' && it.status === 'found' && it.person) {
+      const draft = document.createElement('button');
+      draft.type = 'button';
+      draft.className = 'tray-pill__btn';
+      draft.textContent = it.draftUrl ? 'Open draft' : 'Draft';
+      draft.addEventListener('click', async () => {
+        if (it.draftUrl) { chrome.tabs.create({ url: it.draftUrl }); return; }
+        draft.disabled = true;
+        draft.textContent = 'Writing…';
+        try {
+          const url = await draftForContact({ ...it.person, email: it.email });
+          trayUpsert({ id: it.id, draftUrl: url });
+          chrome.tabs.create({ url });
+        } catch (e) {
+          draft.disabled = false;
+          draft.textContent = 'Draft';
+        }
+      });
+      actions.appendChild(draft);
+    }
+    if (it.status !== 'pending') {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'tray-pill__x';
+      x.setAttribute('aria-label', 'Dismiss');
+      x.textContent = '×';
+      x.addEventListener('click', () => trayRemove(it.id));
+      actions.appendChild(x);
+    }
+
+    pill.append(avatar, who, actions);
+    list.appendChild(pill);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('trayClear')?.addEventListener('click', () => {
+    Array.from(trayItems.values())
+      .filter((it) => it.status !== 'pending')
+      .forEach((it) => trayItems.delete(it.id));
+    renderTray();
+  });
+});
 
 // Profile page, step two: the Draft button under the found email.
 async function handleDraftEmail() {
@@ -2682,8 +2842,46 @@ function renderCompanyRows(rows, prefix = 'company') {
   // Deck rows carry the ranker's reason as their caption; no bucket caption.
   // Five up front, the rest behind one line: shorter list, same data, no
   // extra request (rows are already in hand).
-  const els = rows.map((row) => buildSimilarRowEl({ ...row, category: '' }));
+  // Tier labels (Company tab, unfiltered view): alumni first, then people
+  // in recruiting, then everyone else, each group in ranked order. A
+  // typed role or chip already says what the list is, so no labels then.
+  const recruiterRe = /recruit|talent|people (ops|operations|partner)|human resources|\bhr\b|campus|university relations|early career|staffing/i;
+  const tierOf = (row) => {
+    if ((row.reasonTypes || []).includes('alumni')) return 'alumni';
+    if (recruiterRe.test(row.title || '')) return 'recruiting';
+    return 'other';
+  };
+  const filtered = prefix === 'company' && !!(companyFilter.role || companyFilter.focus);
+  let ordered = rows;
+  let groupLabels = null;
+  if (prefix === 'company' && !filtered && rows.length > 1) {
+    const groups = { alumni: [], recruiting: [], other: [] };
+    rows.forEach((r) => groups[tierOf(r)].push(r));
+    ordered = [...groups.alumni, ...groups.recruiting, ...groups.other];
+    groupLabels = { alumni: 'Alumni', recruiting: 'Recruiting', other: (groups.alumni.length || groups.recruiting.length) ? 'Also here' : '' };
+    // One real-data line at the top; parts with a zero are left out.
+    const parts = [`${rows.length} on file`];
+    if (groups.alumni.length) parts.push(`${groups.alumni.length} alumni`);
+    if (groups.recruiting.length) parts.push(`${groups.recruiting.length} in recruiting`);
+    const count = document.createElement('p');
+    count.className = 'similar-count';
+    count.textContent = parts.join(' · ');
+    results.appendChild(count);
+  }
+  const els = ordered.map((row) => buildSimilarRowEl({ ...row, category: '' }));
+  let lastTier = null;
   els.forEach((el, i) => {
+    if (groupLabels) {
+      const t = tierOf(ordered[i]);
+      if (t !== lastTier && groupLabels[t]) {
+        const h = document.createElement('div');
+        h.className = 'similar-group';
+        h.textContent = groupLabels[t];
+        if (prefix === 'company' && i >= COMPANY_ROWS_FIRST) h.classList.add('hidden', 'similar-row--folded');
+        results.appendChild(h);
+      }
+      lastTier = t;
+    }
     if (prefix === 'company' && i >= COMPANY_ROWS_FIRST) el.classList.add('hidden', 'similar-row--folded');
     results.appendChild(el);
   });

@@ -2171,3 +2171,178 @@ body {
   border: 1.5px solid var(--indigo-200);
   box-shadow: 0 2px 6px rgba(74, 96, 168, 0.16);
 }
+
+/* In progress tray (2026-09-08): background email searches and finished
+   meeting preps as pills, above the tabs content. */
+.tray {
+  margin: 10px 14px 0;
+  padding: 8px 10px 6px;
+  background: #FFFFFF;
+  border: 1px solid var(--indigo-100);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-rest);
+}
+
+.tray__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.tray__title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.tray__clear {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--indigo-600);
+  cursor: pointer;
+}
+
+.tray__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tray-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--indigo-foam);
+  border: 1px solid var(--indigo-100);
+  animation: rise 220ms var(--ease-out);
+}
+
+.tray-pill__avatar {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--indigo-100), var(--indigo-200));
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+.tray-pill--pending .tray-pill__avatar::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid var(--indigo-200);
+  border-top-color: var(--jade-500);
+  animation: tray-spin 0.9s linear infinite;
+}
+
+@keyframes tray-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tray-pill--found .tray-pill__avatar {
+  background: var(--jade-100);
+  color: var(--jade-700);
+}
+
+.tray-pill--miss .tray-pill__avatar {
+  background: var(--terra-100);
+  color: var(--terra-700);
+}
+
+.tray-pill__who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.tray-pill__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-pill__status {
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tray-pill__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tray-pill__btn {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--indigo-200);
+  background: #FFFFFF;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--indigo-700);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.tray-pill__btn:hover {
+  background: var(--indigo-foam);
+}
+
+.tray-pill__x {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: none;
+  width: 20px;
+  height: 20px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Company list: tier labels and the count line. */
+.similar-group {
+  margin: 6px 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.similar-count {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
