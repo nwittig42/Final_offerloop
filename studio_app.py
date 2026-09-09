@@ -156,6 +156,7 @@ def _creators_data():
                 p = r["properties"]
                 d["links"].append({"code": text_of(p["Code"]), "owner": text_of(p.get("Owner", {})),
                                    "target": p.get("Target", {}).get("url") or "", "destination": sel(p.get("Destination", {})),
+                                   "target_desktop": p.get("Target desktop", {}).get("url") or "",
                                    "active": bool(p.get("Active", {}).get("checkbox")), "notes": text_of(p.get("Notes", {}))})
         if env.get("NOTION_CLICKS_DB"):
             for r in query_all(env["NOTION_CLICKS_DB"]):
@@ -367,7 +368,9 @@ function creatorsView(){
     return `<div class="card2"><h3>${esc(l.code)} <span class="tmeta" style="display:inline">${esc(l.owner)} · ${esc(l.destination)}${l.active?'':' · inactive'}</span></h3>
       <div style="margin:6px 0"><span class="share">${goUrl(esc(l.code))}</span> <button class="chip" onclick="navigator.clipboard.writeText('${goUrl(esc(l.code))}')">copy</button></div>
       <div class="tmeta">${cs.length} clicks from ${uniq(cs)} people · ${d7} in the last 7 days · ${Object.entries(c).map(([k,v])=>k+' '+v).join(', ')||'no clicks yet'}</div>
-      <div class="tmeta">sends to <a href="${l.target}" target="_blank">${esc(l.target.slice(0,80))}</a></div>
+      <div class="tmeta">phones go to <a href="${l.target}" target="_blank">${esc(l.target.slice(0,80))}</a></div>
+      ${l.target_desktop?`<div class="tmeta">laptops go to <a href="${l.target_desktop}" target="_blank">${esc(l.target_desktop.slice(0,80))}</a></div>`:''}
+      <div class="tmeta" style="margin-top:6px"><a href="/qr/${esc(l.code)}.png" target="_blank"><img src="/qr/${esc(l.code)}.png" alt="QR" style="width:96px;height:96px;border:1px solid var(--hair);border-radius:6px;background:#fff"></a> <span>QR code for slides (click to open full size)</span></div>
       ${l.notes?`<div class="tmeta">${esc(l.notes)}</div>`:''}
       ${bars(byday,lastDays(14))}</div>`}).join('')||'<div class="empty">No links yet. Add a row to the Studio Links database in Notion.</div>';
 }
@@ -536,11 +539,28 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(404); self.send_header("Content-Type", "text/plain"); self.end_headers()
                 self.wfile.write(b"unknown link"); return
             link = links[0]
+            ua_ = self.headers.get("User-Agent") or ""
+            mobile = any(k in ua_ for k in ("iPhone", "iPad", "Android"))
+            target = link["target"] if (mobile or not link.get("target_desktop")) else link["target_desktop"]
             ip = (self.headers.get("X-Forwarded-For") or self.client_address[0] or "").split(",")[0].strip()
             threading.Thread(target=log_click, args=(link["code"], link["destination"] or link["target"],
                              self.headers.get("User-Agent"), self.headers.get("Referer"), ip), daemon=True).start()
-            self.send_response(302); self.send_header("Location", link["target"]); self.send_header("Cache-Control", "no-store")
+            self.send_response(302); self.send_header("Location", target); self.send_header("Cache-Control", "no-store")
             self.end_headers(); return
+        if parts0[0] == "qr" and len(parts0) == 2 and parts0[1].endswith(".png"):   # QR for slides, public
+            code = parts0[1][:-4].lower()
+            try:
+                import qrcode, io
+                host = (self.headers.get("Host") or "go.offerloop.ai").split(":")[0]
+                base = "https://go.offerloop.ai" if host.endswith("offerloop.ai") else f"http://{host}"
+                url = f"{base}/{code}" if base.startswith("https://go.") else f"{base}/go/{code}"
+                img = qrcode.make(url, box_size=12, border=2)
+                buf = io.BytesIO(); img.save(buf, format="PNG"); body = buf.getvalue()
+                self.send_response(200); self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers(); self.wfile.write(body); return
+            except Exception as e:
+                self.send_response(500); self.end_headers(); self.wfile.write(str(e).encode()); return
         if self.path.split("?")[0] == "/health":     # Render's health check, no password
             body = b"ok"
             self.send_response(200)
