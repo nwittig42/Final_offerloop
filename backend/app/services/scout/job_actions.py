@@ -9,6 +9,11 @@ Completes the in-chat workflow set:
 - tailor_resume_for_chat: resume-vs-job fit analysis with concrete edit
   suggestions. Free (one utility-model call). Built fresh: the website's
   old edited-resume endpoint was removed in the 2026-05-26 cleanup.
+- improve_resume_for_target: the same edit-suggestion shape with no job
+  posting required, for "tailor my resume to investment banking" style asks.
+  Falls back to the user's own stated goal (targetRoles / dreamCompanies)
+  when the chat gave no target (2026-09-09, Rylan: general asks answered in
+  prose with no way to apply anything).
 
 All three resolve job context the same way: an explicit description beats a
 job_id from the catalog (description_raw) beats scraping the job_url.
@@ -429,4 +434,98 @@ def tailor_resume_for_chat(
         "job_title": job_title,
         "company": company,
         "job_url": job_url,
+    }
+
+
+_IMPROVE_PROMPT = """You are a resume coach. Given a resume and a target
+(an industry, role type, or set of companies the candidate is aiming for),
+suggest concrete edits that make the resume read stronger for that target.
+Return ONLY valid JSON:
+{
+  "verdict": "<one sentence: current fit for this target and the single biggest lever>",
+  "strengths": ["<up to 3 things already on the resume that fit this target>"],
+  "gaps": ["<up to 3 things this target usually looks for that the resume does not show>"],
+  "edits": [
+    {"section": "<resume section>", "current": "<what it says now, short>",
+     "suggested": "<rewritten line targeting this target, concrete>"}
+  ]
+}
+At most 5 edits. Every suggestion must be grounded in something already on
+the resume (reframed, quantified, reordered); never invent experience,
+employers, dates, or numbers."""
+
+
+def _resolve_target_focus(user_data: Dict[str, Any], focus: str) -> str:
+    """What to tailor toward: the chat's own words first, else the
+    onboarding goal (targetRoles / dreamCompanies). Empty when neither
+    exists, so the caller asks instead of guessing a target."""
+    focus = (focus or "").strip()
+    if focus:
+        return focus
+    parts = []
+    roles = user_data.get("targetRoles")
+    if isinstance(roles, list) and roles:
+        parts.append(" / ".join(str(r) for r in roles[:3] if r))
+    firms = user_data.get("dreamCompanies")
+    if isinstance(firms, list) and firms:
+        parts.append("aiming for " + ", ".join(str(f) for f in firms[:3] if f))
+    return "; ".join(p for p in parts if p)
+
+
+def improve_resume_for_target(uid: str, focus: str = "") -> Dict[str, Any]:
+    """General resume coaching, no job posting required. Free: one
+    utility-model call. Same edit shape as tailor_resume_for_chat so the
+    app renders both the same way."""
+    if not uid:
+        return {"error": "sign in required", "code": "AUTH_REQUIRED"}
+    db = _db()
+    if db is None:
+        return {"error": "database unavailable", "code": "UNAVAILABLE"}
+
+    user_doc = db.collection("users").document(uid).get()
+    if not user_doc.exists:
+        return {"error": "account not found", "code": "AUTH_REQUIRED"}
+    user_data = user_doc.to_dict() or {}
+    resume_text = user_data.get("resumeText") or ""
+    if not resume_text.strip():
+        parsed = user_data.get("resumeParsed")
+        resume_text = json.dumps(parsed)[:8000] if parsed else ""
+    if not resume_text.strip():
+        return {
+            "error": "resume required: upload one in Account Settings first",
+            "code": "NEEDS_RESUME",
+        }
+
+    target = _resolve_target_focus(user_data, focus)
+    if not target:
+        return {
+            "error": "no target given; ask what role, industry, or companies to tailor toward",
+            "code": "NEEDS_FOCUS",
+        }
+
+    try:
+        from app.services.openai_client import get_openai_client
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model=_UTILITY_MODEL,
+            messages=[
+                {"role": "system", "content": _IMPROVE_PROMPT},
+                {"role": "user", "content": (
+                    f"TARGET: {target}\n\nRESUME:\n{resume_text[:8000]}"
+                )},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+        analysis = json.loads(response.choices[0].message.content or "{}")
+    except Exception as e:
+        logger.warning("[ScoutJobs] resume improvement failed: %s", e)
+        return {"error": "resume analysis failed", "code": "INTERNAL"}
+
+    return {
+        "target": target,
+        "verdict": _text(analysis.get("verdict")),
+        "strengths": analysis.get("strengths") or [],
+        "gaps": analysis.get("gaps") or [],
+        "edits": (analysis.get("edits") or [])[:5],
     }

@@ -836,6 +836,37 @@ TAILOR_RESUME_TOOL: Dict[str, Any] = {
     },
 }
 
+IMPROVE_RESUME_TOOL: Dict[str, Any] = {
+    "name": "improve_resume_for_target",
+    "description": (
+        "Free. Reviews the user's stored resume against a general target - "
+        "an industry, role type, or set of companies - with no specific "
+        "job posting involved, and returns concrete edit suggestions. Use "
+        "for 'help me tailor my resume to investment banking', 'how can I "
+        "improve my resume for consulting', 'make my resume stronger for "
+        "tech'. Pass focus as the user's own words for the target; if they "
+        "asked with no target at all ('review my resume'), omit focus and "
+        "this tool falls back to their stated goal (targetRoles / "
+        "dreamCompanies) - if that is also empty it returns NEEDS_FOCUS, so "
+        "ask once what role or industry they want. When the user names a "
+        "SPECIFIC job or company with a posting to compare against, use "
+        "tailor_resume_to_job instead. Present IN THE CHAT: the verdict, "
+        "strengths, gaps, and each suggested edit (what it says now -> "
+        "what to write instead). NEEDS_RESUME -> point to Account "
+        "Settings. Never invent experience."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "focus": {
+                "type": "string",
+                "description": "The target to tailor toward, in the user's own words (an industry, role, or companies).",
+            },
+        },
+        "required": [],
+    },
+}
+
 # Terminal tools end a turn (exactly one per turn). Helper tools gather data
 # or write memory mid-turn and the model keeps going. parallel_tool_calls=False
 # caps each step at one tool; the caller offers only terminal tools on the
@@ -863,6 +894,7 @@ HELPER_TOOLS: List[Dict[str, Any]] = [
     FIND_HIRING_MANAGERS_TOOL,
     GENERATE_COVER_LETTER_TOOL,
     TAILOR_RESUME_TOOL,
+    IMPROVE_RESUME_TOOL,
 ]
 SCOUT_TOOLS: List[Dict[str, Any]] = TERMINAL_TOOLS + HELPER_TOOLS
 
@@ -1082,6 +1114,8 @@ async def run_helper_tool(
         return await _run_generate_cover_letter(args, ctx)
     if name == "tailor_resume_to_job":
         return await _run_tailor_resume(args, ctx)
+    if name == "improve_resume_for_target":
+        return await _run_improve_resume(args, ctx)
     return {"error": f"unknown helper tool: {name}"}
 
 
@@ -1152,6 +1186,21 @@ async def _run_tailor_resume(args: Dict[str, Any], context: Dict[str, Any]) -> D
         return result
     except Exception as e:
         print(f"[ScoutTools] tailor_resume_to_job failed: {e}")
+        return {"error": "resume analysis failed", "code": "INTERNAL"}
+
+
+async def _run_improve_resume(args: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    uid = context.get("uid")
+    if not uid:
+        return {"error": "sign in required", "code": "AUTH_REQUIRED"}
+    try:
+        from app.services.scout.job_actions import improve_resume_for_target
+        result = await asyncio.to_thread(
+            improve_resume_for_target, uid, str(args.get("focus") or ""))
+        context["workflow_state_touched"] = True
+        return result
+    except Exception as e:
+        print(f"[ScoutTools] improve_resume_for_target failed: {e}")
         return {"error": "resume analysis failed", "code": "INTERNAL"}
 
 

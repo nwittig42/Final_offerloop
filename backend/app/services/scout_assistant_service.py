@@ -456,6 +456,8 @@ You CAN find hiring managers yourself with find_hiring_managers. "Who's the hiri
 ## Resume and cover letters from chat
 You CAN write a cover letter with generate_cover_letter (5 credits) and score/tailor the user's resume against a job with tailor_resume_to_job (free). Both need job context, resolved in this order: a job_id from this chat's find_jobs results; a job posting URL the user pasted; or a pasted description. A named role at a named company with no job_id in this chat is NOT a reason to ask for a URL: call find_jobs with those role words FIRST, then chain into the letter or tailoring with the best match's job_id in the same turn. Ask for the posting URL only AFTER find_jobs returns nothing or the tool comes back NEEDS_JOB_DESCRIPTION - asking first is a failure. For cover letters, put the FULL letter text in your answer - the letter IS the deliverable. For tailoring, present the fit score, verdict, strengths, gaps, and each suggested edit as what-it-says-now -> what-to-write-instead. NEEDS_JOB_DESCRIPTION means the job could not be resolved: ask once for the posting URL. Never invent experience in either flow.
 
+For a general ask with NO specific job or posting ("help me tailor my resume to investment banking", "how's my resume look for consulting", "make my resume better"), call improve_resume_for_target instead - free, same edit-suggestion shape, pass focus as their own words for the target. Only fall back to tailor_resume_to_job when they named an actual job or pasted a posting. Present improve_resume_for_target the same way: verdict, strengths, gaps, each edit as what-it-says-now -> what-to-write-instead. Both tools' edits also ride a "Review the suggested edits" chip that opens the resume editor with the SAME edits, so the user can approve or skip each one there rather than trusting your prose alone - mention that chip is where they act on it. NEEDS_FOCUS means neither the chat nor their profile named a target: ask once what role, industry, or companies to aim for.
+
 ## Meeting prep from chat
 You CAN run a real meeting prep yourself with run_meeting_prep. When the user asks to be prepped for a meeting, call, or coffee chat with a NAMED person ("I have a call with Veronica Wittig, prep me for it"), call run_meeting_prep with that name immediately - the explicit ask is consent, it costs 30 credits, and the person's LinkedIn URL is resolved from their saved contacts automatically. Do NOT navigate to /coffee-chat-prep for this and do NOT ask for a LinkedIn URL up front. Pass linkedin_url only when the user pasted one in chat. On started=true, answer that the prep for that person is running, takes about a minute, and the packet with the PDF will land right here in the chat - NEVER describe the prep's contents or say it is ready, it has not finished. On CONTACT_NOT_FOUND or NO_LINKEDIN, ask once for the person's LinkedIn URL, then call run_meeting_prep again with it next turn. On INSUFFICIENT_CREDITS say the numbers; on LIMIT_REACHED say their plan's meeting prep limit is used and cta to /pricing; on NEEDS_RESUME point them to Account Settings to upload a resume.
 
@@ -2323,15 +2325,36 @@ class ScoutAssistantService:
                         "credit_cost": None,
                     }
                     return result
-                if name == "tailor_resume_to_job" and res.get("fit_score") is not None:
+                if name in ("tailor_resume_to_job", "improve_resume_for_target") and res.get("edits"):
+                    # Structured edits ride along in prefill, each with a
+                    # stable id (2026-09-09, Rylan: the chip said "opening
+                    # your Resume page" and did not - the prefill these tools
+                    # already computed was never read on the app side, and
+                    # what did reach the app was only prose, forcing one
+                    # blanket rewrite instead of per-line approve/skip).
+                    edits_out = []
+                    for i, e in enumerate(res.get("edits") or []):
+                        if not isinstance(e, dict):
+                            continue
+                        edits_out.append({
+                            "id": f"e{i}",
+                            "section": str(e.get("section") or "").strip(),
+                            "current": str(e.get("current") or "").strip(),
+                            "suggested": str(e.get("suggested") or "").strip(),
+                        })
+                    if not edits_out:
+                        return result
                     # Job-specific tailoring lands on the Tailor tab with the
                     # posting URL pasted in; general resume help (no job URL
                     # resolved) keeps landing on the Edit tab.
                     job_url = str(res.get("job_url") or "").strip()
+                    prefill: Dict[str, Any] = {"edits": edits_out}
+                    if job_url:
+                        prefill["job_url"] = job_url
                     result["cta"] = {
-                        "label": "Open your resume",
+                        "label": "Review the suggested edits",
                         "route": "/resume?tab=tailor" if job_url else "/resume",
-                        "prefill": {"job_url": job_url} if job_url else {},
+                        "prefill": prefill,
                         "credit_spending": False,
                         "credit_cost": None,
                     }
@@ -2565,6 +2588,7 @@ class ScoutAssistantService:
         "find_hiring_managers": "Finding hiring managers",
         "generate_cover_letter": "Writing your cover letter",
         "tailor_resume_to_job": "Scoring your resume against the job",
+        "improve_resume_for_target": "Reviewing your resume",
         "save_strategy": "Saving your plan",
         "update_strategy_progress": "Updating your plan",
         "parse_job_url": "Reading the job posting",
@@ -2653,6 +2677,11 @@ class ScoutAssistantService:
             score = result.get("fit_score")
             if score is not None:
                 return f"fit score {score}/100"
+            return result.get("code") or "no analysis"
+        if name == "improve_resume_for_target":
+            edits = result.get("edits") or []
+            if edits:
+                return f"{len(edits)} suggested edits"
             return result.get("code") or "no analysis"
         if name in ("get_recent_searches", "get_recent_firm_searches",
                     "get_recent_cover_letters", "get_meeting_prep_drafts"):
