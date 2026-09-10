@@ -431,6 +431,26 @@
           <p class="job-status__text" id="job-status-text">Detecting job page…</p>
         </div>
 
+        <!-- Company page, no posting picked yet: the company's open roles,
+             same idea as the Company tab's people list. Picking one turns
+             on Find recruiters / Generate cover letter for that posting. -->
+        <div class="result-card hidden" id="company-jobs-section">
+          <div class="result-card__header">
+            <div class="result-card__heading">
+              <span class="result-card__title">Open roles</span>
+            </div>
+          </div>
+          <div class="result-card__sub" id="company-jobs-details"></div>
+          <div class="loading-card similar-loading hidden" id="company-jobs-loading">
+            <div class="progress" aria-hidden="true"><span class="progress__bar"></span></div>
+            <p id="company-jobs-loading-text">Working on it</p>
+          </div>
+          <div id="company-jobs-rows" class="similar-results" role="list"></div>
+          <p class="similar-empty hidden" id="company-jobs-empty">No open roles on file for this company yet.</p>
+        </div>
+
+        <button type="button" class="similar-more hidden" id="company-jobs-back">Choose a different role at this company</button>
+
         <div class="manual-form hidden" id="manual-form">
           <p class="manual-form__notice">Couldn't extract job details. Enter them manually:</p>
           <div class="form-group">
@@ -447,7 +467,7 @@
           </div>
         </div>
 
-        <div class="job-actions">
+        <div class="job-actions" id="job-actions">
           <button class="btn btn-action btn-full btn-hero" id="find-recruiters-btn">
             <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8"></circle>
