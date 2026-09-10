@@ -145,8 +145,15 @@ async function initJobTab() {
 
   // Get current tab URL
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const companyCtx = parseCompanyFromTab(tab);
+  // A role picked from a company's open-roles list stays selected while the
+  // tab is still sitting on that company's LinkedIn page: the tab's own URL
+  // never becomes the posting's URL (that would need an actual navigation),
+  // so it cannot drive the "same job" check the way a real job-board tab does.
+  const keepingCompanyPick = !!(currentJob && currentJob.source === 'company-jobs'
+    && companyCtx && currentJob._companySlug === companyCtx.slug);
   // Results belong to the posting. Same posting: leave them on screen.
-  const sameJob = !!currentJobUrl && tab.url === currentJobUrl;
+  const sameJob = keepingCompanyPick || (!!currentJobUrl && tab.url === currentJobUrl);
   if (!sameJob) {
     hideAllJobResults();
     hideJobError();
@@ -154,9 +161,11 @@ async function initJobTab() {
     hideJobLoading();
     currentJob = null;
   }
-  currentJobUrl = tab.url;
-  // What the job is, from the page or the tab title, without blocking.
-  readJobHeading(tab);
+  if (!keepingCompanyPick) {
+    currentJobUrl = tab.url;
+    // What the job is, from the page or the tab title, without blocking.
+    readJobHeading(tab);
+  }
   
   // Update URL display
   const urlTextEl = document.getElementById('job-url-text');
@@ -166,15 +175,235 @@ async function initJobTab() {
   
   // Check if we're on a supported job board
   if (isJobUrl(currentJobUrl)) {
+    hideCompanyJobsSection();
     showJobStatus('Job URL detected. Click a button to proceed.');
     enableJobButtons();
     manualInputRequired = false;
+  } else if (companyCtx) {
+    hideManualForm();
+    manualInputRequired = false;
+    if (keepingCompanyPick) {
+      hideCompanyJobsSection();
+      showJobStatus(`Using "${currentJob.title || 'this role'}" at ${companyCtx.name}.`);
+      showJobActionsBlock();
+      enableJobButtons();
+    } else {
+      hideJobActionsBlock();
+      showJobStatus(`Open roles at ${companyCtx.name}.`);
+      loadCompanyJobs(companyCtx);
+    }
   } else {
+    hideCompanyJobsSection();
+    showJobActionsBlock();
     showJobStatus('Not on a recognized job page. Please enter details manually.');
     showManualForm();
     manualInputRequired = true;
     updateJobButtonState();
   }
+}
+
+// ============================================
+// JOB TAB: a company page's open roles
+// ============================================
+// On a LinkedIn company page with no specific posting open, the Job tab
+// lists that company's roles from the jobs catalog (same one the app's
+// Feed searches), the same idea as the Company tab's people list: browse
+// free, then pick one to run Find recruiters or Generate cover letter on.
+
+const COMPANY_JOBS_FIRST = 5;
+const companyJobsState = { key: null, rows: [] };
+
+function _relativeDate(iso) {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  const days = Math.floor((Date.now() - then) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return '1 day ago';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  return months === 1 ? '1 month ago' : `${months} months ago`;
+}
+
+function showJobActionsBlock() {
+  document.getElementById('job-actions')?.classList.remove('hidden');
+}
+function hideJobActionsBlock() {
+  document.getElementById('job-actions')?.classList.add('hidden');
+}
+function hideCompanyJobsSection() {
+  document.getElementById('company-jobs-section')?.classList.add('hidden');
+  document.getElementById('company-jobs-back')?.classList.add('hidden');
+}
+
+function buildCompanyJobRowEl(job) {
+  const el = document.createElement('div');
+  el.className = 'similar-row';
+  el.setAttribute('role', 'listitem');
+
+  const avatar = document.createElement('span');
+  avatar.className = 'similar-row__avatar';
+  avatar.textContent = (job.company || '?').trim().slice(0, 1).toUpperCase();
+
+  const who = document.createElement('div');
+  who.className = 'similar-row__who';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'similar-row__name';
+  nameEl.textContent = (job.title || 'Open role').toLowerCase(); // CSS capitalizes
+  const metaEl = document.createElement('span');
+  metaEl.className = 'similar-row__meta';
+  let loc = job.location || '';
+  if (loc && typeof loc === 'object') loc = Object.values(loc).filter(Boolean).join(', ');
+  const metaParts = [loc, _relativeDate(job.posted_at)].filter(Boolean);
+  metaEl.textContent = metaParts.join(' · ');
+  who.append(nameEl, metaEl);
+  if (job.auto_apply_eligible) {
+    const cap = document.createElement('span');
+    cap.className = 'similar-row__category';
+    cap.textContent = 'Auto-apply eligible';
+    who.append(cap);
+  }
+  el.append(avatar, who);
+
+  // The posting itself, one tap away, same pattern as opening a person's
+  // LinkedIn profile from a people row.
+  const applyUrl = job.apply_url || job.url || '';
+  if (applyUrl) {
+    el.classList.add('similar-row--openable');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'similar-row__open';
+    open.title = 'View the posting';
+    open.setAttribute('aria-label', 'View the posting');
+    open.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+    const go = (ev) => { ev.preventDefault(); ev.stopPropagation(); chrome.tabs.create({ url: applyUrl }); };
+    open.addEventListener('click', go);
+    avatar.addEventListener('click', go);
+    el.appendChild(open);
+  }
+
+  const use = document.createElement('button');
+  use.type = 'button';
+  use.className = 'similar-row__action';
+  use.textContent = 'Use this posting';
+  use.addEventListener('click', () => selectCompanyJob(job));
+  const actions = document.createElement('div');
+  actions.className = 'similar-row__actions';
+  actions.appendChild(use);
+  el.appendChild(actions);
+
+  return el;
+}
+
+function renderCompanyJobRows(jobs) {
+  const results = document.getElementById('company-jobs-rows');
+  const empty = document.getElementById('company-jobs-empty');
+  const details = document.getElementById('company-jobs-details');
+  if (!results) return;
+  results.innerHTML = '';
+  if (!jobs.length) {
+    empty?.classList.remove('hidden');
+    if (details) details.textContent = '';
+    return;
+  }
+  empty?.classList.add('hidden');
+  if (details) details.textContent = `${jobs.length} open role${jobs.length === 1 ? '' : 's'} on file`;
+  jobs.forEach((job, i) => {
+    const el = buildCompanyJobRowEl(job);
+    if (i >= COMPANY_JOBS_FIRST) el.classList.add('hidden', 'similar-row--folded');
+    results.appendChild(el);
+  });
+  if (jobs.length > COMPANY_JOBS_FIRST) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'similar-more';
+    more.textContent = `Show ${jobs.length - COMPANY_JOBS_FIRST} more`;
+    more.addEventListener('click', () => {
+      results.querySelectorAll('.similar-row--folded').forEach((el) => el.classList.remove('hidden', 'similar-row--folded'));
+      more.remove();
+    });
+    results.appendChild(more);
+  }
+}
+
+async function loadCompanyJobs(company) {
+  const key = company.slug || company.name;
+  companyJobsState.companyCtx = company;
+  const section = document.getElementById('company-jobs-section');
+  const loading = document.getElementById('company-jobs-loading');
+  const loadingText = document.getElementById('company-jobs-loading-text');
+  section?.classList.remove('hidden');
+  document.getElementById('company-jobs-back')?.classList.add('hidden');
+
+  // Same company as last time this session: the list does not change
+  // often enough to justify a second call every time the student flips
+  // back to this tab.
+  if (companyJobsState.key === key && companyJobsState.rows.length) {
+    renderCompanyJobRows(companyJobsState.rows);
+    return;
+  }
+  companyJobsState.key = key;
+  companyJobsState.rows = [];
+  document.getElementById('company-jobs-rows').innerHTML = '';
+  document.getElementById('company-jobs-empty')?.classList.add('hidden');
+  loading?.classList.remove('hidden');
+  const stopStages = startLoadingStages(loadingText, [
+    'Checking the job catalog',
+    'Matching postings to this company',
+    'Almost there',
+  ]);
+  try {
+    const response = await apiCall(`/api/jobs/search?company=${encodeURIComponent(company.apiName || company.name)}&limit=15`, 'GET', undefined, 20000);
+    stopStages();
+    loading?.classList.add('hidden');
+    if (companyJobsState.key !== key) return; // the student moved on
+    const rows = (response.ok && response.data && response.data.results) || [];
+    companyJobsState.rows = rows;
+    renderCompanyJobRows(rows);
+  } catch (e) {
+    stopStages();
+    loading?.classList.add('hidden');
+    if (companyJobsState.key === key) renderCompanyJobRows([]);
+  }
+}
+
+function backToCompanyJobsList() {
+  const company = companyJobsState.companyCtx;
+  if (!company) return;
+  currentJob = null;
+  currentJobUrl = '';
+  const urlTextEl = document.getElementById('job-url-text');
+  if (urlTextEl) urlTextEl.textContent = '';
+  hideJobActionsBlock();
+  hideJobError();
+  hideAllJobResults();
+  document.getElementById('company-jobs-back')?.classList.add('hidden');
+  document.getElementById('company-jobs-section')?.classList.remove('hidden');
+  showJobStatus(`Open roles at ${company.name}.`);
+  renderCompanyJobRows(companyJobsState.rows);
+}
+
+function selectCompanyJob(job) {
+  const company = companyJobsState.companyCtx || null;
+  currentJob = {
+    title: job.title || '',
+    company: job.company || (company && company.name) || '',
+    description: '',
+    source: 'company-jobs',
+    _companySlug: company ? company.slug : null,
+  };
+  currentJobUrl = job.apply_url || job.url || '';
+  const urlTextEl = document.getElementById('job-url-text');
+  if (urlTextEl) urlTextEl.textContent = truncateUrl(currentJobUrl);
+  _renderJobHeading();
+  hideCompanyJobsSection();
+  hideJobError();
+  hideAllJobResults();
+  showJobActionsBlock();
+  enableJobButtons();
+  manualInputRequired = false;
+  showJobStatus(`Using "${job.title || 'this role'}" at ${currentJob.company || 'this company'}.`);
+  document.getElementById('company-jobs-back')?.classList.remove('hidden');
 }
 
 function isJobUrl(url) {
@@ -648,7 +877,7 @@ function _jobRequestBody() {
   // tab title lags a click in LinkedIn's job list, and a stale company
   // name from it beat the server's own parse of the posting (a Favored
   // heading over Pink Sparrow recruiters, 2026-09-08).
-  const fromPage = j.source === 'page';
+  const fromPage = j.source === 'page' || j.source === 'company-jobs';
   return {
     jobUrl: _canonicalJobUrl(currentJobUrl),
     jobTitle: (fromPage && j.title) || undefined,
@@ -867,6 +1096,7 @@ function initJobTabListeners() {
   
   // Generate Cover Letter button
   document.getElementById('cover-letter-btn')?.addEventListener('click', handleGenerateCoverLetter);
+  document.getElementById('company-jobs-back')?.addEventListener('click', backToCompanyJobsList);
   
   // Manual form input listeners
   document.getElementById('manual-company')?.addEventListener('input', updateJobButtonState);
