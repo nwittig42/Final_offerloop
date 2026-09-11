@@ -466,7 +466,14 @@ FANTASTICJOBS_CALLS = [
             "Citi,Wells Fargo,Barclays,Deutsche Bank,UBS,Evercore,Lazard,"
             "PJT Partners,Moelis & Company,Centerview Partners,Houlihan Lokey,"
             "Rothschild & Co,Guggenheim Partners,Perella Weinberg Partners,"
-            "Jefferies,RBC Capital Markets"
+            "Jefferies,RBC Capital Markets,"
+            # Middle market (Rylan 2026-09-11, feedback: not enough MM IB
+            # surfacing). Verified live against the API one by one — each
+            # name below is exactly the plain form the aggregator's own
+            # organization field uses; every "& Co." / "& Company" / "LLC" /
+            # "Financial" variant tried returned zero rows.
+            "William Blair,Piper Sandler,Baird,Harris Williams,"
+            "Raymond James,Stifel,Lincoln International"
         ),
     }),
     # Quant trading / research interns at prop shops + HFs

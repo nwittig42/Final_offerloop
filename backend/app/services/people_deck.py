@@ -149,14 +149,28 @@ def _public_person(contact: Dict[str, Any], person_id: str, rank: int) -> Dict[s
     }
 
 
+def _company_name(value: Any) -> str:
+    """A company field as a plain string, whatever shape the provider sent.
+    PDL (and everyone reading its output elsewhere: hunter_person_search,
+    coresignal_client, pdl_client itself) sometimes carries an experience
+    entry's company as {"name": ..., ...} rather than a bare string - every
+    other reader already unwraps this, this one did not (2026-09-11: a
+    William Blair search that found and verified 62 real contacts crashed
+    the whole response with AttributeError: 'dict' object has no attribute
+    'strip', so the user saw nothing at all)."""
+    if isinstance(value, dict):
+        return str(value.get("name") or "").strip()
+    return str(value or "").strip()
+
+
 def _previous_company(contact: Dict[str, Any]) -> str:
     """The person's previous employer, when the summary knows it and it
     differs from the current one. "ex-Goldman" is a settle-worthy fact."""
     exp = contact.get("experience") or []
     if not isinstance(exp, list) or len(exp) < 2:
         return ""
-    cur = (exp[0].get("company") or "").strip() if isinstance(exp[0], dict) else ""
-    prev = (exp[1].get("company") or "").strip() if isinstance(exp[1], dict) else ""
+    cur = _company_name(exp[0].get("company")) if isinstance(exp[0], dict) else ""
+    prev = _company_name(exp[1].get("company")) if isinstance(exp[1], dict) else ""
     if prev and prev.lower() != cur.lower():
         return prev
     return ""
