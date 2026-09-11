@@ -298,15 +298,28 @@ function buildCompanyJobRowEl(job) {
 function renderCompanyJobRows(jobs) {
   const results = document.getElementById('company-jobs-rows');
   const empty = document.getElementById('company-jobs-empty');
+  const linkedinLink = document.getElementById('company-jobs-linkedin-link');
   const details = document.getElementById('company-jobs-details');
   if (!results) return;
   results.innerHTML = '';
   if (!jobs.length) {
     empty?.classList.remove('hidden');
     if (details) details.textContent = '';
+    // Our catalog is a narrower slice than LinkedIn's own job board (a
+    // curated Greenhouse/Lever/Ashby list plus one aggregator) — a company
+    // can genuinely have open roles LinkedIn knows about that we don't.
+    // Never leave the student stuck: point them at LinkedIn's own search.
+    const company = companyJobsState.companyCtx;
+    if (linkedinLink && company && company.name) {
+      linkedinLink.href = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(company.name)}`;
+      const nameEl = linkedinLink.querySelector('.similar-footer-link__company');
+      if (nameEl) nameEl.textContent = company.name;
+      linkedinLink.classList.remove('hidden');
+    }
     return;
   }
   empty?.classList.add('hidden');
+  linkedinLink?.classList.add('hidden');
   if (details) details.textContent = `${jobs.length} open role${jobs.length === 1 ? '' : 's'} on file`;
   jobs.forEach((job, i) => {
     const el = buildCompanyJobRowEl(job);
@@ -346,6 +359,7 @@ async function loadCompanyJobs(company) {
   companyJobsState.rows = [];
   document.getElementById('company-jobs-rows').innerHTML = '';
   document.getElementById('company-jobs-empty')?.classList.add('hidden');
+  document.getElementById('company-jobs-linkedin-link')?.classList.add('hidden');
   loading?.classList.remove('hidden');
   const stopStages = startLoadingStages(loadingText, [
     'Checking the job catalog',
