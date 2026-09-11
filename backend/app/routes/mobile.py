@@ -457,6 +457,15 @@ def me():
         ),
         'resumeExperiences': resume_experiences,
         'linkedinHighlights': _linkedin_highlights(u),
+        # The one explicit, server-side "this account finished onboarding"
+        # fact (Rylan 2026-09-11). Everything else /me exposes is real
+        # profile data that can be true from just the first onboarding step
+        # (a LinkedIn URL, a target track) — useful as a heuristic for "does
+        # this look like an established account", useless as proof onboarding
+        # actually finished. This field is only ever set by POST
+        # /api/mobile/preferences {onboardingComplete: true}, which the app
+        # calls exactly once, the moment its own onboarding flow completes.
+        'onboardingComplete': bool(u.get('onboardingComplete')),
     }), 200
 
 
@@ -950,6 +959,11 @@ def save_preferences():
         if firms is None:
             return jsonify({'error': 'dreamCompanies must be a list'}), 400
         patch['dreamCompanies'] = firms[:20]
+    if 'onboardingComplete' in data:
+        # Write-once in practice (the app only ever sends true, exactly once,
+        # from completeOnboarding()) but accepted as a real bool so a bad
+        # client payload can't wedge this into a truthy-but-wrong value.
+        patch['onboardingComplete'] = bool(data.get('onboardingComplete'))
 
     if not patch:
         return jsonify({'error': 'no recognized preference fields'}), 400
