@@ -352,12 +352,25 @@ async function loadCompanyJobs(company) {
     'Matching postings to this company',
     'Almost there',
   ]);
+  // The display name off the page ("TikTok"), not the URL slug ("tiktok"):
+  // /api/jobs/search matches company on an exact, case-sensitive string.
+  // The slug loses whatever real casing the job catalog stored the brand
+  // under, so an exact-match search on it can go empty for a company that
+  // genuinely has open roles on file (caught testing TikTok, 2026-09-10).
+  const displayName = company.name || company.apiName || '';
   try {
-    const response = await apiCall(`/api/jobs/search?company=${encodeURIComponent(company.apiName || company.name)}&limit=15`, 'GET', undefined, 20000);
+    let rows = await _fetchCompanyJobs(`company=${encodeURIComponent(displayName)}`);
+    if (!rows.length && company.apiName && company.apiName !== displayName.toLowerCase()) {
+      // Casing/spacing still didn't line up: fall back to the catalog's
+      // keyword search, which tokenizes and lowercases on both sides, then
+      // keep only rows that actually named this company.
+      const loose = await _fetchCompanyJobs(`q=${encodeURIComponent(displayName)}`);
+      const needle = displayName.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2).sort((a, b) => b.length - a.length)[0];
+      rows = needle ? loose.filter((j) => (j.company || '').toLowerCase().includes(needle)) : loose;
+    }
     stopStages();
     loading?.classList.add('hidden');
     if (companyJobsState.key !== key) return; // the student moved on
-    const rows = (response.ok && response.data && response.data.results) || [];
     companyJobsState.rows = rows;
     renderCompanyJobRows(rows);
   } catch (e) {
@@ -365,6 +378,11 @@ async function loadCompanyJobs(company) {
     loading?.classList.add('hidden');
     if (companyJobsState.key === key) renderCompanyJobRows([]);
   }
+}
+
+async function _fetchCompanyJobs(qs) {
+  const response = await apiCall(`/api/jobs/search?${qs}&limit=15`, 'GET', undefined, 20000);
+  return (response.ok && response.data && response.data.results) || [];
 }
 
 function backToCompanyJobsList() {
