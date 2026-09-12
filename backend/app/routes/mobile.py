@@ -7,6 +7,7 @@ single mobile-shaped call. Everything is behind @require_firebase_auth and
 reuses existing services, not new business logic.
 """
 import calendar
+import hashlib
 import os
 import re
 import threading
@@ -467,6 +468,50 @@ def me():
         # calls exactly once, the moment its own onboarding flow completes.
         'onboardingComplete': bool(u.get('onboardingComplete')),
     }), 200
+
+
+@mobile_bp.get('/flags')
+@require_firebase_auth
+def feature_flags():
+    """Remote feature flags: a kill switch / gradual rollout lever so a risky
+    new feature can ship inside a native build turned OFF, then be dialed on
+    (or back off) for some or all users with zero app update — not even OTA
+    (Rylan 2026-09-11, after the dark-mode/resume-upload native-build saga
+    made it clear how expensive it is to be wrong on a brand-new user's first
+    launch). Toggling is a single Firestore doc edit, no deploy required.
+
+    Doc shape (config/featureFlags), every key optional:
+      {"someFlag": {"enabled": true, "rolloutPercent": 25}}
+    rolloutPercent (0-100, default 100 when omitted) gates a STABLE per-user
+    slice via a hash of uid+key, so one user's flag never flips between
+    requests as a rollout dials up.
+
+    Resolves to plain booleans so the client never re-implements the rollout
+    math. A missing or unreadable doc resolves to {} (every flag off) rather
+    than a 500 — a broken flags fetch must never be able to block the app.
+    """
+    fb = request.firebase_user
+    uid = fb['uid']
+    try:
+        db = get_db()
+        raw = db.collection('config').document('featureFlags').get().to_dict() or {}
+    except Exception:
+        logger.warning('feature flags: config read failed, defaulting to all-off', exc_info=True)
+        raw = {}
+
+    out = {}
+    for key, cfg in raw.items():
+        if not isinstance(cfg, dict) or not cfg.get('enabled'):
+            out[key] = False
+            continue
+        pct = cfg.get('rolloutPercent')
+        pct = 100 if pct is None else max(0, min(100, int(pct)))
+        if pct >= 100:
+            out[key] = True
+        else:
+            bucket = int(hashlib.sha256(f'{uid}:{key}'.encode()).hexdigest(), 16) % 100
+            out[key] = bucket < pct
+    return jsonify(out), 200
 
 
 @mobile_bp.post('/device')
