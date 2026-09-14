@@ -616,14 +616,20 @@ def _run_search_with_timeout(
 ) -> tuple[list[dict], bool, bool, bool]:
     """Run `search_contacts_from_prompt` with a hard 30s wall-clock cap.
 
-    Returns (contacts, cache_hit, timed_out, partial). `cache_hit` reflects
-    whether `pdl_cache` short-circuited the call (verifiable via elapsed
-    time — cache hits return ~instantly). `partial` is reserved for the
-    mid-flight credit exhaustion case; production callers don't surface it
-    yet (PDL doesn't tell us this directly), but the tuple is shaped so
-    tests can wire it in and the route can plumb it without further changes.
+    Provider is FullEnrich (Rylan 2026-09-14: the PDL subscription is
+    retired). Returns (contacts, cache_hit, timed_out, partial). `partial`
+    is reserved for the mid-flight credit exhaustion case; production
+    callers don't surface it yet, but the tuple is shaped so tests can wire
+    it in and the route can plumb it without further changes.
     """
-    from app.services.pdl_client import search_contacts_from_prompt
+    from app.extensions import get_db
+    from app.services.fullenrich_client import enabled as _fullenrich_enabled
+    from app.services.fullenrich_search import search_contacts_from_prompt
+
+    db = get_db()
+    if not _fullenrich_enabled(db):
+        logger.warning("alumni_discovery: FullEnrich unavailable (no key or budget exhausted)")
+        return [], False, False, False
 
     started = time.time()
     contacts: list[dict] = []
@@ -635,6 +641,7 @@ def _run_search_with_timeout(
             max_contacts,
             exclude_keys,
             user_profile,
+            db,
         )
         try:
             result = fut.result(timeout=PDL_TIMEOUT_SEC)
@@ -644,8 +651,8 @@ def _run_search_with_timeout(
             # Best-effort shutdown — we can't truly kill the thread but the
             # request handler will return 504 immediately.
     elapsed = time.time() - started
-    # Sub-second turnaround on a real PDL search is almost always a cache
-    # short-circuit (live PDL roundtrip floor is ~1.5s).
+    # Sub-second turnaround is almost always a cache short-circuit (a real
+    # rung's roundtrip floor is ~1.5s) — soft signal, not load-bearing.
     cache_hit = (not timed_out) and elapsed < 1.0 and bool(contacts)
     return contacts, cache_hit, timed_out, False
 

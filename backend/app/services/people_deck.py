@@ -42,7 +42,6 @@ from app.services import neverbounce_client
 from app.services.auth import check_and_reset_credits, deduct_credits_atomic
 from app.services.gmail_client import _load_user_gmail_creds, download_resume_from_url
 from app.services.metering import attach_request_context
-from app.services.pdl_client import search_contacts_from_prompt
 from app.services.prompt_parser import parse_search_prompt_structured
 from app.services.reply_generation import (
     PURPOSES_INCLUDE_RESUME,
@@ -608,15 +607,19 @@ def search_people(
             logger.exception("people-deck coresignal rung failed for uid=%s", user_id)
             contacts = contacts or []
 
-    # FullEnrich budget-discovery rung (env-gated, photo-less; capability
-    # matrix 2026-08-24: rich rows at 0.25 cr/result). Default OFF: the
-    # swipe deck's photos are measured product value.
+    # FullEnrich search rung — PDL's replacement (Rylan 2026-09-14: the PDL
+    # subscription is retired, same call already removed from routes/runs.py
+    # on 2026-08-30). Photo-less, so it costs the swipe deck its photo on
+    # any contact it supplies, but it is the only rescue left when Coresignal
+    # comes up empty, so that trade beats a dead end.
     if not contacts:
         try:
             from app.services import fullenrich_search
-            if fullenrich_search.discovery_enabled(db):
+            from app.services.fullenrich_client import enabled as _fullenrich_enabled
+            if _fullenrich_enabled(db):
                 contacts, _lvl2, _saved2, fe_meta = fullenrich_search.search_contacts_from_prompt(
                     parsed, min(limit, 20), exclude_keys=set(), user_profile=user_doc, db=db)
+                contacts = contacts or []
                 if contacts:
                     _adjacency = dict(fe_meta or {})
                     _adjacency["provider"] = "fullenrich_search"
@@ -626,48 +629,30 @@ def search_people(
             logger.exception("people-deck fullenrich-search rung failed uid=%s", user_id)
             contacts = contacts or []
 
-    if not contacts:
+    _adjacency = _adjacency or {}
+
+    # The outage rung, previously wired into routes/runs.py only, which left
+    # THIS route with zero fallbacks. Hunter Domain Search covers
+    # company-targeted prompts, which is most mobile searches, and its
+    # addresses are Hunter-verified (no synthesized-email risk).
+    if not contacts and (parsed.get("companies") or []):
         try:
-            contacts, _retry_level, _already_saved, _adjacency = search_contacts_from_prompt(
+            from app.services.hunter_person_search import search_people_via_hunter
+            contacts, _retry_level, _already_saved, hunter_meta = search_people_via_hunter(
                 parsed,
-                fetch_count,
+                limit,
                 exclude_keys=set(),
                 user_profile=user_doc,
             )
+            contacts = contacts or []
+            _adjacency.update(hunter_meta or {})
+            _adjacency["fallback_used"] = "hunter"
+            logger.info(
+                "people-deck hunter bridge uid=%s returned %d contacts", user_id, len(contacts)
+            )
         except Exception:
-            # A PDL failure is NOT the end of the search any more (2026-08-18).
-            # It used to 502 here, which showed "Could not run that search" for
-            # the whole PDL billing outage. Fall through to the Hunter rung below,
-            # the same ladder the website's Find flow got in commit ed8961d8.
-            logger.exception("people-deck PDL search raised for uid=%s", user_id)
-            contacts, _retry_level, _already_saved, _adjacency = [], 0, [], {}
-
-        contacts = contacts or []
-        _adjacency = _adjacency or {}
-
-        # The outage rung, previously wired into routes/runs.py only, which left
-        # THIS route with zero fallbacks. Fires on empty as well as on raise,
-        # because a PDL 404 returns [] without raising. Hunter Domain Search
-        # covers company-targeted prompts, which is most mobile searches, and its
-        # addresses are Hunter-verified (no synthesized-email risk).
-        if not contacts and (parsed.get("companies") or []):
-            try:
-                from app.services.hunter_person_search import search_people_via_hunter
-                contacts, _retry_level, _already_saved, hunter_meta = search_people_via_hunter(
-                    parsed,
-                    limit,
-                    exclude_keys=set(),
-                    user_profile=user_doc,
-                )
-                contacts = contacts or []
-                _adjacency.update(hunter_meta or {})
-                _adjacency["fallback_used"] = "hunter"
-                logger.info(
-                    "people-deck hunter bridge uid=%s returned %d contacts", user_id, len(contacts)
-                )
-            except Exception:
-                logger.exception("people-deck hunter bridge failed for uid=%s", user_id)
-                contacts = contacts or []
+            logger.exception("people-deck hunter bridge failed for uid=%s", user_id)
+            contacts = contacts or []
 
 
     contacts = _filter_contacts(contacts or [], parsed, user_id)

@@ -15,7 +15,8 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from app.extensions import get_db
-from app.services.pdl_client import search_contacts_from_prompt, get_contact_identity
+from app.services.fullenrich_search import search_contacts_from_prompt
+from app.services.pdl_client import get_contact_identity
 from app.services.reply_generation import batch_generate_emails
 from app.services.auth import deduct_credits_atomic
 from app.services.loop_budget import CREDIT_COSTS
@@ -521,10 +522,22 @@ def execute_find_and_draft(
     exclusion_data = _build_exclusion_sets(uid, db)
     exclude_keys = exclusion_data["identity_set"]
 
-    # Search PDL
+    # Search FullEnrich (PDL's replacement, Rylan 2026-09-14: the PDL
+    # subscription is retired).
     max_contacts = count
     tier_max = 15  # Elite tier
     user_profile = _build_user_profile(user_data)
+
+    from app.services.fullenrich_client import enabled as _fullenrich_enabled
+    if not _fullenrich_enabled(db):
+        logger.warning("Agent find: FullEnrich unavailable (no key or budget exhausted) uid=%s", uid)
+        return {
+            "contactsFound": 0,
+            "emailsDrafted": 0,
+            "contacts": [],
+            "creditsSpent": 0,
+            "error": "search_unavailable",
+        }
 
     try:
         logger.info(
@@ -534,10 +547,11 @@ def execute_find_and_draft(
             parsed_prompt.get("locations", []),
         )
         result = search_contacts_from_prompt(
-            parsed_prompt=parsed_prompt,
-            max_contacts=min(max_contacts, tier_max),
+            parsed_prompt,
+            min(max_contacts, tier_max),
             exclude_keys=exclude_keys,
             user_profile=user_profile,
+            db=db,
         )
         # Returns (filtered_list, retry_level, already_saved, adjacency_metadata)
         raw_contacts = result[0] if isinstance(result, tuple) else result
@@ -564,16 +578,17 @@ def execute_find_and_draft(
                 "locations": [],
             }
             result = search_contacts_from_prompt(
-                parsed_prompt=relaxed_prompt,
-                max_contacts=min(max_contacts, tier_max),
+                relaxed_prompt,
+                min(max_contacts, tier_max),
                 exclude_keys=exclude_keys,
                 user_profile=user_profile,
+                db=db,
             )
             raw_contacts = result[0] if isinstance(result, tuple) else result
             logger.info("Agent find relaxed retry: %d contacts for %s", len(raw_contacts) if raw_contacts else 0, company)
 
     except Exception as e:
-        logger.exception("PDL search failed for agent uid=%s company=%s", uid, company)
+        logger.exception("FullEnrich search failed for agent uid=%s company=%s", uid, company)
         return {
             "contactsFound": 0,
             "emailsDrafted": 0,
