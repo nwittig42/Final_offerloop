@@ -268,12 +268,47 @@ def test_test_event_from_the_dashboard_is_ignored():
     assert d.reason == 'unhandled_event_type'
 
 
-def test_transfer_event_is_ignored():
-    """TRANSFER moves a purchase between app user ids. Granting on it would
-    double-credit the receiving account."""
-    d = classify_event(pack_event(type='TRANSFER'), expect_production=True)
-    assert d.action == 'ignore'
-    assert d.reason == 'unhandled_event_type'
+def test_transfer_event_syncs_the_destination_uid():
+    """TRANSFER fires when Purchases.logIn() merges an anonymous purchase (an
+    offer-code redemption completed before the buyer ever logged into the
+    app) into their real Firebase uid. It must sync that uid's tier from
+    RevenueCat's live snapshot, not get dropped like the anonymous purchase
+    that spawned it correctly was."""
+    d = classify_event(
+        subscription_event(
+            type='TRANSFER',
+            app_user_id='$RCAnonymousID:8e9f2a1b4c',
+            transferred_to=['firebase-uid-real'],
+        ),
+        expect_production=True,
+    )
+    assert d.action == 'sync_subscription'
+    assert d.uid == 'firebase-uid-real'
+
+
+def test_transfer_event_with_no_transferred_to_keeps_the_event_uid():
+    """Defensive: if RevenueCat ever omits transferred_to, fall back to the
+    event's own app_user_id rather than syncing nobody."""
+    d = classify_event(
+        subscription_event(type='TRANSFER', app_user_id='firebase-uid-real'),
+        expect_production=True,
+    )
+    assert d.action == 'sync_subscription'
+    assert d.uid == 'firebase-uid-real'
+
+
+def test_transfer_event_to_multiple_destinations_uses_the_last_one():
+    """transferred_to is documented as an array; the last entry is the
+    current destination."""
+    d = classify_event(
+        subscription_event(
+            type='TRANSFER',
+            app_user_id='$RCAnonymousID:8e9f2a1b4c',
+            transferred_to=['firebase-uid-old', 'firebase-uid-newest'],
+        ),
+        expect_production=True,
+    )
+    assert d.uid == 'firebase-uid-newest'
 
 
 # ---------------------------------------------------------------------------
