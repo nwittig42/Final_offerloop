@@ -59,10 +59,10 @@ SUBSCRIPTION_EVENT_TYPES = frozenset({
 PACK_PURCHASE_EVENT_TYPES = frozenset({'NON_RENEWING_PURCHASE'})
 
 # RevenueCat's own alias/merge: fires when Purchases.logIn() merges an
-# anonymous identity's purchase history into a real (Firebase-uid) identity —
-# the exact case of a promo/offer-code redemption completed via Safari or the
-# App Store before the app has ever logged the buyer in. The event's own
-# app_user_id is documented as the destination, but transferred_to is the
+# anonymous identity's purchase history into a real (Firebase-uid) identity.
+# This is the exact case of a promo/offer-code redemption completed via Safari
+# or the App Store before the app has ever logged the buyer in. The event's
+# own app_user_id is documented as the destination, but transferred_to is the
 # field RevenueCat guarantees, so classify_event reads that instead.
 TRANSFER_EVENT_TYPES = frozenset({'TRANSFER'})
 
