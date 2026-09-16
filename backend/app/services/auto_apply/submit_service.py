@@ -76,7 +76,14 @@ def submit_auto_apply_for_user(
         return {"error": "job not found", "code": "JOB_NOT_FOUND"}, 404
     job_data = job_snap.to_dict() or {}
     if not is_eligible(job_data):
-        return {"error": "job is not auto-apply eligible", "code": "INELIGIBLE"}, 400
+        # apply_url rides along so a caller (Scout) that promises "here's the
+        # direct link" on an ineligible ATS can actually keep that promise
+        # instead of improvising or dropping the link (Rylan 2026-09-16).
+        return {
+            "error": "job is not auto-apply eligible",
+            "code": "INELIGIBLE",
+            "apply_url": job_data.get("apply_url") or "",
+        }, 400
 
     job_title = job_data.get("title") or ""
     company = job_data.get("company") or ""

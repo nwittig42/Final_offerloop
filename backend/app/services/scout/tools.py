@@ -488,15 +488,19 @@ FIND_JOBS_TOOL: Dict[str, Any] = {
     "name": "find_jobs",
     "description": (
         "Read-only. Searches the job catalog by keywords and returns up to "
-        "`limit` recent matches with job_id, title, company, location, and "
-        "whether each supports auto-apply. QUERY DISCIPLINE: use ONLY the "
-        "role words the user gave, plus a company or city IF THE USER NAMED "
-        "ONE (2-4 words total, e.g. 'data science intern'). NEVER pad the "
-        "query with profile context - no school names, no 'student', no "
-        "graduation year, no 'summer 2026': the catalog matches keywords "
-        "literally and padded queries return nothing the user asked for. "
-        "Use this to look up concrete jobs before discussing or applying to "
-        "them. Present matches by title and company; never invent job ids."
+        "`limit` recent matches with job_id, title, company, location, "
+        "apply_url, and whether each supports auto-apply. Already excludes "
+        "jobs the user dismissed or already applied to, same as the Feed. "
+        "QUERY DISCIPLINE: use ONLY the role words the user gave, plus a "
+        "company or city IF THE USER NAMED ONE (2-4 words total, e.g. 'data "
+        "science intern'). NEVER pad the query with profile context - no "
+        "school names, no 'student', no graduation year, no 'summer 2026': "
+        "the catalog matches keywords literally and padded queries return "
+        "nothing the user asked for. Put location/job_type filters the user "
+        "DID name (a city, 'remote', 'internship', 'full-time') into those "
+        "params instead, not into query. Use this to look up concrete jobs "
+        "before discussing or applying to them. Present matches by title "
+        "and company; never invent job ids."
     ),
     "input_schema": {
         "type": "object",
@@ -508,6 +512,15 @@ FIND_JOBS_TOOL: Dict[str, Any] = {
             "limit": {
                 "type": "integer",
                 "description": "Max jobs to return (default 5, max 10).",
+            },
+            "location": {
+                "type": "string",
+                "description": "Optional city/region substring the user named, e.g. 'new york' or 'remote'.",
+            },
+            "job_type": {
+                "type": "string",
+                "enum": ["FULLTIME", "PARTTIME", "INTERNSHIP"],
+                "description": "Optional exact job type the user named.",
             },
         },
         "required": ["query"],
@@ -534,7 +547,9 @@ AUTO_APPLY_TOOL: Dict[str, Any] = {
         "/applications to track progress. If the result code is "
         "PROFILE_REQUIRED, tell the user to complete their application "
         "profile from any job page first; INSUFFICIENT_CREDITS means they "
-        "need credits; INELIGIBLE means this job's ATS is unsupported."
+        "need credits; INELIGIBLE means this job's ATS is unsupported - the "
+        "result carries an apply_url, hand that to the user as the direct "
+        "link to apply manually instead."
     ),
     "input_schema": {
         "type": "object",
@@ -1095,7 +1110,13 @@ async def run_helper_tool(
             "get_loops_status", args, ctx, 6, _LOOPS_EMPTY)
     if name == "find_jobs":
         return await asyncio.to_thread(
-            _find_jobs, str(args.get("query") or ""), args.get("limit"))
+            _find_jobs,
+            str(args.get("query") or ""),
+            args.get("limit"),
+            args.get("location"),
+            args.get("job_type"),
+            ctx.get("uid"),
+        )
     if name == "auto_apply_to_job":
         return await _run_auto_apply(args, ctx)
     if name == "draft_outreach_emails":
@@ -1427,12 +1448,47 @@ def _job_text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
-def _find_jobs(query: str, limit: Any = None) -> Dict[str, Any]:
+def _load_excluded_job_ids(db, uid: Optional[str]) -> set:
+    """Jobs the Feed already hides for this user: dismissed (swiped/marked
+    negative) or already applied to. Mirrors routes/jobs.py's _load_dismissed
+    / _load_applied so Scout never resurfaces something the user already
+    passed on or acted on (Rylan 2026-09-16: find_jobs was a materially
+    thinner search than the Feed it's meant to mirror)."""
+    out: set = set()
+    if not uid:
+        return out
+    try:
+        user_ref = db.collection("users").document(uid)
+        for d in user_ref.collection("jobPreferences").where("signal", "==", "negative").stream():
+            pd = d.to_dict() or {}
+            jid = pd.get("job_id") or d.id
+            if jid:
+                out.add(str(jid))
+        for d in user_ref.collection("autoApplyJobs").stream():
+            ad = d.to_dict() or {}
+            jid = ad.get("job_id") or d.id
+            if jid:
+                out.add(str(jid))
+    except Exception:
+        pass
+    return out
+
+
+def _find_jobs(
+    query: str,
+    limit: Any = None,
+    location: Optional[str] = None,
+    job_type: Optional[str] = None,
+    uid: Optional[str] = None,
+) -> Dict[str, Any]:
     """Lean catalog search for Scout: token filter + recency, best-effort.
 
     Mirrors the /api/jobs/search primary-token strategy without the cursor /
     post-filter machinery: one array_contains on the rarest token, ordered by
-    posted_at desc, annotated with auto-apply eligibility.
+    posted_at desc, annotated with auto-apply eligibility. Also applies the
+    same location / job_type / dismissed-and-applied filtering the real Feed
+    does, and carries apply_url so an ineligible-for-auto-apply job still
+    hands the user a real link (Rylan 2026-09-16).
     """
     try:
         limit = max(1, min(int(limit or 5), 10))
@@ -1441,6 +1497,8 @@ def _find_jobs(query: str, limit: Any = None) -> Dict[str, Any]:
     query = (query or "").strip()
     if not query:
         return {"count": 0, "jobs": [], "error": "query required"}
+    location_q = (location or "").strip().lower() or None
+    job_type_q = (job_type or "").strip().upper() or None
     try:
         from app.extensions import get_db
         from app.services.auto_apply.ats_detector import is_eligible
@@ -1448,6 +1506,7 @@ def _find_jobs(query: str, limit: Any = None) -> Dict[str, Any]:
         from google.cloud.firestore_v1.base_query import FieldFilter
 
         db = get_db()
+        excluded_ids = _load_excluded_job_ids(db, uid)
         tokens = build_search_terms(query, None, None) or []
         # Try up to the two longest tokens as the Firestore filter: a stuffed
         # or unlucky primary ("angeles") should not zero out the whole search.
@@ -1458,12 +1517,16 @@ def _find_jobs(query: str, limit: Any = None) -> Dict[str, Any]:
             if primary:
                 q = q.where(filter=FieldFilter("search_terms", "array_contains", primary))
             for snap in q.limit(60).stream():
-                if snap.id in candidates:
+                if snap.id in candidates or snap.id in excluded_ids:
                     continue
                 d = snap.to_dict() or {}
                 title = _job_text(d.get("title"))
                 company = _job_text(d.get("company"))
                 loc = _job_text(d.get("location"))
+                if location_q and location_q not in loc.lower():
+                    continue
+                if job_type_q and (d.get("type") or "").upper() != job_type_q:
+                    continue
                 haystack = f"{title} {company} {loc}".lower()
                 # Rank by how many query tokens land; never hard-require all
                 # of them (an extra word like a city must not zero the search).
@@ -1474,6 +1537,7 @@ def _find_jobs(query: str, limit: Any = None) -> Dict[str, Any]:
                     "company": company[:120],
                     "location": loc[:120],
                     "auto_apply_eligible": bool(is_eligible(d)),
+                    "apply_url": d.get("apply_url") or "",
                     "_score": score,
                 }
             if candidates:
