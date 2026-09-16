@@ -17,10 +17,11 @@ Message doc fields:
   tool_results (or None), created_at, metrics (or None), expires_at.
 
 Retention (TTL):
-  Free  -> 24 hours after creation.
-  Pro   -> 14 days.
-  Elite -> 14 days (matches Pro for now; tier kept separate so we can extend it
-           without a schema change).
+  Free  -> 7 days after creation.
+  Pro   -> 60 days.
+  Elite -> 90 days (Rylan 2026-09-16: first real use of the tier being kept
+           separate from Pro, since Scout's actual memory ceiling was found
+           to be this retention window, not model capability).
 
 Why expires_at on the message doc too: Firestore TTL policies do not cascade
 from a parent to a subcollection. Writing expires_at on every message lets a
@@ -48,9 +49,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-# Retention per tier, in days. Elite matches Pro today but is kept as its own
-# key so a future bump (e.g. 30 days) is a one-line change.
-CHAT_TTL_DAYS = {"free": 1, "pro": 14, "elite": 14}
+# Retention per tier, in days.
+CHAT_TTL_DAYS = {"free": 7, "pro": 60, "elite": 90}
 
 # Default cap when reading messages back. The LLM-context windowing in the
 # service layer further trims this; the cap here just protects the read.
