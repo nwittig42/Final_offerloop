@@ -58,6 +58,14 @@ SUBSCRIPTION_EVENT_TYPES = frozenset({
 # A consumable purchase. This is the only event type that grants pack credits.
 PACK_PURCHASE_EVENT_TYPES = frozenset({'NON_RENEWING_PURCHASE'})
 
+# RevenueCat's own alias/merge: fires when Purchases.logIn() merges an
+# anonymous identity's purchase history into a real (Firebase-uid) identity.
+# This is the exact case of a promo/offer-code redemption completed via Safari
+# or the App Store before the app has ever logged the buyer in. The event's
+# own app_user_id is documented as the destination, but transferred_to is the
+# field RevenueCat guarantees, so classify_event reads that instead.
+TRANSFER_EVENT_TYPES = frozenset({'TRANSFER'})
+
 # Reversals. A consumable has no renewal to cancel, so CANCELLATION landing on a
 # pack product means Apple reversed the charge.
 PACK_REVERSAL_EVENT_TYPES = frozenset({'REFUND', 'CANCELLATION'})
@@ -175,6 +183,10 @@ def classify_event(event: dict, *, expect_production: bool) -> WebhookDecision:
     event = event or {}
     event_type = str(event.get('type') or '').upper()
     uid = event.get('app_user_id')
+    if event_type in TRANSFER_EVENT_TYPES:
+        transferred_to = event.get('transferred_to') or []
+        if transferred_to:
+            uid = transferred_to[-1]
     product_id = event.get('product_id')
     environment = str(event.get('environment') or '').upper()
     period_type = event.get('period_type')
@@ -222,19 +234,20 @@ def classify_event(event: dict, *, expect_production: bool) -> WebhookDecision:
             idempotency_key=f'refund:{txn}',
         )
 
-    # 5. Subscription. Don't derive the resulting state from the event type —
-    #    just go re-read the subscriber snapshot. fallback_tier is what we use
-    #    only if that read fails.
-    if event_type in SUBSCRIPTION_EVENT_TYPES:
+    # 5. Subscription, including TRANSFER now that uid has been resolved to the
+    #    destination above. _sync_subscription re-reads RevenueCat's live
+    #    subscriber snapshot rather than trusting the event, so replaying this
+    #    (retry, or a uid that was already synced by a normal RENEWAL) is a
+    #    no-op: it only grants the monthly pool when tier actually changes.
+    if event_type in SUBSCRIPTION_EVENT_TYPES or event_type in TRANSFER_EVENT_TYPES:
         return decision(
             'sync_subscription', 'ok', uid=uid,
             fallback_tier=tier_from_entitlements(entitlements),
             idempotency_key=str(event.get('id') or ''),
         )
 
-    # 6. TEST (the dashboard's "send test webhook" button), TRANSFER (moves a
-    #    purchase between app user ids — granting on it would double-credit the
-    #    receiving account), and anything RevenueCat adds later.
+    # 6. TEST (the dashboard's "send test webhook" button) and anything
+    #    RevenueCat adds later.
     return decision('ignore', 'unhandled_event_type', uid=uid)
 
 
