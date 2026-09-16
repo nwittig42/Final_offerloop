@@ -1,7 +1,7 @@
 """Scout chat persistence (Phase 5, Stage 3).
 
-Persists Scout conversations to Firestore so they survive page reloads, sign
-outs, and a tier-appropriate retention window. Before this stage the chat
+Persists Scout conversations to Firestore so they survive page reloads,
+sign outs, and a 90-day retention window. Before this stage the chat
 thread lived only in component state.
 
 Firestore layout:
@@ -16,12 +16,10 @@ Message doc fields:
   message_id, role ("user" | "assistant"), content, tool_calls (or None),
   tool_results (or None), created_at, metrics (or None), expires_at.
 
-Retention (TTL):
-  Free  -> 7 days after creation.
-  Pro   -> 60 days.
-  Elite -> 90 days (Rylan 2026-09-16: first real use of the tier being kept
-           separate from Pro, since Scout's actual memory ceiling was found
-           to be this retention window, not model capability).
+Retention (TTL): 90 days after creation, every tier (Rylan 2026-09-16:
+  memory is not a paywalled feature — Scout's actual memory ceiling was
+  found to be this retention window, not model capability, and it should
+  not be gated by price).
 
 Why expires_at on the message doc too: Firestore TTL policies do not cascade
 from a parent to a subcollection. Writing expires_at on every message lets a
@@ -49,8 +47,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-# Retention per tier, in days.
-CHAT_TTL_DAYS = {"free": 7, "pro": 60, "elite": 90}
+# Retention, in days. Same for every tier on purpose (Rylan 2026-09-16: not
+# a paywalled feature). Kept as a per-tier dict, not a flat constant, so a
+# future tier-specific need doesn't require a schema change.
+CHAT_TTL_DAYS = {"free": 90, "pro": 90, "elite": 90}
 
 # Default cap when reading messages back. The LLM-context windowing in the
 # service layer further trims this; the cap here just protects the read.

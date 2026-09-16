@@ -9,12 +9,10 @@ user at a time.
 Firestore layout: users/{uid}/scoutStrategies/{id}. Each doc is one strategy.
 Exactly one doc carries status == "active"; the rest are status == "archived".
 
-Tier gating (the only place tier matters here):
-  Free   - replacing or closing a strategy DELETES the old one. No archive.
-  Pro    - the old strategy is archived and kept 14 days.
-  Elite  - the old strategy is archived and kept 30 days.
-The active strategy itself persists across sessions for every tier; only the
-archive of past strategies is tier-gated.
+Replacing or closing a strategy archives the old one for 90 days, every
+tier (Rylan 2026-09-16: memory is not a paywalled feature, this used to be
+Free-deletes/Pro-and-Elite-archive; not any more). The active strategy
+itself already persisted across sessions for every tier.
 
 Archived docs carry an `expires_at` datetime. This module prunes expired
 archives on every write (so the archive a user sees is never stale), and the
@@ -44,8 +42,10 @@ MAX_GOAL_LEN = 300
 MAX_STEP_TITLE_LEN = 200
 MAX_STEP_DETAIL_LEN = 600
 
-# Archive retention in days, per tier. Free keeps no archive.
-ARCHIVE_RETENTION_DAYS = {"free": 0, "pro": 14, "elite": 30}
+# Archive retention in days. Same for every tier on purpose (Rylan
+# 2026-09-16: not a paywalled feature). Kept as a per-tier dict, not a flat
+# constant, so a future tier-specific need doesn't require a schema change.
+ARCHIVE_RETENTION_DAYS = {"free": 90, "pro": 90, "elite": 90}
 
 # A strategy with an unfinished step and no update in this many days is stalled.
 STALL_DAYS = 7
@@ -75,7 +75,7 @@ def archive_retention_days(tier: Optional[str]) -> int:
 
 
 def keeps_archive(tier: Optional[str]) -> bool:
-    """True when this tier keeps a strategy archive (Pro and Elite)."""
+    """True when this tier keeps a strategy archive (every tier now)."""
     return archive_retention_days(tier) > 0
 
 
