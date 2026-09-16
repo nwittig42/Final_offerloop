@@ -1508,6 +1508,35 @@ def get_draft_job_route(job_id):
     return jsonify(public_job_state(job_id, snap.to_dict() or {})), 200
 
 
+@mobile_bp.get('/scout/progress')
+@require_firebase_auth
+def scout_progress():
+    """Poll target for one in-flight action='ask' turn (Rylan 2026-09-16).
+
+    The app fires this every ~1s while /scout/ask's blocking call is still
+    in flight, and shows `label` instead of a static "Scout is thinking"
+    bubble. _scout_ask_brain writes this doc via handle_chat's event_emitter
+    hook and deletes it in a finally block once the turn ends, so 'idle'
+    covers both "never started" and "already finished" - the app just stops
+    polling once /scout/ask itself returns, whichever comes first.
+    """
+    db = get_db()
+    if db is None:
+        return jsonify({'status': 'idle'}), 200
+    ask_id = (request.args.get('askId') or '').strip()[:64]
+    if not ask_id:
+        return jsonify({'error': 'askId required'}), 400
+    uid = request.firebase_user['uid']
+    try:
+        snap = db.collection('users').document(uid).collection('scoutProgress').document(ask_id).get()
+        if not snap.exists:
+            return jsonify({'status': 'idle'}), 200
+        d = snap.to_dict() or {}
+        return jsonify({'status': d.get('status') or 'idle', 'label': d.get('label') or ''}), 200
+    except Exception:
+        return jsonify({'status': 'idle'}), 200
+
+
 @mobile_bp.get('/scout/active')
 @require_firebase_auth
 def scout_active_jobs():
@@ -2100,6 +2129,39 @@ def _scout_ask_brain(db, ask: str, ask_id: str, data: dict):
         user_context = {}
 
     conversation_id = (data.get('conversationId') or '').strip() or None
+
+    # Live progress, mobile side (Rylan 2026-09-16): the app's request here is
+    # a single blocking call with no streaming, so while it's in flight the
+    # user saw one static "thinking" bubble regardless of what Scout was
+    # actually doing. handle_chat/`_call_scout_tools` already emit tool_start
+    # /tool_end with human labels for the web SSE path (_tool_label,
+    # _tool_result_summary) - this reuses that exact same hook, just writing
+    # to a Firestore doc instead of an SSE queue, so GET /scout/progress can
+    # poll it. Best-effort: a write failure here must never break the turn.
+    progress_ref = (
+        db.collection('users').document(uid).collection('scoutProgress').document(ask_id)
+        if ask_id else None
+    )
+
+    def _write_progress(event: str, event_data: dict):
+        if progress_ref is None:
+            return
+        try:
+            if event == 'tool_start':
+                progress_ref.set({
+                    'status': 'running',
+                    'label': event_data.get('label') or 'Working on it',
+                    'updated_at': datetime.utcnow(),
+                }, merge=True)
+            elif event == 'tool_end':
+                progress_ref.set({
+                    'status': 'running',
+                    'label': event_data.get('summary') or 'Working on it',
+                    'updated_at': datetime.utcnow(),
+                }, merge=True)
+        except Exception:
+            pass
+
     try:
         env = run_async(scout_assistant_service.handle_chat(
             message=ask,
@@ -2113,6 +2175,7 @@ def _scout_ask_brain(db, ask: str, ask_id: str, data: dict):
             uid=uid,
             chat_id=conversation_id,
             surface='mobile',
+            event_emitter=_write_progress if progress_ref is not None else None,
         ))
         payload = _scout_ask_contract(env or {}, ask_id)
         if idem_key:
@@ -2127,6 +2190,15 @@ def _scout_ask_brain(db, ask: str, ask_id: str, data: dict):
             'actions': [], 'askId': ask_id,
             'error': {'code': 'internal', 'detail': ''},
         }), 200
+    finally:
+        # The main response always arrives before or with this cleanup, so a
+        # poller either sees 'done' once and stops, or (network race) just
+        # gets a 404-shaped empty read next time - never a stuck 'running'.
+        if progress_ref is not None:
+            try:
+                progress_ref.delete()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
