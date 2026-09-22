@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://api.linear.app/graphql"
 TEAM_KEY = os.getenv("LINEAR_TEAM_KEY", "OFF")
+FEEDBACK_LABEL = "feedback"
 
 _team_id_cache: Optional[str] = None
+_label_id_cache: Optional[str] = None
 
 
 def _key() -> str:
@@ -64,6 +66,33 @@ def _team_id() -> Optional[str]:
     return _team_id_cache
 
 
+def _label_id(team_id: str) -> Optional[str]:
+    """Finds the team's "feedback" label, creating it once if it doesn't
+    exist yet, so every issue this files is filterable in one saved view
+    regardless of which workflow state (Triage/Backlog) it lands in."""
+    global _label_id_cache
+    if _label_id_cache:
+        return _label_id_cache
+    data = _query(
+        "query($teamId: ID!, $name: String!) {"
+        " issueLabels(filter: { team: { id: { eq: $teamId } }, name: { eq: $name } }) {"
+        " nodes { id } } }",
+        {"teamId": team_id, "name": FEEDBACK_LABEL},
+    )
+    nodes = (data.get("issueLabels") or {}).get("nodes") or []
+    if nodes:
+        _label_id_cache = nodes[0]["id"]
+        return _label_id_cache
+    data = _query(
+        "mutation($input: IssueLabelCreateInput!) {"
+        " issueLabelCreate(input: $input) { issueLabel { id } } }",
+        {"input": {"teamId": team_id, "name": FEEDBACK_LABEL}},
+    )
+    label = (data.get("issueLabelCreate") or {}).get("issueLabel") or {}
+    _label_id_cache = label.get("id")
+    return _label_id_cache
+
+
 def create_issue(title: str, description: str) -> Optional[str]:
     """Files one issue, returns its identifier (e.g. "OFF-123") or None on
     any failure. Never raises; callers treat this as fire-and-forget."""
@@ -73,6 +102,13 @@ def create_issue(title: str, description: str) -> Optional[str]:
         team_id = _team_id()
         if not team_id:
             return None
+        input_: dict = {"teamId": team_id, "title": title, "description": description}
+        try:
+            label_id = _label_id(team_id)
+            if label_id:
+                input_["labelIds"] = [label_id]
+        except Exception:
+            logger.exception("[linear] feedback label lookup/create failed, filing unlabeled")
         data = _query(
             """
             mutation($input: IssueCreateInput!) {
@@ -82,7 +118,7 @@ def create_issue(title: str, description: str) -> Optional[str]:
               }
             }
             """,
-            {"input": {"teamId": team_id, "title": title, "description": description}},
+            {"input": input_},
         )
         issue = (data.get("issueCreate") or {}).get("issue") or {}
         return issue.get("identifier")
