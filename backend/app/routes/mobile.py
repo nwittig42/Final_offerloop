@@ -1129,6 +1129,23 @@ def submit_feedback():
                         logger.exception('feedback push to founder %s failed', fuid)
             except Exception:
                 logger.exception('feedback founder alert failed')
+
+            # File it as a real issue so it lands in the work queue, not just a
+            # push. Same best-effort rule: a Linear hiccup must not fail the
+            # user's feedback, and it's a no-op entirely when LINEAR_API_KEY
+            # isn't set (staging has no key on purpose).
+            try:
+                from app.services.linear_client import create_issue, enabled as _linear_enabled
+                if _linear_enabled():
+                    who = name or email or uid[:8]
+                    identifier = create_issue(
+                        title=f'Feedback: {who} ({tier})',
+                        description=f'{message}\n\n---\nuid: {uid}\nemail: {email or "-"}\ntier: {tier}\nplatform: ios',
+                    )
+                    if identifier:
+                        ref.update({'linearIssue': identifier})
+            except Exception:
+                logger.exception('feedback linear issue failed')
         threading.Thread(target=_alert, daemon=True).start()
 
         return jsonify({
