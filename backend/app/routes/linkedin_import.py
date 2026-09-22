@@ -361,9 +361,23 @@ def import_from_linkedin():
         # we already met, Coresignal collect by LinkedIn shorthand for the
         # rest. Replaces the PDL /person/enrich call, whose retired key
         # 401ed and broke this endpoint for the Chrome extension entirely.
+        #
+        # Warehouse-first (2026-09-21): this route only reads name/title/
+        # company/city/state/one school/photo out of engine_data (see
+        # pdl_contact below) — all of it already on the thin shelf record.
+        # Before this, every import paid for a fresh Coresignal collect even
+        # when another student had already found the same person; the shelf
+        # was only ever consulted after Coresignal failed. Checking the
+        # shelf first (90-day freshness window) means a repeat find is free.
+        # Meeting prep needs the full Coresignal shape, so it still calls
+        # enrich_linkedin_profile_engine directly and is unaffected.
         print(f"[LinkedInImport] Step 2: Enriching via engine...")
-        from app.services.linkedin_enrich import enrich_linkedin_profile_engine
-        engine_data = enrich_linkedin_profile_engine(linkedin_url, db=get_db())
+        from app.services.linkedin_enrich import enrich_linkedin_profile_engine, warehouse_only_profile
+        engine_data = warehouse_only_profile(linkedin_url, db=get_db())
+        if engine_data:
+            print(f"[LinkedInImport] ✅ Served from warehouse, no vendor call")
+        else:
+            engine_data = enrich_linkedin_profile_engine(linkedin_url, db=get_db())
         if not engine_data or not (engine_data.get('firstName') or engine_data.get('lastName')):
             print(f"[LinkedInImport] ❌ ERROR: engine returned no data")
             return jsonify({

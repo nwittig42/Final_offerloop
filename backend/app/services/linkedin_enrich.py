@@ -13,12 +13,19 @@ that shape.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 _cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = threading.Lock()
+
+# How long a shelf record answers for a person before a caller that only
+# needs the thin shape (name/title/company/location/school/photo) should
+# treat it as stale and pay for a fresh collect instead.
+WAREHOUSE_PROFILE_TTL_DAYS = 90
 
 
 def _slug(linkedin_url: str) -> str:
@@ -202,7 +209,6 @@ def enrich_linkedin_profile_engine(linkedin_url: str, db=None) -> Optional[Dict[
                 except Exception:
                     pass
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("engine linkedin enrich failed for %s", slug)
 
     if data is None and db is not None:
@@ -217,3 +223,42 @@ def enrich_linkedin_profile_engine(linkedin_url: str, db=None) -> Optional[Dict[
         with _cache_lock:
             _cache[slug] = data
     return data
+
+
+def warehouse_only_profile(
+    linkedin_url: str, db, *, max_age_days: int = WAREHOUSE_PROFILE_TTL_DAYS
+) -> Optional[Dict[str, Any]]:
+    """The thin shelf record for one LinkedIn URL. No vendor call, $0.
+
+    enrich_linkedin_profile_engine() above always pays for a fresh Coresignal
+    collect first, even for someone another student already found — right
+    for meeting prep, which needs the full Coresignal shape (experience,
+    education detail, skills, summary) for the AI brief. Callers that only
+    read the thin shape (name, title, company, city/state, one school,
+    photo — the extension's import flow is the big one) should try this
+    FIRST and fall back to the engine only on a miss or a stale record, so a
+    repeat lookup of someone already on the shelf costs nothing.
+    """
+    slug = _slug(linkedin_url)
+    if not slug or db is None:
+        return None
+    try:
+        snap = db.collection("firm_employees").document(slug).get()
+        if not getattr(snap, "exists", False):
+            return None
+        fs = snap.to_dict() or {}
+        last_seen = fs.get("last_seen_at")
+        if not _fresh_enough(last_seen, max_age_days):
+            return None
+        return _from_warehouse(fs, linkedin_url)
+    except Exception:
+        logging.getLogger(__name__).exception("warehouse-only profile lookup failed for %s", slug)
+        return None
+
+
+def _fresh_enough(stamp: Any, max_age_days: int) -> bool:
+    if not isinstance(stamp, datetime):
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - stamp).days <= max_age_days
