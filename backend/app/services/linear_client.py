@@ -1,5 +1,5 @@
 """
-Linear issue creation for in-app feedback (Rylan 2026-09-22).
+Linear issue creation + reply sync for in-app feedback (Rylan 2026-09-22).
 
 Feedback already lands in Firestore and pings founders' phones
 (routes/mobile.py:submit_feedback); this adds a THIRD, purely additive
@@ -11,7 +11,16 @@ short key shown in issue numbers (e.g. "OFF"). We only have the key, so the
 team's id is resolved once via a lookup query and cached in-process; it
 never changes for a given key. Auth is a personal API key, sent as a raw
 Authorization header (no "Bearer" prefix, unlike most APIs, per Linear's docs).
+
+Reply direction (Linear -> user) goes through a webhook on new comments
+(routes/mobile.py:linear_webhook_receive). A comment only reaches the user
+if it starts with REPLY_PREFIX; internal triage chatter between teammates on
+the same issue never syncs, by construction (default is "never sends",
+opt-in per comment, not opt-out) - Rylan 2026-09-22, after flagging the risk
+of internal comments accidentally reaching a user.
 """
+import hashlib
+import hmac
 import logging
 import os
 from typing import Optional
@@ -23,6 +32,14 @@ logger = logging.getLogger(__name__)
 API_URL = "https://api.linear.app/graphql"
 TEAM_KEY = os.getenv("LINEAR_TEAM_KEY", "OFF")
 FEEDBACK_LABEL = "feedback"
+REPLY_PREFIX = "TO USER:"
+
+REPLY_INSTRUCTIONS = (
+    f'To reply to {{name}}, comment on this issue starting with "{REPLY_PREFIX}" '
+    f"(e.g. \"{REPLY_PREFIX} thanks for flagging this, fixed in today's build\"). "
+    "That comment is sent to them in the app. Any other comment here is internal "
+    "only and is never shown to them."
+)
 
 _team_id_cache: Optional[str] = None
 _label_id_cache: Optional[str] = None
@@ -93,9 +110,43 @@ def _label_id(team_id: str) -> Optional[str]:
     return _label_id_cache
 
 
-def create_issue(title: str, description: str) -> Optional[str]:
-    """Files one issue, returns its identifier (e.g. "OFF-123") or None on
-    any failure. Never raises; callers treat this as fire-and-forget."""
+def _webhook_secret() -> str:
+    return (os.getenv("LINEAR_WEBHOOK_SECRET") or "").strip()
+
+
+def webhook_enabled() -> bool:
+    return bool(_webhook_secret())
+
+
+def verify_webhook_signature(raw_body: bytes, signature: Optional[str]) -> bool:
+    """Linear signs webhook deliveries as hex HMAC-SHA256 of the raw request
+    body, header `Linear-Signature` (docs.linear.app/api/webhooks). Must run
+    on the raw bytes, not a re-serialized/parsed version, since re-encoding
+    JSON is not guaranteed to reproduce the exact bytes that were signed."""
+    secret = _webhook_secret()
+    if not secret or not signature:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def extract_reply(comment_body: str) -> Optional[str]:
+    """Returns the text to send the user, or None if this comment isn't a
+    reply (i.e. wasn't opted in with REPLY_PREFIX) - internal triage
+    comments on the same issue must never reach a user by default."""
+    body = (comment_body or "").strip()
+    if not body.upper().startswith(REPLY_PREFIX.upper()):
+        return None
+    reply = body[len(REPLY_PREFIX):].strip()
+    return reply or None
+
+
+def create_issue(title: str, description: str) -> Optional[dict]:
+    """Files one issue, returns {"identifier": "OFF-123", "id": "<uuid>"} or
+    None on any failure. Never raises; callers treat this as fire-and-forget.
+    Both fields are returned (not just the display identifier) because the
+    reply webhook's payload shape isn't guaranteed to include one over the
+    other, so callers should store both and match on whichever arrives."""
     if not enabled():
         return None
     try:
@@ -114,14 +165,16 @@ def create_issue(title: str, description: str) -> Optional[str]:
             mutation($input: IssueCreateInput!) {
               issueCreate(input: $input) {
                 success
-                issue { identifier }
+                issue { id identifier }
               }
             }
             """,
             {"input": input_},
         )
         issue = (data.get("issueCreate") or {}).get("issue") or {}
-        return issue.get("identifier")
+        if not issue.get("identifier"):
+            return None
+        return {"identifier": issue["identifier"], "id": issue.get("id")}
     except Exception:
         logger.exception("[linear] create_issue failed")
         return None

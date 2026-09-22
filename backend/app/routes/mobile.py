@@ -1037,6 +1037,13 @@ def save_preferences():
     return jsonify({'ok': True, **patch}), 200
 
 
+#: Shown immediately after sending, before any human has read it. Overwritten
+#: in place by the real reply once one arrives (see linear_webhook_receive),
+#: same message slot, so it reads as the placeholder "becoming" the answer
+#: rather than a new message appearing (Rylan 2026-09-22).
+FEEDBACK_ACK_MESSAGE = "Thanks for sending this! Our team is looking into it and will get back to you here."
+
+
 @mobile_bp.get('/feedback')
 @require_firebase_auth
 def list_feedback():
@@ -1058,11 +1065,15 @@ def list_feedback():
         items = []
         for d in docs:
             x = d.to_dict() or {}
+            responded_at = x.get('respondedAt')
             items.append({
                 'id': d.id,
                 'message': x.get('message', ''),
                 'createdAt': (x.get('createdAt').isoformat()
                               if hasattr(x.get('createdAt'), 'isoformat') else None),
+                'response': x.get('response') or None,
+                'responseIsPlaceholder': bool(x.get('responseIsPlaceholder', True)),
+                'respondedAt': (responded_at.isoformat() if hasattr(responded_at, 'isoformat') else None),
             })
         return jsonify({'items': items}), 200
     except Exception:
@@ -1103,6 +1114,9 @@ def submit_feedback():
         'platform': 'ios',
         'createdAt': datetime.now(timezone.utc),
         'read': False,   # founder-side triage flag
+        'response': FEEDBACK_ACK_MESSAGE,
+        'responseIsPlaceholder': True,
+        'respondedAt': None,
     }
     try:
         # Top-level = founders read everything in one query. Per-user
@@ -1135,15 +1149,17 @@ def submit_feedback():
             # user's feedback, and it's a no-op entirely when LINEAR_API_KEY
             # isn't set (staging has no key on purpose).
             try:
-                from app.services.linear_client import create_issue, enabled as _linear_enabled
+                from app.services.linear_client import create_issue, enabled as _linear_enabled, REPLY_INSTRUCTIONS
                 if _linear_enabled():
                     who = name or email or uid[:8]
-                    identifier = create_issue(
-                        title=f'Feedback: {who} ({tier})',
-                        description=f'{message}\n\n---\nuid: {uid}\nemail: {email or "-"}\ntier: {tier}\nplatform: ios',
+                    description = (
+                        f'{message}\n\n---\n'
+                        f'uid: {uid}\nemail: {email or "-"}\ntier: {tier}\nplatform: ios\n\n'
+                        f'{REPLY_INSTRUCTIONS.format(name=who)}'
                     )
-                    if identifier:
-                        ref.update({'linearIssue': identifier})
+                    issue = create_issue(title=f'Feedback: {who} ({tier})', description=description)
+                    if issue:
+                        ref.update({'linearIssue': issue['identifier'], 'linearIssueId': issue.get('id')})
             except Exception:
                 logger.exception('feedback linear issue failed')
         threading.Thread(target=_alert, daemon=True).start()
@@ -1152,10 +1168,86 @@ def submit_feedback():
             'ok': True,
             'id': ref.id,
             'createdAt': doc['createdAt'].isoformat(),
+            'response': FEEDBACK_ACK_MESSAGE,
+            'responseIsPlaceholder': True,
         }), 200
     except Exception:
         logger.exception('submit_feedback failed for uid=%s', uid)
         return jsonify({'error': 'could not save feedback'}), 500
+
+
+@mobile_bp.post('/linear-webhook')
+def linear_webhook_receive():
+    """Linear -> app reply sync. A team member replies to a user by
+    commenting on the feedback issue starting with "TO USER:" (the
+    convention is baked into every issue's own description at creation time,
+    see linear_client.REPLY_INSTRUCTIONS, so nobody has to be told it
+    separately). Any other comment on the same issue is ordinary internal
+    triage and is never synced: this is opt-in per comment, not opt-out, so a
+    forgotten prefix just means a reply didn't send (safe), never that an
+    internal note leaks to a user (Rylan 2026-09-22, flagged this exact risk
+    before we built it).
+
+    No @require_firebase_auth: the caller is Linear, not a signed-in user.
+    Auth is the HMAC signature instead."""
+    from app.services.linear_client import verify_webhook_signature, extract_reply
+
+    raw = request.get_data()
+    if not verify_webhook_signature(raw, request.headers.get('Linear-Signature')):
+        logger.warning('linear webhook: rejected, bad or missing signature')
+        return jsonify({'error': 'invalid signature'}), 401
+
+    payload = request.get_json(silent=True) or {}
+    if payload.get('type') != 'Comment' or payload.get('action') != 'create':
+        return jsonify({'ok': True}), 200
+
+    data = payload.get('data') or {}
+    reply = extract_reply(data.get('body') or '')
+    if not reply:
+        return jsonify({'ok': True}), 200  # internal comment, not opted in to send
+
+    issue = data.get('issue') or {}
+    identifier = issue.get('identifier') or data.get('issueIdentifier')
+    issue_id = issue.get('id') or data.get('issueId')
+
+    db = get_db()
+    try:
+        found_id = None
+        if identifier:
+            hits = list(db.collection('feedback').where('linearIssue', '==', identifier).limit(1).stream())
+            if hits:
+                found_id = hits[0].id
+        if found_id is None and issue_id:
+            hits = list(db.collection('feedback').where('linearIssueId', '==', issue_id).limit(1).stream())
+            if hits:
+                found_id = hits[0].id
+        if found_id is None:
+            logger.warning('linear webhook: no feedback doc for identifier=%s id=%s', identifier, issue_id)
+            return jsonify({'ok': True}), 200
+
+        doc_ref = db.collection('feedback').document(found_id)
+        doc = doc_ref.get().to_dict() or {}
+        uid = doc.get('uid')
+        update = {
+            'response': reply,
+            'responseIsPlaceholder': False,
+            'respondedAt': datetime.now(timezone.utc),
+        }
+        doc_ref.update(update)
+        if uid:
+            db.collection('users').document(uid).collection('feedback').document(found_id).update(update)
+            try:
+                from app.services.push_service import send_push
+                send_push(uid, 'Offerloop replied', reply[:120],
+                          data={'url': '/feedback', 'type': 'feedback_reply'})
+            except Exception:
+                logger.exception('feedback reply push failed uid=%s', uid)
+        return jsonify({'ok': True}), 200
+    except Exception:
+        # Ack anyway: a 500 here just makes Linear retry the same delivery,
+        # it doesn't help us recover from a bug on our side.
+        logger.exception('linear webhook processing failed')
+        return jsonify({'ok': True}), 200
 
 
 @mobile_bp.post('/notifications/read')
