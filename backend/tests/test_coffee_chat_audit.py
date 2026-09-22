@@ -29,9 +29,9 @@ class TestCreditRefundOnFailure:
         from app.routes.coffee_chat_prep import process_coffee_chat_prep_background
         sig = inspect.signature(process_coffee_chat_prep_background)
         assert "credits_charged" in sig.parameters
-        # Default should be COFFEE_CHAT_CREDITS
+        from app.config import COFFEE_CHAT_CREDITS
         default = sig.parameters["credits_charged"].default
-        assert default == 15
+        assert default == COFFEE_CHAT_CREDITS
 
     def test_refund_on_exception_in_source(self):
         """Background worker calls refund on exception."""
@@ -64,7 +64,8 @@ class TestCreditRefundOnFailure:
             resume_text="Some resume text here with enough length to pass checks",
         )
 
-        mock_refund.assert_called_once_with("user-456", 15, "coffee_chat_enrichment_failed")
+        from app.config import COFFEE_CHAT_CREDITS
+        mock_refund.assert_called_once_with("user-456", COFFEE_CHAT_CREDITS, "coffee_chat_enrichment_failed")
         # Verify status was set to failed with refund flag
         update_call = mock_prep_ref.update.call_args_list[-1]
         update_data = update_call[0][0]
@@ -89,7 +90,8 @@ class TestCreditRefundOnFailure:
             resume_text="Some resume text here",
         )
 
-        mock_refund.assert_called_once_with("user-456", 15, "coffee_chat_prep_failure")
+        from app.config import COFFEE_CHAT_CREDITS
+        mock_refund.assert_called_once_with("user-456", COFFEE_CHAT_CREDITS, "coffee_chat_prep_failure")
 
 
 # =============================================================================
@@ -609,7 +611,7 @@ class TestCoffeeChatTierLimits:
 
     def test_credit_cost(self):
         from app.config import COFFEE_CHAT_CREDITS
-        assert COFFEE_CHAT_CREDITS == 15
+        assert COFFEE_CHAT_CREDITS == 30
 
 
 # =============================================================================
