@@ -206,32 +206,58 @@ def _find_via_engine(db, uid: str, company: str, role: str, school: str,
         "locations": [],
     }
 
-    # Budget wall, same doc the People deck stops on.
-    budget = float(_os.getenv("CORESIGNAL_TEST_BUDGET", "20"))
+    # Warehouse read (2026-10-03): try the free cache before paying
+    # Coresignal, same pattern as the People deck and the Feed right-swipe.
+    # This find_contacts call has no location param, so there's no "wrong
+    # city" risk here, it only ever matches on company/school/title.
+    cache_hits: list = []
     try:
-        snap = db.collection("meta").document("coresignalTestBudget").get()
-        spent = float((snap.to_dict() or {}).get("spent_estimate", 0.0)) if snap.exists else 0.0
+        from app.services.firm_cache import search_firm_cache
+        from app.services.firm_cache.reader import _flag_enabled as _cache_lookup_enabled
+        if _cache_lookup_enabled():
+            cache_hits, _, _, _ = search_firm_cache(
+                parsed, count, exclude_keys=_seen_people_keys(db, uid))
+            if cache_hits:
+                logger.info("[ScoutContacts] warehouse hit uid=%s: %d/%d free",
+                            uid, len(cache_hits), count)
     except Exception:
-        spent = budget
-    if not coresignal_client.CORESIGNAL_API_KEY or spent >= budget:
-        return {"contacts": [], "note": "people search is at its budget wall right now"}
+        logger.exception("[ScoutContacts] warehouse lookup failed")
+        cache_hits = []
 
-    contacts, _lvl, _saved, meta = coresignal_client.search_contacts_from_prompt(
-        parsed, count, exclude_keys=_seen_people_keys(db, uid))
-    collected = int((meta or {}).get("collected_count") or 0)
-    if collected:
+    if len(cache_hits) >= count:
+        contacts = list(cache_hits[:count])
+    else:
+        # Budget wall, same doc the People deck stops on. Default matches
+        # people_deck.py's (7,400, the real live Coresignal balance as of
+        # 2026-10-02) — this file used to default to a stray "20" instead.
+        budget = float(_os.getenv("CORESIGNAL_TEST_BUDGET", "7400"))
         try:
-            db.collection("meta").document("coresignalTestBudget").set(
-                {"spent_estimate": _fs.Increment(20.0 * collected),
-                 "collect_count": _fs.Increment(collected)}, merge=True)
-            from app.services.metering import log_provider_spend
-            log_provider_spend("coresignal", "member_collect", collected, returned=collected)
+            snap = db.collection("meta").document("coresignalTestBudget").get()
+            spent = float((snap.to_dict() or {}).get("spent_estimate", 0.0)) if snap.exists else 0.0
         except Exception:
-            logger.exception("[ScoutContacts] spend mirror failed")
-    try:
-        cache_pdl_contacts(contacts, shape="app", async_write=True)
-    except Exception:
-        logger.exception("[ScoutContacts] warehouse feed failed")
+            spent = budget
+        if not coresignal_client.CORESIGNAL_API_KEY or spent >= budget:
+            if not cache_hits:
+                return {"contacts": [], "note": "people search is at its budget wall right now"}
+            contacts = list(cache_hits)
+        else:
+            contacts, _lvl, _saved, meta = coresignal_client.search_contacts_from_prompt(
+                parsed, count - len(cache_hits), exclude_keys=_seen_people_keys(db, uid))
+            collected = int((meta or {}).get("collected_count") or 0)
+            if collected:
+                try:
+                    db.collection("meta").document("coresignalTestBudget").set(
+                        {"spent_estimate": _fs.Increment(20.0 * collected),
+                         "collect_count": _fs.Increment(collected)}, merge=True)
+                    from app.services.metering import log_provider_spend
+                    log_provider_spend("coresignal", "member_collect", collected, returned=collected)
+                except Exception:
+                    logger.exception("[ScoutContacts] spend mirror failed")
+            try:
+                cache_pdl_contacts(contacts, shape="app", async_write=True)
+            except Exception:
+                logger.exception("[ScoutContacts] warehouse feed failed")
+            contacts = list(cache_hits) + (contacts or [])
     if not contacts:
         return {"contacts": []}
 

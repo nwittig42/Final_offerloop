@@ -21,6 +21,16 @@ Doc shape (one per LinkedIn profile):
       city               str    original-case city (display)
       state              str    two-letter state (display)
       country_code       str    "US" only; non-US docs are not written
+      work_email             str  verified work email, shared across EVERY
+                                  surface (website, MCP, extension, mobile)
+                                  per the FullEnrich reseller agreement's
+                                  90-day re-serve window. Absent until a
+                                  verified address is found; only set, never
+                                  overwritten with a worse value.
+      work_email_source      str  the EmailSource that verified it
+      work_email_verified_at str  ISO 8601 UTC timestamp; warehouse_warm.py's
+                                  nightly purge deletes all three past
+                                  WAREHOUSE_EMAIL_TTL_DAYS (90)
       last_seen_at       ts     server timestamp of most recent write
 
 Reads: reader.py uses indexed where() only — never in-memory filter.
@@ -499,7 +509,7 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
     last = (contact.get("LastName") or contact.get("lastName") or "").strip()
     name = f"{first} {last}".strip()
 
-    return {
+    doc = {
         "linkedin_id":     slug,
         "linkedin_url":    canon_url,
         "pdl_id":          (contact.get("pdlId") or "").strip(),
@@ -524,6 +534,26 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
         "photo_url":       (contact.get("PhotoUrl") or contact.get("photo_url") or "").strip(),
         # last_seen_at is stamped by writer.py with SERVER_TIMESTAMP
     }
+
+    # Verified work email (2026-10-02, porting the fix already live on the
+    # website branch since 2026-09-07, ENG-xxx). Previously only ranker.py's
+    # own inline logic wrote this shared field; every other mobile surface
+    # (this normalizer) dropped a found email on the floor, same gap that
+    # fix closed for the website, MCP server and extension. One shared field
+    # name means an email found by ANY of those surfaces is now visible to
+    # ALL of them, not just a per-branch, per-feature cache.
+    #
+    # Only a VERIFIED address is shared (never a guess), and the reseller
+    # agreement caps how long we may re-serve one: 90 days, enforced by
+    # warehouse_warm.py's nightly purge on work_email_verified_at, not by
+    # this normalizer. merge=True on write means an empty value here never
+    # blanks a fresher one already on the doc.
+    verified_email = _verified_work_email(contact)
+    if verified_email:
+        doc["work_email"] = verified_email
+        doc["work_email_source"] = (contact.get("EmailSource") or "verified").strip()
+        doc["work_email_verified_at"] = _utc_now_iso()
+    return doc
 
 
 # Two-letter US state postal codes + DC. Anything else → treat as non-US
@@ -554,6 +584,33 @@ def _looks_like_us_state(state: str) -> bool:
     if len(s) == 2 and s.upper() in _US_STATE_CODES:
         return True
     return s.lower() in _US_STATE_NAMES
+
+
+# Email sources whose addresses are verified before they reach a contact
+# dict. Anything else (pattern guesses, Hunter risky, catch-alls) stays
+# per-user and never lands on the shared shelf. Ported verbatim from the
+# website branch's firm_cache/schema.py so the two stay compatible; mobile's
+# own EmailSource strings (e.g. "fullenrich_deliverable", "crustdata_v2_
+# deliverable") don't literally match these, but every mobile rung already
+# sets EmailVerified=True only on a confirmed address, which gates it too.
+_VERIFIED_EMAIL_SOURCES = frozenset({
+    "fullenrich_backfill", "fullenrich", "fullenrich_prefetch", "warehouse",
+})
+
+
+def _verified_work_email(contact: dict) -> str:
+    email = (contact.get("WorkEmail") or contact.get("Email") or "").strip().lower()
+    if not email or "@" not in email or email == "not available":
+        return ""
+    source = (contact.get("EmailSource") or "").strip().lower()
+    if contact.get("EmailVerified") is True or source in _VERIFIED_EMAIL_SOURCES:
+        return email
+    return ""
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ── Public entry point ────────────────────────────────────────────────────
