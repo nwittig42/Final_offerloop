@@ -542,19 +542,25 @@ def search_people(
         logger.exception("people-deck crustdata rung failed for uid=%s", user_id)
         contacts = []
 
-    # Coresignal TEST rung (2026-08-20, the canceled-call pivot: extract the
+    # Coresignal rung (2026-08-20, the canceled-call pivot: extract the
     # signal from our own infrastructure). Runs when the Crustdata rung came
     # up empty (its trial is out of credits), the Coresignal key is present,
-    # and the trial budget holds. A collect is 20 credits, so collects are
-    # capped hard per search and tracked in Firestore. Emails ship tiered by
-    # the client: verified sells as-is, matched holds for an SMTP check at
-    # reveal, guesses never leave the backend (benchmarked 6 of 6 invalid).
+    # and the paid-plan budget holds. A collect is 20 credits, so collects
+    # are capped hard per search and tracked in Firestore. Emails ship
+    # tiered by the client: verified sells as-is, matched holds for an SMTP
+    # check at reveal, guesses never leave the backend (benchmarked 6 of 6
+    # invalid).
+    #
+    # Budget default reflects the live Coresignal account balance (7,400
+    # credits, confirmed in-dashboard 2026-10-02), not a trial estimate.
+    # Raise CORESIGNAL_TEST_BUDGET again next time credits are topped up;
+    # there is no live balance check here, this is a manual ceiling.
     if not contacts:
         try:
             import os as _os
             from app.services import coresignal_client
             if coresignal_client.CORESIGNAL_API_KEY:
-                _budget = float(_os.getenv("CORESIGNAL_TEST_BUDGET", "1500"))
+                _budget = float(_os.getenv("CORESIGNAL_TEST_BUDGET", "7400"))
                 _bref = db.collection("meta").document("coresignalTestBudget")
                 try:
                     _bsnap = _bref.get()
