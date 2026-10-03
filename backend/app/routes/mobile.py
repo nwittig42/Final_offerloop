@@ -1860,20 +1860,36 @@ def scout_ask():
         'title_variations': ([role] if role else []),
         'locations': ([location] if location else []),
     }
+    # Warehouse read (2026-10-03): try the free cache before paying
+    # Coresignal. The reader enforces location the same way Coresignal's
+    # own query does, so a cache hit for "at Acme in Austin" can't hand back
+    # someone from anywhere else at Acme.
+    cache_hits: list = []
     try:
-        _fut = _scout_find_pool.submit(
-            coresignal_client.search_contacts_from_prompt,
-            parsed_for_engine, 5,
-        )
-        contacts, _rl, _already, _meta = _fut.result(timeout=_SCOUT_FIND_BUDGET_S)
-        contacts = contacts or []
-        # Free warehouse feed: every collected profile is a future instant hit.
-        if contacts:
-            try:
-                from app.services.firm_cache.writer import cache_pdl_contacts
-                cache_pdl_contacts(contacts, shape="app", async_write=True)
-            except Exception:
-                pass
+        from app.services.firm_cache import search_firm_cache
+        from app.services.firm_cache.reader import _flag_enabled as _cache_lookup_enabled
+        if _cache_lookup_enabled():
+            cache_hits, _, _, _ = search_firm_cache(parsed_for_engine, 5)
+    except Exception:
+        cache_hits = []
+    try:
+        if len(cache_hits) >= 5:
+            contacts = list(cache_hits[:5])
+        else:
+            _fut = _scout_find_pool.submit(
+                coresignal_client.search_contacts_from_prompt,
+                parsed_for_engine, 5 - len(cache_hits),
+            )
+            contacts, _rl, _already, _meta = _fut.result(timeout=_SCOUT_FIND_BUDGET_S)
+            contacts = contacts or []
+            # Free warehouse feed: every collected profile is a future instant hit.
+            if contacts:
+                try:
+                    from app.services.firm_cache.writer import cache_pdl_contacts
+                    cache_pdl_contacts(contacts, shape="app", async_write=True)
+                except Exception:
+                    pass
+            contacts = list(cache_hits) + contacts
     except _FuturesTimeout:
         # Orphan the slow search (it finishes into cache); don't pin the UI.
         return jsonify({

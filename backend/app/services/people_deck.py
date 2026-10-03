@@ -520,13 +520,39 @@ def search_people(
     # nobody, for every prompt.
     user_doc = _firestore_user(db, user_id)
 
+    # Warehouse read (2026-10-03): try the free cache before paying ANY
+    # provider, matching the pattern routes/runs.py already proved out for
+    # the Feed right-swipe. The reader now enforces location (and school)
+    # the same way every paid provider does, so a cache hit can't repeat the
+    # "wrong city" bug through a different door. A FULL hit (as many people
+    # as this deck needs) short-circuits every rung below for free; a
+    # partial or empty hit falls through unchanged and gets merged back in
+    # further down.
+    cache_hits: list = []
+    try:
+        from app.services.firm_cache import search_firm_cache
+        from app.services.firm_cache.reader import _flag_enabled as _cache_lookup_enabled
+        if _cache_lookup_enabled():
+            cache_hits, _, _, _cache_meta = search_firm_cache(
+                parsed, fetch_count, exclude_keys=_seen_people_keys(db, user_id)
+            )
+            if cache_hits:
+                logger.info("people-deck warehouse hit uid=%s: %d/%d free",
+                            user_id, len(cache_hits), fetch_count)
+    except Exception:
+        logger.exception("people-deck warehouse lookup failed (non-fatal) uid=%s", user_id)
+        cache_hits = []
+
     # Crustdata TEST rung (2026-08-19, Rylan: spend 30-35 trial credits for
     # real signal). Primary when the key is present and budget remains, so
     # phone testing exercises the candidate provider on real prompts. A
     # search is ~0.03 credits per result; addresses come later, at reveal.
     # Empty or disabled falls straight through to the PDL ladder unchanged.
-    contacts: list = []
-    _retry_level, _already_saved, _adjacency = 0, [], {}
+    # (Skipped entirely when the warehouse already fully satisfied the deck.)
+    contacts: list = list(cache_hits[:fetch_count]) if len(cache_hits) >= fetch_count else []
+    _retry_level, _already_saved, _adjacency = 0, [], (
+        {"provider": "firm_cache", "firm_cache_hits": len(contacts)} if contacts else {}
+    )
     try:
         from app.services import crustdata_client
         if crustdata_client.enabled(db):
@@ -654,6 +680,16 @@ def search_people(
             logger.exception("people-deck hunter bridge failed for uid=%s", user_id)
             contacts = contacts or []
 
+    # Partial warehouse hit: a full hit already short-circuited every rung
+    # above (contacts started non-empty, so each "if not contacts" skipped),
+    # so this only fires when the cache had SOME people but not enough and a
+    # live rung ran anyway. Free people lead the deck; _filter_contacts'
+    # dedup below still protects against a live rung re-finding the same
+    # person the cache already had.
+    if cache_hits and (_adjacency or {}).get("provider") != "firm_cache":
+        contacts = list(cache_hits) + (contacts or [])
+        _adjacency = _adjacency or {}
+        _adjacency["firm_cache_hits"] = len(cache_hits)
 
     contacts = _filter_contacts(contacts or [], parsed, user_id)
 
@@ -794,7 +830,23 @@ def search_people(
         "stash_total": len(order),
     })
 
-    return _batch_payload(db, user_id, deck_id, order, stash, offset=0, limit=limit), 200
+    # Hunter is the only rung in this ladder that can silently drop a filter:
+    # it searches a company's email domain with no concept of location or
+    # school at all (search_people_via_hunter already computes exactly which
+    # ones into _adjacency["unsupported_filters"], it just never reached the
+    # app before). Say so rather than let "I asked for San Diego, got New
+    # York" look like a broken search instead of a known fallback limitation.
+    disclaimer = None
+    if (_adjacency or {}).get("fallback_used") == "hunter":
+        unsupported = _adjacency.get("unsupported_filters") or []
+        if unsupported:
+            disclaimer = (
+                f"Couldn't filter by {' or '.join(unsupported)} for this search, "
+                f"showing everyone we found at the company instead."
+            )
+
+    return _batch_payload(db, user_id, deck_id, order, stash, offset=0, limit=limit,
+                           disclaimer=disclaimer), 200
 
 
 def _serve_next_batch(db, user_id: str, cursor: str, limit: int) -> Tuple[Dict[str, Any], int]:
@@ -825,6 +877,7 @@ def _batch_payload(
     stash: Dict[str, Any],
     offset: int,
     limit: int,
+    disclaimer: Optional[str] = None,
 ) -> Dict[str, Any]:
     slice_ids = order[offset : offset + limit]
     people = [
@@ -839,11 +892,18 @@ def _batch_payload(
     except Exception:
         # Bookkeeping only. The cursor the client holds is what actually pages.
         pass
-    return {
+    payload = {
         "deck_id": deck_id,
         "people": people,
         "next_cursor": f"{deck_id}:{next_offset}" if has_more else None,
     }
+    # Only set on the first batch (search_people passes it, _serve_next_batch
+    # doesn't): a disclaimer is a property of the SEARCH, not of a page, and
+    # repeating it on every "show me more" would read as a fresh warning each
+    # time rather than the one thing the first batch already said.
+    if disclaimer:
+        payload["disclaimer"] = disclaimer
+    return payload
 
 
 def _deck_expired(deck: Dict[str, Any]) -> bool:
@@ -1231,6 +1291,16 @@ def reveal_person(
         "outcome": "email_found", "source": contact.get("EmailSource") or "provider_direct",
         "provider": contact.get("_provider") or "",
     })
+    # Bank the email onto the warehouse profile (2026-10-02). Whichever rung
+    # above found it, Crustdata, Coresignal's SMTP check, FullEnrich, this
+    # merges onto the SAME cached doc the search step already wrote (keyed
+    # on linkedin_id), so the next person who searches this company gets a
+    # warm hit instead of this email being paid for again.
+    try:
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        cache_pdl_contacts([contact], shape="app", async_write=True)
+    except Exception:
+        logger.exception("people-deck warehouse email write-back failed for uid=%s", user_id)
 
     # Cross-deck guard (2026-08-18). The `revealed` map above is PER DECK, and
     # a re-run of the same prompt mints a new deck_id, so without this the
