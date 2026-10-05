@@ -1,0 +1,16 @@
+{% if first_name %}{{ first_name }} — your application is in.{% else %}Your application is in.{% endif %}
+
+We submitted your application for {{ job_title }} at {{ company }}{% if ats_label %} through {{ ats_label }}{% endif %}.
+
+{% if confirmed %}{{ company }}'s careers site confirmed it was received.{% else %}{{ company }}'s careers site didn't show us a confirmation page afterward, so treat their own email as the proof it landed.{% endif %}
+
+{% if applicant_email %}{{ company }} will send their confirmation, and any reply, to {{ applicant_email }}.{% else %}{{ company }} will send their confirmation, and any reply, to the email on your resume.{% endif %}{% if not confirmed %} If nothing arrives within a day, apply directly{% if apply_url %}: {{ apply_url }}{% else %} on their careers site.{% endif %}{% endif %}
+
+See your applications: {{ applications_url }}
+{% if apply_url and confirmed %}View the posting: {{ apply_url }}
+{% endif %}
+Thanks for applying with Offerloop.
+
+--
+OFFERLOOP
+You're getting this because you applied through Offerloop. Manage emails: {{ settings_url }}

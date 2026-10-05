@@ -612,6 +612,11 @@ def run_greenhouse_filler(
                     for u in unmapped[:5]:
                         print(f"[auto_apply]     - unmapped: {u.get('field_id')!r} ({u.get('label', '')[:60]!r}) reason={u.get('reason')!r}", flush=True)
                 print(f"[auto_apply] === END Greenhouse filler ===\n", flush=True)
+                from app.services.auto_apply import _form_filler_common as _cc
+                evidence = (
+                    _cc.classify_submit_evidence(page, ("thank", "confirmation", "/success", "complete"))
+                    if status == "submitted" else {}
+                )
                 return {
                     "status": status,
                     "filled": filled,
@@ -620,6 +625,7 @@ def run_greenhouse_filler(
                     "prepared_answers": prepared_answers,
                     "screenshot_b64": screenshot_b64,
                     "failure_reason": failure_reason,
+                    **evidence,
                 }
             finally:
                 try:

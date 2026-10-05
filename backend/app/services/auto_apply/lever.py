@@ -329,6 +329,10 @@ def run_lever_filler(
                         status = "submit_failed"
                         failure_reason = f"submit click failed: {exc}"
 
+                evidence = (
+                    common.classify_submit_evidence(page, ("thank", "/thanks", "/confirmation", "/success", "complete"))
+                    if status == "submitted" else {}
+                )
                 return {
                     "status": status,
                     "filled": filled,
@@ -337,6 +341,7 @@ def run_lever_filler(
                     "prepared_answers": prepared_answers,
                     "screenshot_b64": screenshot_b64,
                     "failure_reason": failure_reason,
+                    **evidence,
                 }
             finally:
                 try:
