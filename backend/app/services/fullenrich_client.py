@@ -28,9 +28,11 @@ logger = logging.getLogger(__name__)
 
 BASE = os.getenv("FULLENRICH_BASE", "https://app.fullenrich.com/api/v2").rstrip("/")
 
-#: Spend ceiling in FullEnrich credits (1 per found work email). Starter is
-#: 500/month; leave headroom by default.
-BUDGET = float(os.getenv("FULLENRICH_BUDGET", "450"))
+#: Spend ceiling in FullEnrich credits (1 per found work email). We are on
+#: the 20,000-credit reseller pack (paid in full, confirmed with FullEnrich
+#: 2026-09-11), a one-time pool, not a monthly subscription. Raise this when
+#: the pack is topped up again; there is no automatic refill.
+BUDGET = float(os.getenv("FULLENRICH_BUDGET", "22000"))
 #: How long a synchronous reveal will wait on the waterfall before giving
 #: up. Abandoned enrichments may still complete (and bill) server-side;
 #: at 1 credit per find that is an accepted cost, logged when it happens.
@@ -47,21 +49,18 @@ def _headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {_key()}", "Content-Type": "application/json"}
 
 
-def _month() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m")
-
-
 def _spent(db) -> float:
-    """Credits spent THIS CALENDAR MONTH. The subscription's credits reset
-    monthly, so a cumulative counter would wrongly brick the vendor forever
-    once lifetime spend passed one month's ceiling (2026-08-25). A doc
-    stamped with an older month reads as zero; the next write resets it."""
+    """Credits spent against the current pack, lifetime (no monthly reset).
+
+    This used to zero out on a new calendar month, written when FullEnrich
+    was a 500/month Starter subscription. We are off that plan (cancelled
+    2026-09-02) and on a one-time 20K reseller pack instead: credits do not
+    refill on their own, so a month-based reset would let spend run past
+    what we actually have left and hit a silent vendor-side cutoff, the
+    same failure mode that burned us with PDL."""
     try:
         snap = db.collection(_BUDGET_DOC[0]).document(_BUDGET_DOC[1]).get()
         doc = (snap.to_dict() or {}) if snap.exists else {}
-        if doc.get("month") != _month():
-            return 0.0
         return float(doc.get("spent_estimate", 0.0))
     except Exception:
         logger.exception("fullenrich: budget read failed; treating as exhausted")
@@ -72,19 +71,8 @@ def _add_spend(db, credits: float) -> None:
     try:
         from google.cloud import firestore as _fs
         ref = db.collection(_BUDGET_DOC[0]).document(_BUDGET_DOC[1])
-        # Month rollover: first spend of a new month restarts the counter
-        # instead of stacking onto last month's. A concurrent write in the
-        # same instant can lose one increment; cents-level slack, accepted.
-        try:
-            snap = ref.get()
-            stale = (snap.to_dict() or {}).get("month") != _month() if snap.exists else True
-        except Exception:
-            stale = False
-        if stale:
-            ref.set({"spent_estimate": credits, "find_count": 1, "month": _month()})
-        else:
-            ref.set({"spent_estimate": _fs.Increment(credits),
-                     "find_count": _fs.Increment(1), "month": _month()}, merge=True)
+        ref.set({"spent_estimate": _fs.Increment(credits),
+                 "find_count": _fs.Increment(1)}, merge=True)
         # Mirror into provider_calls so the spend alerter can see this
         # vendor at all (it reads provider_calls, not the budget docs).
         try:
