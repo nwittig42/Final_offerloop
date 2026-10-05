@@ -251,8 +251,14 @@ def _seen_people_keys(db, user_id: str) -> set:
                    .collection("peopleDecks")
                    .order_by("createdAt", direction=_FS_DESC).limit(10).stream())
         for d in decks:
-            for c in ((d.to_dict() or {}).get("people") or {}).values():
-                _add(c)
+            data = d.to_dict() or {}
+            people = data.get("people") or {}
+            # Only people the user was actually served. The stash holds the
+            # whole deck, so excluding all of it hid cards left unswiped in an
+            # abandoned search from every later search.
+            served = (data.get("order") or [])[: int(data.get("delivered") or 0)]
+            for pid in served:
+                _add(people.get(pid) or {})
     except Exception:
         logger.exception("seen-people deck scan failed uid=%s", user_id)
     try:
