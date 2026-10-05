@@ -187,7 +187,7 @@ def handle(
     # then the bounded FullEnrich email pass for signed-in callers, then
     # warmth scoring.
     try:
-        contacts = _run_pdl_search(parsed, effective_count)
+        contacts = _run_pdl_search(parsed, effective_count, uid=_signed_in_uid(user_ctx))
         if _signed_in_uid(user_ctx):
             _fullenrich_pass(contacts, db)
         warmth = _score_warmth(parsed, contacts)
@@ -262,7 +262,7 @@ def handle(
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _run_pdl_search(parsed: FindContactsInput, count: int) -> list[dict]:
+def _run_pdl_search(parsed: FindContactsInput, count: int, uid: Optional[str] = None) -> list[dict]:
     """Synthesize a parsed_prompt and walk the engine door.
 
     Routes through the same LLM-based prompt parser the website uses
@@ -287,10 +287,21 @@ def _run_pdl_search(parsed: FindContactsInput, count: int) -> list[dict]:
     parsed_prompt = _build_parsed_prompt(parsed)
     user_profile = _synthesize_user_profile(parsed)
 
+    # Signed-in callers: don't resurface people already in their network.
+    # Anonymous callers have no network to exclude against. Fail open.
+    exclude_keys = None
+    if uid:
+        try:
+            from app.extensions import get_db
+            from app.routes.runs import _build_exclusion_data_from_firestore
+            exclude_keys = _build_exclusion_data_from_firestore(get_db(), uid)["identity_set"]
+        except Exception as e:
+            logger.warning("[MCP find_contacts] exclusion lookup failed (non-fatal): %s", e)
+
     contacts, _retry_level, _already_saved, _adjacency = engine_search_contacts(
         parsed_prompt,
         count,
-        exclude_keys=None,
+        exclude_keys=exclude_keys,
         user_profile=user_profile,
         source="mcp_find_contacts",
     )
@@ -298,7 +309,7 @@ def _run_pdl_search(parsed: FindContactsInput, count: int) -> list[dict]:
         try:
             from app.services.hunter_person_search import search_people_via_hunter
             contacts, _retry_level, _already_saved, _hmeta = search_people_via_hunter(
-                parsed_prompt, count, exclude_keys=None, user_profile=user_profile
+                parsed_prompt, count, exclude_keys=exclude_keys, user_profile=user_profile
             )
         except Exception as e:
             logger.warning("[MCP find_contacts] hunter bridge failed: %s", e)

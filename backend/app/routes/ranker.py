@@ -676,6 +676,24 @@ def reveal_candidate_email(candidate_id):
     last  = (fs.get("last_name")  or "").strip()
     company_display = (fs.get("company_display") or "").strip()
 
+    # FullEnrich-sourced people arrive with no LinkedIn URL or photo. Backfill
+    # them onto this shared doc (Coresignal, not user credits), so every
+    # later reader of the doc gets the profile link too.
+    if not (fs.get("linkedin_url") or "").strip():
+        from app.services.linkedin_backfill import find_linkedin_for_contact
+        found = find_linkedin_for_contact(db, {
+            "FirstName": first, "LastName": last, "Company": company_display,
+            "LinkedIn": "",
+        })
+        if found:
+            patch = {"linkedin_url": found["linkedin_url"]}
+            if not (fs.get("photo_url") or "").strip() and found.get("photo_url"):
+                patch["photo_url"] = found["photo_url"]
+            try:
+                db.collection(FIRM_EMPLOYEES_COLLECTION).document(candidate_id).update(patch)
+            except Exception:
+                logger.exception("linkedin backfill doc update failed candidate=%s", candidate_id)
+
     # ── 3. Deduct atomically BEFORE any paid work.
     from app.services.auth import deduct_credits_atomic
     from app.config import CREDIT_COSTS
