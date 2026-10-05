@@ -4,7 +4,7 @@
 // response evolves, the components do not budge: we update the adapter.
 
 import type { OutboxThread, PipelineStage } from "@/services/api";
-import { daysBetween } from "@/lib/formatters";
+import { daysBetween, formatTimeAgo } from "@/lib/formatters";
 
 // ── Prototype's domain model (from network-tracker.html) ─────────────────────
 
@@ -24,7 +24,7 @@ export type ProtoSegment = "people" | "hiringManagers";
 
 // Display-only chip rendered on each card. Derived from real state but does
 // not drive any behavior in PR1.
-export type ProtoStatus = "Action" | "Reply" | "Draft" | "Sent" | "View" | "Done";
+export type ProtoStatus = "Action" | "Reply" | "Draft" | "Sent" | "Opened" | "View" | "Done";
 
 export interface ProtoContact {
   id: string;
@@ -56,6 +56,11 @@ export interface ProtoContact {
   // Provenance — "agent" for Loop-discovered contacts, "" for manual. Drives
   // the inline "Loop" badge on the people card.
   source: string;
+  // Open tracking. openedAt is the first open, lastOpenedAt the most recent;
+  // both null until the recipient opens a tracked email.
+  openedAt: string | null;
+  lastOpenedAt: string | null;
+  openCount: number;
 }
 
 // ── 11-stage backend → 5-stage prototype (read-side bucketing only) ──────────
@@ -140,7 +145,9 @@ const TERMINAL_LABELS: Record<string, string> = {
 function deriveStatus(t: OutboxThread): ProtoStatus {
   if (t.hasUnreadReply) return "Reply";
   if (t.pipelineStage === "draft_created" || t.pipelineStage === "draft_deleted") return "Draft";
-  if (t.pipelineStage === "email_sent" || t.pipelineStage === "waiting_on_reply") return "Sent";
+  if (t.pipelineStage === "email_sent" || t.pipelineStage === "waiting_on_reply") {
+    return t.emailOpenedAt ? "Opened" : "Sent";
+  }
   if (t.pipelineStage === "meeting_scheduled" || t.pipelineStage === "connected") return "Done";
   if (t.pipelineStage === "replied") return "View";
   return "Action";
@@ -194,7 +201,19 @@ export function outboxThreadToProto(t: OutboxThread): ProtoContact {
     companyLogoFallbackUrl: buildContactLogoFallbackUrl(t.email || ""),
     archivedAt: t.archivedAt ?? null,
     source: t.source || "",
+    openedAt: t.emailOpenedAt ?? null,
+    lastOpenedAt: t.emailLastOpenedAt ?? t.emailOpenedAt ?? null,
+    openCount: t.emailOpenCount ?? 0,
   };
+}
+
+// "Opened 2h ago" / "Opened 3 times, last 2h ago". Empty string when the
+// email has not been opened, so callers can render it conditionally.
+export function openedSummary(c: Pick<ProtoContact, "lastOpenedAt" | "openCount">): string {
+  if (!c.lastOpenedAt) return "";
+  const ago = formatTimeAgo(c.lastOpenedAt);
+  if (c.openCount > 1) return `Opened ${c.openCount} times, last ${ago}`;
+  return `Opened ${ago}`;
 }
 
 // ── Group helpers ────────────────────────────────────────────────────────────

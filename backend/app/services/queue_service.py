@@ -832,7 +832,9 @@ def approve_queue_contact(
 
             gmail_service = get_gmail_service_for_user(user_email, user_id=uid)
             if gmail_service:
-                msg = MIMEText(draft_body)
+                from app.services import email_tracking
+                tracking_token = email_tracking.start(uid)
+                msg = email_tracking.tracked_text_mime(draft_body, tracking_token)
                 msg["to"] = to_email
                 msg["subject"] = draft_subject
                 raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -843,6 +845,11 @@ def approve_queue_contact(
                     .execute()
                 )
                 draft_id = draft.get("id") or None
+                email_tracking.register(
+                    tracking_token, uid, "outreach", recipient_email=to_email,
+                    draft_id=draft_id,
+                    thread_id=draft.get("message", {}).get("threadId"),
+                )
             else:
                 from urllib.parse import quote
 
