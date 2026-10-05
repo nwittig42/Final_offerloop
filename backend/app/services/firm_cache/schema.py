@@ -3,8 +3,16 @@
 Doc shape (one per LinkedIn profile):
 
     firm_employees/{linkedin_id}
-      linkedin_id        str    slug from LinkedIn URL, doc ID (also stored)
-      linkedin_url       str    canonicalized https://www.linkedin.com/in/<slug>
+      linkedin_id        str    slug from LinkedIn URL, doc ID (also stored).
+                                 When the source contact has no LinkedIn URL
+                                 (e.g. FullEnrich's /people/search rung, which
+                                 never returns one), this is a synthesized key
+                                 instead (see _synthesize_person_key) so the
+                                 contact still enters the warehouse. Prefixed
+                                 "synth:" to keep it visibly distinct from a
+                                 real slug.
+      linkedin_url       str    canonicalized https://www.linkedin.com/in/<slug>,
+                                 or "" when linkedin_id is synthesized
       pdl_id             str    PDL's internal id, for provenance
       name               str    display "First Last"
       first_name         str
@@ -32,6 +40,7 @@ structure that the display contact dict throws away.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Optional
 
@@ -428,16 +437,39 @@ def _parse_education_top(education_top: str) -> tuple[list[str], list[str]]:
     return slugs, displays
 
 
+def _synthesize_person_key(email: str, first: str, last: str, company_slug: str) -> str:
+    """Stable doc-id fallback for a contact with no LinkedIn URL. Prefer
+    email (closer to a real identity than a name, and already lowercased/
+    trimmed by the caller); fall back to name+company, same spirit as
+    coresignal_client._synthesize_id's dedup key. "synth:" prefix keeps it
+    visibly distinct from a real LinkedIn slug at a glance (in logs, in the
+    Firestore console) and guarantees it can never collide with one."""
+    seed = email or f"{first}_{last}_{company_slug}".strip("_").lower()
+    if not seed:
+        return ""
+    return "synth:" + hashlib.sha1(seed.encode()).hexdigest()[:16]
+
+
 def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
     """Normalize an App-shape PDL contact (post-flattening) → firm_employees doc.
 
-    Returns None if unusable (no LinkedIn / no US location / no company).
-    joined_year is always None — that data was dropped during flattening.
+    Returns None if unusable (no US location / no company / nothing to key
+    on at all). joined_year is always None — that data was dropped during
+    flattening.
+
+    A contact with no LinkedIn URL (2026-10-05: found FullEnrich's discovery
+    rung always omits one, so every contact found that way was silently
+    dropped here, never entering the warehouse at all) still gets a doc,
+    keyed by _synthesize_person_key instead of a LinkedIn slug. Known
+    limitation: if a LinkedIn URL is found for this same person later (a
+    backfill, or a different provider), it lands as a SEPARATE doc under the
+    real linkedin_id rather than merging into this one — not solved here.
     """
     if not isinstance(contact, dict):
         return None
 
-    # LinkedIn — dedup key
+    # LinkedIn — preferred dedup key, but not required (see
+    # _synthesize_person_key below for the no-LinkedIn fallback).
     raw_linkedin = (
         contact.get("LinkedIn")
         or contact.get("linkedin_url")
@@ -445,8 +477,6 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
         or ""
     )
     canon_url, slug = canonicalize_linkedin_url(raw_linkedin)
-    if not slug:
-        return None
 
     # Company — required
     company_display = (contact.get("Company") or contact.get("company") or "").strip()
@@ -499,8 +529,20 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
     last = (contact.get("LastName") or contact.get("lastName") or "").strip()
     name = f"{first} {last}".strip()
 
+    doc_id = slug
+    if not doc_id:
+        email = (contact.get("Email") or contact.get("WorkEmail") or "").strip().lower()
+        if not email and not (first or last):
+            # No LinkedIn, no email, no name — company alone is not a
+            # person, and would collide every nameless contact at that
+            # firm into one doc. Genuinely unusable, same as old behavior.
+            return None
+        doc_id = _synthesize_person_key(email, first, last, company_slug)
+        if not doc_id:
+            return None
+
     doc = {
-        "linkedin_id":     slug,
+        "linkedin_id":     doc_id,
         "linkedin_url":    canon_url,
         "pdl_id":          (contact.get("pdlId") or "").strip(),
         "name":            name,
