@@ -387,6 +387,11 @@ def get_rate_limit_key():
             or request.path == '/claim'):
         return None
     
+    # Exempt the email open pixel: mail providers fetch images through a
+    # handful of shared proxy IPs, so a per-IP limit would drop real opens.
+    if request.path.startswith('/api/t/o/'):
+        return None
+
     # For authenticated requests, use user ID instead of IP address
     if hasattr(request, 'firebase_user') and request.firebase_user:
         user_id = request.firebase_user.get('uid')

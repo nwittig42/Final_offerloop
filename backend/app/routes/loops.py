@@ -425,6 +425,7 @@ def approve_contact_send(loop_id, contact_id):
             to=email,
             subject=email_subject,
             body_html=email_body,
+            tracking_kind="outreach",
         )
     except Exception as e:
         logger.warning(

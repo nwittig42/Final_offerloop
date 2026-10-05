@@ -178,6 +178,10 @@ def _contact_to_dict(contact_id, data):
         "draftCreatedAt": data.get("draftCreatedAt"),
         "replyReceivedAt": data.get("replyReceivedAt"),
         "lastActivityAt": data.get("lastActivityAt") or data.get("draftCreatedAt") or data.get("createdAt") or "",
+        # Open tracking (written by email_tracking.record_open)
+        "emailOpenedAt": data.get("emailOpenedAt"),
+        "emailLastOpenedAt": data.get("emailLastOpenedAt"),
+        "emailOpenCount": data.get("emailOpenCount", 0),
         # Follow-up
         "followUpCount": data.get("followUpCount", 0),
         "nextFollowUpAt": data.get("nextFollowUpAt"),
@@ -1004,7 +1008,9 @@ def send_reply_for_contact(uid, contact_id, body):
         _capture_sentry(e)
         raise ValueError("gmail_disconnected")
 
-    msg = MIMEText(text)
+    from app.services import email_tracking
+    tracking_token = email_tracking.start(uid)
+    msg = email_tracking.tracked_text_mime(text, tracking_token)
     msg["to"] = to_email
     if subject:
         msg["subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
@@ -1022,6 +1028,10 @@ def send_reply_for_contact(uid, contact_id, body):
 
     sent_message_id = sent.get("id") or ""
     sent_thread_id = sent.get("threadId") or thread_id or ""
+    email_tracking.register(
+        tracking_token, uid, "reply", recipient_email=to_email, contact_id=contact_id,
+        message_id=sent_message_id, thread_id=sent_thread_id, sent=True,
+    )
     now = _now_iso()
 
     updates = {
