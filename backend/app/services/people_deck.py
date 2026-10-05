@@ -251,8 +251,14 @@ def _seen_people_keys(db, user_id: str) -> set:
                    .collection("peopleDecks")
                    .order_by("createdAt", direction=_FS_DESC).limit(10).stream())
         for d in decks:
-            for c in ((d.to_dict() or {}).get("people") or {}).values():
-                _add(c)
+            data = d.to_dict() or {}
+            people = data.get("people") or {}
+            # Only people the user was actually served. The stash holds the
+            # whole deck, so excluding all of it hid cards left unswiped in an
+            # abandoned search from every later search.
+            served = (data.get("order") or [])[: int(data.get("delivered") or 0)]
+            for pid in served:
+                _add(people.get(pid) or {})
     except Exception:
         logger.exception("seen-people deck scan failed uid=%s", user_id)
     try:
@@ -1285,6 +1291,16 @@ def reveal_person(
         "outcome": "email_found", "source": contact.get("EmailSource") or "provider_direct",
         "provider": contact.get("_provider") or "",
     })
+    # FullEnrich's discovery rung never supplies a LinkedIn URL or photo. Look
+    # the person up once now, before the Inbox save and the warehouse write,
+    # so both carry it. A miss is negative-cached, so reveals don't re-spend.
+    if not contact.get("LinkedIn"):
+        from app.services.linkedin_backfill import find_linkedin_for_contact
+        found = find_linkedin_for_contact(db, contact)
+        if found:
+            contact["LinkedIn"] = found["linkedin_url"]
+            if not contact.get("PhotoUrl") and found.get("photo_url"):
+                contact["PhotoUrl"] = found["photo_url"]
     # Bank the email onto the warehouse profile (2026-10-02). Whichever rung
     # above found it, Crustdata, Coresignal's SMTP check, FullEnrich, this
     # merges onto the SAME cached doc the search step already wrote (keyed
@@ -1521,8 +1537,12 @@ def reveal_person(
 
     _record_reveal(db, user_id, deck_id, person_id, contact, address, draft_id, draft_url, sent=sent)
 
+    # The LinkedIn and photo the backfill may have just found, so the app can
+    # patch the card it is already showing without a deck refetch.
     return {"email": address, "verified": True, "charged": charged,
-            "drafted": drafted, "sent": sent}, 200
+            "drafted": drafted, "sent": sent,
+            "linkedinUrl": (contact.get("LinkedIn") or "").strip(),
+            "photoUrl": (contact.get("PhotoUrl") or "").strip()}, 200
 
 
 def _record_reveal(db, user_id, deck_id, person_id, contact, address,
