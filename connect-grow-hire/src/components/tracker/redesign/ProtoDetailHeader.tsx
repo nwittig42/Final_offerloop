@@ -1,4 +1,4 @@
-import { type ProtoContact } from "@/pages/trackerAdapter";
+import { type ProtoContact, openedSummary } from "@/pages/trackerAdapter";
 
 // Detail panel header: avatar + name + role + LinkedIn / email pills, plus
 // the bookmark icon button. The detail panel renders the raw role
@@ -25,6 +25,7 @@ export function ProtoDetailHeader({
   const linkedinHref = contact.linkedinUrl
     ? (contact.linkedinUrl.startsWith("http") ? contact.linkedinUrl : `https://${contact.linkedinUrl}`)
     : null;
+  const opened = openedSummary(contact);
 
   return (
     <div className="detail-info-row">
@@ -34,6 +35,14 @@ export function ProtoDetailHeader({
           <div className="detail-name-block">
             <div className="detail-name">{contact.name}</div>
             <div className="detail-role">{contact.role}</div>
+            {opened && (
+              <div
+                className="detail-opened"
+                title="Based on the email's images loading. Some mail apps load them automatically, so treat this as likely, not certain."
+              >
+                {opened}
+              </div>
+            )}
           </div>
           <div className="detail-links">
             {linkedinHref && (

@@ -178,7 +178,7 @@ def _gmail_service(creds):
     return build("gmail", "v1", credentials=creds)
 
 
-def send_email_for_user(uid: str, to: str, subject: str, body_html: str) -> dict:
+def send_email_for_user(uid: str, to: str, subject: str, body_html: str, tracking_kind: str = None) -> dict:
     """Send an email via user's Gmail OAuth credentials (from the student's
     own address).
 
@@ -188,6 +188,10 @@ def send_email_for_user(uid: str, to: str, subject: str, body_html: str) -> dict
             "threadId": Gmail thread id (str),
             "labelIds": list[str],  # whatever Gmail stamped
         }
+
+    Pass tracking_kind (e.g. "outreach") for emails that go to a contact, so
+    the open-tracking pixel is added. Leave it unset for emails the user sends
+    to themselves (digests).
 
     Phase 9 callers (Loop auto-send) MUST stamp `id` and `threadId` onto the
     contact doc immediately so the Pub/Sub webhook can join replies via the
@@ -208,13 +212,19 @@ def send_email_for_user(uid: str, to: str, subject: str, body_html: str) -> dict
     if not service:
         raise ValueError(f"Failed to build Gmail service for uid={uid}")
 
-    message = MIMEText(body_html, "html")
+    from app.services import email_tracking
+    tracking_token = email_tracking.start(uid) if tracking_kind else None
+    message = MIMEText(email_tracking.add_pixel(body_html, tracking_token), "html")
     message["to"] = to
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     resp = service.users().messages().send(
         userId="me", body={"raw": raw}
     ).execute() or {}
+    email_tracking.register(
+        tracking_token, uid, tracking_kind, recipient_email=to,
+        message_id=resp.get("id"), thread_id=resp.get("threadId"), sent=True,
+    )
 
     return {
         "id": resp.get("id", ""),
@@ -1071,7 +1081,8 @@ def _select_recipient_email(contact):
 
 
 def _build_outreach_mime(recipient_email, gmail_account_email, email_subject, email_body,
-                         user_info=None, resume_content=None, resume_filename=None, resume_url=None):
+                         user_info=None, resume_content=None, resume_filename=None, resume_url=None,
+                         tracking_token=None):
     """Build the multipart outreach message (HTML body, signature, resume attachment).
 
     This is the single source of truth for outreach email content. Both
@@ -1079,7 +1090,10 @@ def _build_outreach_mime(recipient_email, gmail_account_email, email_subject, em
     call it, so a draft and a send produce byte-for-byte identical email,
     including the resume attachment. email_subject and email_body are expected
     to already be cleaned by the caller.
+
+    tracking_token (from email_tracking.start) adds the open-tracking pixel.
     """
+    from app.services import email_tracking
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     from email.mime.base import MIMEBase
@@ -1132,7 +1146,11 @@ def _build_outreach_mime(recipient_email, gmail_account_email, email_subject, em
 </div>
 </body>
 </html>"""
+        html_content = email_tracking.add_pixel(html_content, tracking_token)
         message.attach(MIMEText(html_content, 'html', 'utf-8'))
+    elif tracking_token:
+        # Plain text can't carry the pixel, so send text + an HTML copy.
+        message.attach(email_tracking.tracked_text_mime(email_body, tracking_token))
     else:
         # Plain text fallback
         message.attach(MIMEText(email_body, 'plain', 'utf-8'))
@@ -1276,6 +1294,8 @@ def create_gmail_draft_for_user(contact, email_subject, email_body, tier='free',
 
         # Build the multipart message (HTML body, signature, resume attachment),
         # shared with the send path so drafts and sends are identical.
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(user_id)
         message = _build_outreach_mime(
             recipient_email=recipient_email,
             gmail_account_email=gmail_account_email,
@@ -1285,6 +1305,7 @@ def create_gmail_draft_for_user(contact, email_subject, email_body, tier='free',
             resume_content=resume_content,
             resume_filename=resume_filename,
             resume_url=resume_url,
+            tracking_token=tracking_token,
         )
 
         # Create the draft
@@ -1301,6 +1322,11 @@ def create_gmail_draft_for_user(contact, email_subject, email_body, tier='free',
             draft_result = gmail_service.users().drafts().create(userId='me', body=draft_body).execute()
             draft_id = draft_result['id']
             message_id = draft_result.get('message', {}).get('id')
+            email_tracking.register(
+                tracking_token, user_id, 'outreach', recipient_email=recipient_email,
+                draft_id=draft_id, message_id=message_id,
+                thread_id=draft_result.get('message', {}).get('threadId'),
+            )
         except Exception as api_error:
             print(f"[GmailClient] Gmail API error creating draft: {api_error}")
             import traceback
@@ -1583,6 +1609,8 @@ def send_gmail_email_for_user(contact, email_subject, email_body, tier='free', u
             return f"mock_{tier}_send_{contact.get('FirstName', 'unknown').lower()}_no_email"
 
         # Build the same multipart message the draft path builds.
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(user_id)
         message = _build_outreach_mime(
             recipient_email=recipient_email,
             gmail_account_email=gmail_account_email,
@@ -1592,6 +1620,7 @@ def send_gmail_email_for_user(contact, email_subject, email_body, tier='free', u
             resume_content=resume_content,
             resume_filename=resume_filename,
             resume_url=resume_url,
+            tracking_token=tracking_token,
         )
 
         raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
@@ -1607,6 +1636,10 @@ def send_gmail_email_for_user(contact, email_subject, email_body, tier='free', u
         message_id = send_result.get('id')
         thread_id = send_result.get('threadId')
         print(f"[GmailClient] Sent {tier.capitalize()} email {message_id} (thread {thread_id})")
+        email_tracking.register(
+            tracking_token, user_id, 'outreach', recipient_email=recipient_email,
+            message_id=message_id, thread_id=thread_id, sent=True,
+        )
 
         return {
             'message_id': message_id,

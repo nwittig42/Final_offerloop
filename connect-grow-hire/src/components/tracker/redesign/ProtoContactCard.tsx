@@ -1,4 +1,4 @@
-import { type ProtoContact } from "@/pages/trackerAdapter";
+import { type ProtoContact, openedSummary } from "@/pages/trackerAdapter";
 import { CompanyLogo } from "@/components/CompanyLogo";
 
 // Helpers ported from network-tracker.html.
@@ -43,6 +43,7 @@ interface ProtoContactCardProps {
 
 export function ProtoContactCard({ contact, isSelected, onSelect }: ProtoContactCardProps) {
   const { title, company } = splitRole(contact.role, contact.company);
+  const opened = openedSummary(contact);
 
   return (
     <button
@@ -82,7 +83,7 @@ export function ProtoContactCard({ contact, isSelected, onSelect }: ProtoContact
           </div>
         </div>
       </div>
-      <div className="status-pill">
+      <div className="status-pill" title={opened || undefined}>
         <div className="status-dot" />
         <span className="status-text">{contact.status}</span>
       </div>

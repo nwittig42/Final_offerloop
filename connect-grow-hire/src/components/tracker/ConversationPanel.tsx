@@ -122,6 +122,7 @@ export function ConversationPanel({
         {contact.emailSentAt && (
           <p className="text-xs text-gray-500">
             Sent on {formatDate(contact.emailSentAt)}
+            {contact.emailOpenedAt && ` · Opened ${formatDate(contact.emailOpenedAt)}`}
           </p>
         )}
 

@@ -575,6 +575,10 @@
   font-size: 12px; font-weight: 400;
   color: #475569; text-transform: uppercase;
 }
+.tracker-redesign .detail-opened {
+  font-size: 12px; font-weight: 500;
+  color: var(--action-fg);
+}
 
 .tracker-redesign .detail-links { display: flex; gap: 12px; align-items: center; }
 .tracker-redesign .detail-link-pill {
