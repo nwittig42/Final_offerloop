@@ -12,9 +12,13 @@ Design invariants:
      firm_employees could pull tens of thousands of docs.
   3. Off by default. ENABLE_FIRM_CACHE_LOOKUP env flag gates every read so
      Phase 3 can ship dark and be enabled independently of write.
-  4. Cache docs don't carry emails (we don't cache PII we can recompute).
-     Contacts return with Email="" and EmailSource="cache_no_email";
-     downstream flow's existing email-quality machinery handles them.
+  4. Most cache docs still have no email (nothing has enriched them yet):
+     Email="" and EmailSource="cache_no_email", same as before. A doc DOES
+     carry a shared work_email once reveal-time enrichment on ANY surface
+     (website, MCP, extension, mobile) finds and verifies one, served back
+     here as long as it's within WAREHOUSE_EMAIL_TTL_DAYS (see
+     firm_cache/schema.py's _verified_work_email for what counts as
+     verified, and warehouse_warm.py for the nightly purge past the TTL).
 
 Query strategy (highest specificity first):
     parsed has companies + schools → (company, schools[])          index
@@ -31,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.extensions import get_db
@@ -40,8 +45,14 @@ from app.services.firm_cache.schema import (
     slugify_company,
     slugify_school,
 )
+from app.services.pdl_client import US_STATE_ABBREVIATIONS
 
 logger = logging.getLogger(__name__)
+
+# Shared verified work emails live on the doc for this long (the app's
+# reveal step and the nightly purge use the same number). Same env knob as
+# ranker.py and the website branch's firm_cache/reader.py.
+_EMAIL_TTL_DAYS = int(os.environ.get("WAREHOUSE_EMAIL_TTL_DAYS", "90"))
 
 _FLAG_ENV = "ENABLE_FIRM_CACHE_LOOKUP"
 
@@ -85,6 +96,13 @@ def _extract_school_slugs(parsed: dict) -> list[str]:
         if slug and slug not in slugs:
             slugs.append(slug)
     return slugs
+
+
+def _extract_locations(parsed: dict) -> list[str]:
+    """Pull free-text location strings straight from the parsed prompt, no
+    slugifying — matched against doc city/state in _matches_location_filter."""
+    raw = parsed.get("locations") or []
+    return [str(l).strip() for l in raw if l and str(l).strip()]
 
 
 def _extract_title_levels(parsed: dict) -> list[str]:
@@ -146,6 +164,32 @@ def _snap_to_dict(snap) -> dict:
 # ── App-shape contact conversion ─────────────────────────────────────────
 
 
+def _warehouse_email(doc: dict) -> str:
+    """The doc's shared verified work email if it is still inside the TTL,
+    else "". Timestamps arrive as ISO strings (ranker.py, schema.py) or as
+    Firestore datetimes; anything unparseable counts as expired. Ported
+    verbatim from the website branch's firm_cache/reader.py so both read the
+    same field the same way."""
+    email = (doc.get("work_email") or "").strip().lower()
+    if not email or "@" not in email:
+        return ""
+    stamp = doc.get("work_email_verified_at")
+    ts = None
+    if isinstance(stamp, datetime):
+        ts = stamp
+    elif isinstance(stamp, str) and stamp:
+        try:
+            ts = datetime.fromisoformat(stamp.rstrip("Z"))
+        except ValueError:
+            ts = None
+    if ts is None:
+        return ""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - ts).total_seconds()
+    return email if 0 <= age <= _EMAIL_TTL_DAYS * 86400 else ""
+
+
 def firm_employee_doc_to_app_contact(doc: dict) -> dict:
     """Convert a firm_employees doc back into the App-shape contact dict
     that runs.py + downstream email/draft/save code expects.
@@ -163,12 +207,13 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
     company_display = doc.get("company_display") or ""
     title_display = doc.get("headline") or ""
     schools_display = doc.get("schools_display") or []
+    wh_email = _warehouse_email(doc)
     return {
         "pdlId":              doc.get("pdl_id") or "",
         "FirstName":          doc.get("first_name") or "",
         "LastName":           doc.get("last_name") or "",
         "LinkedIn":           doc.get("linkedin_url") or "",
-        "Email":              "",
+        "Email":              wh_email,
         "Title":              title_display,
         "Company":            company_display,
         "City":               doc.get("city") or "",
@@ -176,7 +221,7 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
         "College":            schools_display[0] if schools_display else "",
         "Phone":              "",
         "PersonalEmail":      "",
-        "WorkEmail":          "",
+        "WorkEmail":          wh_email,
         "SocialProfiles":     f"LinkedIn: {doc.get('linkedin_url') or ''}" if doc.get("linkedin_url") else "Not available",
         "EducationTop":       "; ".join(schools_display) if schools_display else "Not available",
         "VolunteerHistory":   "Not available",
@@ -191,9 +236,9 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
         # mapping every cache-hydrated person lost their photo on the way
         # out, which blanked ranked deck cards and the Inbox rows they saved.
         "PhotoUrl":           doc.get("photo_url") or "",
-        "EmailSource":        "cache_no_email",
-        "EmailVerified":      False,
-        "EmailConfidenceScore": 0,
+        "EmailSource":        "warehouse" if wh_email else "cache_no_email",
+        "EmailVerified":      bool(wh_email),
+        "EmailConfidenceScore": 95 if wh_email else 0,
         "IsCurrentlyAtTarget": True,  # We only cached them as current — safe default
         # Provenance / observability
         "source":             "firm_cache",
@@ -208,6 +253,33 @@ def _matches_title_filter(doc: dict, allowed_levels: list[str]) -> bool:
     if not allowed_levels:
         return True
     return (doc.get("title_level") or "other") in allowed_levels
+
+
+def _matches_location_filter(doc: dict, locations: list[str]) -> bool:
+    """True if doc's city/state satisfies at least one requested location
+    (OR across requested locations, same semantics every live provider's own
+    location clause uses). Empty `locations` means none was asked for, so
+    everything passes, this only restricts location-bearing queries.
+
+    Every live provider (Coresignal, FullEnrich, Crustdata) enforces company
+    AND location together. Before this, the warehouse enforced company only,
+    so a cache hit for "Stripe in San Diego" could silently hand back a
+    Stripe employee from anywhere, the exact bug Hunter has, just reached
+    through the cache instead of the Hunter fallback."""
+    if not locations:
+        return True
+    doc_city = (doc.get("city") or "").strip().lower()
+    doc_state_code = (doc.get("state") or "").strip().lower()
+    doc_state_name = US_STATE_ABBREVIATIONS.get((doc.get("state") or "").strip().upper(), "").lower()
+    for loc in locations:
+        loc_l = loc.strip().lower()
+        if not loc_l:
+            continue
+        if loc_l in ("united states", "usa", "u.s.", "us"):
+            return True
+        if loc_l == doc_city or loc_l == doc_state_code or loc_l == doc_state_name:
+            return True
+    return False
 
 
 def _matches_exclude_keys(doc: dict, exclude_keys: set) -> bool:
@@ -248,6 +320,7 @@ def search_firm_cache(
     companies = _extract_company_slugs(parsed)
     schools = _extract_school_slugs(parsed)
     title_levels = _extract_title_levels(parsed)
+    locations = _extract_locations(parsed)
 
     # Route to best-matching indexed query. Skip if the prompt is too broad
     # (no company AND no school) — we don't want to full-scan firm_employees.
@@ -308,6 +381,8 @@ def search_firm_cache(
         if _matches_exclude_keys(doc, exclude_keys):
             continue
         if not _matches_title_filter(doc, title_levels):
+            continue
+        if not _matches_location_filter(doc, locations):
             continue
         kept.append(doc)
         if len(kept) >= max_contacts:
