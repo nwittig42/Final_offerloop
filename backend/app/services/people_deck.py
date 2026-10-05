@@ -1531,8 +1531,12 @@ def reveal_person(
 
     _record_reveal(db, user_id, deck_id, person_id, contact, address, draft_id, draft_url, sent=sent)
 
+    # The LinkedIn and photo the backfill may have just found, so the app can
+    # patch the card it is already showing without a deck refetch.
     return {"email": address, "verified": True, "charged": charged,
-            "drafted": drafted, "sent": sent}, 200
+            "drafted": drafted, "sent": sent,
+            "linkedinUrl": (contact.get("LinkedIn") or "").strip(),
+            "photoUrl": (contact.get("PhotoUrl") or "").strip()}, 200
 
 
 def _record_reveal(db, user_id, deck_id, person_id, contact, address,
