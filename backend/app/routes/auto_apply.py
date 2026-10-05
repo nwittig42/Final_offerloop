@@ -661,6 +661,8 @@ def list_auto_apply_jobs():
         "status",
         "stage",
         "failure_reason",
+        "submit_evidence",
+        "applicant_email",
         "pending_questions",
         "credits_charged",
         "credits_refunded",
