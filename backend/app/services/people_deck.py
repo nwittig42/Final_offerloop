@@ -1285,6 +1285,16 @@ def reveal_person(
         "outcome": "email_found", "source": contact.get("EmailSource") or "provider_direct",
         "provider": contact.get("_provider") or "",
     })
+    # FullEnrich's discovery rung never supplies a LinkedIn URL or photo. Look
+    # the person up once now, before the Inbox save and the warehouse write,
+    # so both carry it. A miss is negative-cached, so reveals don't re-spend.
+    if not contact.get("LinkedIn"):
+        from app.services.linkedin_backfill import find_linkedin_for_contact
+        found = find_linkedin_for_contact(db, contact)
+        if found:
+            contact["LinkedIn"] = found["linkedin_url"]
+            if not contact.get("PhotoUrl") and found.get("photo_url"):
+                contact["PhotoUrl"] = found["photo_url"]
     # Bank the email onto the warehouse profile (2026-10-02). Whichever rung
     # above found it, Crustdata, Coresignal's SMTP check, FullEnrich, this
     # merges onto the SAME cached doc the search step already wrote (keyed
