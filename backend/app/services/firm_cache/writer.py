@@ -63,8 +63,12 @@ def cache_pdl_contacts(
 
     Returns:
         Count of docs *queued* for upsert (may be less than input length —
-        contacts without a canonicalizable LinkedIn URL, non-US, or missing
-        a current company are silently skipped by the normalizer).
+        contacts missing a current company, non-US, or with nothing at all
+        to key on (no LinkedIn, no email, no name) are silently skipped by
+        the normalizer. A contact with no LinkedIn but a usable email or
+        name still gets a doc, keyed by a synthesized id instead of a
+        LinkedIn slug — 2026-10-05, see schema.py's
+        _synthesize_person_key).
         Returns 0 if the feature flag is off or any pre-flight check fails.
     """
     if not _flag_enabled():
