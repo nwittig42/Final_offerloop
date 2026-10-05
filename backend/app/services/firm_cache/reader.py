@@ -245,14 +245,24 @@ def _matches_title_filter(doc: dict, allowed_levels: list[str]) -> bool:
 
 
 def _matches_exclude_keys(doc: dict, exclude_keys: set) -> bool:
-    """True if this doc should be EXCLUDED (user already has this person)."""
+    """True if this doc should be EXCLUDED (user already has this person).
+
+    Callers build exclude_keys as a set of STRINGS (get_contact_identity's
+    "first||last||company", or LinkedIn URLs lowercased), never tuples. The
+    old tuple membership check could never match, so exclusion silently did
+    nothing. Checks both string shapes."""
     if not exclude_keys:
         return False
-    # get_contact_identity() key is (first, last, company) lowercased.
-    first = (doc.get("first_name") or "").lower().strip()
-    last = (doc.get("last_name") or "").lower().strip()
-    company = (doc.get("company_display") or "").lower().strip()
-    return (first, last, company) in exclude_keys
+    linkedin = (doc.get("linkedin_url") or "").strip().lower()
+    if linkedin and linkedin in exclude_keys:
+        return True
+    from app.services.pdl_client import get_contact_identity
+    identity = get_contact_identity({
+        "FirstName": doc.get("first_name") or "",
+        "LastName": doc.get("last_name") or "",
+        "Company": doc.get("company_display") or "",
+    })
+    return bool(identity.strip("|")) and identity in exclude_keys
 
 
 # ── Public entry point ───────────────────────────────────────────────────

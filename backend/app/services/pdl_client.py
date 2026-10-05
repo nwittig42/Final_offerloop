@@ -418,13 +418,33 @@ def _contact_has_school_as_primary_education(contact: dict, aliases: list[str]) 
 
 def _contact_has_school_as_primary_education_lenient(contact: dict, aliases: list[str]) -> bool:
     return contact_matches_school(contact, aliases, strictness="normal")
+def normalize_company_for_identity(raw: str) -> str:
+    """Collapse the ways one employer is written, for identity purposes only.
+
+    Deliberately conservative: strips punctuation and legal suffixes only, so
+    "Discord" and "Discord, Inc." hash to the same person, while two genuinely
+    different employers still differ on company. Ported from mobile's
+    pdl_client.py (2026-07-14 duplicate-contact fix)."""
+    import re as _re
+    c = (raw or "").lower().strip()
+    c = _re.sub(r"[.,()]", " ", c)
+    c = _re.sub(
+        r"\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|plc|gmbh|"
+        r"holdings|holding|group)\b",
+        " ",
+        c,
+    )
+    c = _re.sub(r"\s+", " ", c).strip()
+    return c
+
+
 def _contact_hash(contact: dict) -> tuple:
     """Generate a tuple of key fields to identify a contact uniquely"""
     first = (contact.get("FirstName") or "").lower().strip()
     last = (contact.get("LastName") or "").lower().strip()
     email = (contact.get("Email") or "").lower().strip()
-    company = (contact.get("Company") or "").lower().strip()
-    
+    company = normalize_company_for_identity(contact.get("Company") or "")
+
     # ALWAYS use (first, last, company) for identity
     # Email can be added later (PDL→Hunter), so it's not reliable for deduplication
     return (first, last, company)
