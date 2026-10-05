@@ -543,35 +543,20 @@ def search_people(
         logger.exception("people-deck warehouse lookup failed (non-fatal) uid=%s", user_id)
         cache_hits = []
 
-    # Crustdata TEST rung (2026-08-19, Rylan: spend 30-35 trial credits for
-    # real signal). Primary when the key is present and budget remains, so
-    # phone testing exercises the candidate provider on real prompts. A
-    # search is ~0.03 credits per result; addresses come later, at reveal.
-    # Empty or disabled falls straight through to the PDL ladder unchanged.
-    # (Skipped entirely when the warehouse already fully satisfied the deck.)
+    # Not Crustdata (removed 2026-10-05, Rylan: "we don't use crustdata at
+    # all, its coresignal plus fullenrich" — it was still wired in as the
+    # first live rung from the 2026-08-19 trial, long after the trial ran
+    # out, and had started eating every search as a 402 Insufficient
+    # credits before ever reaching Coresignal. See OFF-21.)
     contacts: list = list(cache_hits[:fetch_count]) if len(cache_hits) >= fetch_count else []
     _retry_level, _already_saved, _adjacency = 0, [], (
         {"provider": "firm_cache", "firm_cache_hits": len(contacts)} if contacts else {}
     )
-    try:
-        from app.services import crustdata_client
-        if crustdata_client.enabled(db):
-            crustdata_client.log_balance()
-            contacts = crustdata_client.search_from_parsed(parsed, fetch_count, db)
-            if contacts:
-                _adjacency = {"provider": "crustdata_test"}
-                logger.info(
-                    "people-deck crustdata rung uid=%s returned %d contacts",
-                    user_id, len(contacts),
-                )
-    except Exception:
-        logger.exception("people-deck crustdata rung failed for uid=%s", user_id)
-        contacts = []
 
     # Coresignal TEST rung (2026-08-20, the canceled-call pivot: extract the
-    # signal from our own infrastructure). Runs when the Crustdata rung came
-    # up empty (its trial is out of credits), the Coresignal key is present,
-    # and the trial budget holds. A collect is 20 credits, so collects are
+    # signal from our own infrastructure). Runs when the warehouse didn't
+    # already fully satisfy the deck, the Coresignal key is present, and
+    # the trial budget holds. A collect is 20 credits, so collects are
     # capped hard per search and tracked in Firestore. Emails ship tiered by
     # the client: verified sells as-is, matched holds for an SMTP check at
     # reveal, guesses never leave the backend (benchmarked 6 of 6 invalid).
@@ -1113,26 +1098,6 @@ def reveal_person(
     # No address means nothing to sell. Answer before touching credits rather
     # than charging and refunding, so the ledger has no phantom pair in it.
     address = _address_of(contact)
-
-    # Crustdata TEST rung: their contacts surface address-less on purpose
-    # (search is 0.03/result); the paid enrich happens HERE, on the swipe,
-    # and only a deliverable-labeled email counts as an address at all.
-    if not address and contact.get("_provider") == "crustdata":
-        try:
-            from app.services import crustdata_client
-            enriched = crustdata_client.enrich_deliverable_email(
-                # The urn-form URL is what their enrich matches on; LinkedIn
-                # holds the flagship URL for the card button since 2026-08-19.
-                (contact.get("LinkedInUrn") or contact.get("LinkedIn") or "").strip(), db,
-            )
-        except Exception:
-            logger.exception("people-deck crustdata enrich failed uid=%s", user_id)
-            enriched = None
-        if enriched and enriched.get("email"):
-            address = enriched["email"]
-            contact["Email"] = address
-            contact["EmailSource"] = "crustdata_deliverable"
-            contact["EmailVerified"] = True
 
     # Coresignal TEST rung: a matched-tier address was collected up front but
     # held unsold until this SMTP check (benchmark 2026-08-20: matched went
