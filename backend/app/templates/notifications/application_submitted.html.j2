@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Application submitted</title>
+</head>
+<body style="margin:0;padding:0;background:#FAFAF7;font-family:Georgia,'Times New Roman',serif;color:#1A1A1A;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FAFAF7;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#FFFFFF;">
+          <tr>
+            <td style="padding:40px 32px 16px 32px;">
+              <h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;font-style:italic;font-weight:400;font-size:26px;line-height:1.3;color:#1A1A1A;">
+                {% if first_name %}{{ first_name }} — your application is in.{% else %}Your application is in.{% endif %}
+              </h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 32px 24px 32px;">
+              <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.55;color:#1A1A1A;">
+                We submitted your application for <span style="font-weight:700;">{{ job_title }}</span> at <span style="font-weight:700;">{{ company }}</span>{% if ats_label %} through {{ ats_label }}{% endif %}.
+              </p>
+              <p style="margin:14px 0 0 0;font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.55;color:#1A1A1A;">
+                {% if confirmed %}{{ company }}'s careers site confirmed it was received.{% else %}{{ company }}'s careers site didn't show us a confirmation page afterward, so treat their own email as the proof it landed.{% endif %}
+              </p>
+              <p style="margin:14px 0 0 0;font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.55;color:#1A1A1A;">
+                {% if applicant_email %}{{ company }} will send their confirmation, and any reply, to <span style="font-weight:700;">{{ applicant_email }}</span>.{% else %}{{ company }} will send their confirmation, and any reply, to the email on your resume.{% endif %}{% if not confirmed %} If nothing arrives within a day, apply directly{% if apply_url %} <a href="{{ apply_url }}" style="color:#1A1A1A;text-decoration:underline;">on their careers site</a>.{% else %} on their careers site.{% endif %}{% endif %}
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 32px 32px 32px;">
+              <a href="{{ applications_url }}" style="display:inline-block;font-family:Georgia,'Times New Roman',serif;font-size:14px;color:#1A1A1A;text-decoration:underline;margin-right:18px;">See your applications &rarr;</a>
+              {% if apply_url and confirmed %}<a href="{{ apply_url }}" style="display:inline-block;font-family:Georgia,'Times New Roman',serif;font-size:14px;color:#1A1A1A;text-decoration:underline;">View the posting &rarr;</a>{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 32px 40px 32px;border-top:1px solid #E5E5E5;">
+              <div style="font-family:Georgia,'Times New Roman',serif;font-size:14px;line-height:1.5;color:#1A1A1A;">
+                Thanks for applying with Offerloop.
+              </div>
+              <div style="margin-top:18px;font-family:'Courier New',Courier,monospace;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#888888;">
+                Offerloop
+              </div>
+              <div style="margin-top:10px;font-family:Georgia,'Times New Roman',serif;font-size:12px;line-height:1.5;color:#888888;">
+                You're getting this because you applied through Offerloop. <a href="{{ settings_url }}" style="color:#888888;text-decoration:underline;">Manage emails</a>
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

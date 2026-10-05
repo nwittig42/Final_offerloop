@@ -271,6 +271,16 @@ def run_auto_apply_job(
             patch["attempted_urls"] = result["attempted_urls"]
         if result.get("attempt_log"):
             patch["attempt_log"] = result["attempt_log"]
+        if status == "submitted":
+            # What the ATS showed us after submit (confirmation URL / text, or
+            # nothing), and the address the employer's own confirmation goes
+            # to — the resume email, which can differ from the account email.
+            patch["submit_evidence"] = result.get("submit_evidence") or "unconfirmed"
+            if result.get("submit_final_url"):
+                patch["submit_final_url"] = result["submit_final_url"]
+            applicant_email = ((preview.get("fields") or {}).get("email") or "").strip()
+            if applicant_email:
+                patch["applicant_email"] = applicant_email
         update_status(uid, auto_apply_id, **patch)
 
         # Ping the user (bell + push) when we stop for input, so they don't have
@@ -291,6 +301,16 @@ def run_auto_apply_job(
                 notify_application_result(uid, auto_apply_id, status, db=db)
             except Exception:
                 logger.exception("application result notify failed for %s", auto_apply_id)
+
+        # Email receipt for the win, alongside the bell + push above.
+        if not dry_run and status == "submitted":
+            try:
+                from app.services.auto_apply.confirmation_email import (
+                    send_application_confirmation,
+                )
+                send_application_confirmation(uid, auto_apply_id, db=db)
+            except Exception:
+                logger.exception("confirmation email failed for %s", auto_apply_id)
 
         if result.get("status") == "submitted":
             try:

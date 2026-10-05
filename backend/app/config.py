@@ -134,6 +134,10 @@ ENABLE_INDUSTRY_EXPANSION = os.getenv('ENABLE_INDUSTRY_EXPANSION', 'false').lowe
 # ships as dead code at merge — PR3 wires the cycle pipeline caller.
 LOOPS_ALERT_EMAILS_ENABLED = os.getenv("LOOPS_ALERT_EMAILS_ENABLED", "").lower() in ("1", "true", "yes")
 
+# "Application submitted" receipt emailed to the user after a real auto-apply
+# submit. Off by default; flip on per environment.
+AUTO_APPLY_CONFIRMATION_EMAIL_ENABLED = os.getenv("AUTO_APPLY_CONFIRMATION_EMAIL_ENABLED", "").lower() in ("1", "true", "yes")
+
 # Resend HTTP delivery (no Python SDK — raw HTTPS via `requests`).
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "loops@offerloop.ai")

@@ -1131,3 +1131,50 @@ JOB_GONE_REASON = (
     "This job is no longer accepting applications — the posting was taken down. "
     "Nothing was submitted."
 )
+
+
+# ---------- post-submit evidence ----------
+
+EVIDENCE_CONFIRMATION_URL = "confirmation_url"
+EVIDENCE_CONFIRMATION_TEXT = "confirmation_text"
+EVIDENCE_UNCONFIRMED = "unconfirmed"
+
+_SUCCESS_TEXT_MARKERS = (
+    "thanks for applying",
+    "thank you for applying",
+    "thank you for your application",
+    "application received",
+    "we received your application",
+    "we've received your application",
+    "your application has been submitted",
+    "your application was submitted",
+    "application submitted",
+)
+
+
+def classify_submit_evidence(page, success_url_keywords) -> Dict[str, Any]:
+    """What the ATS showed us after a run we're about to call `submitted`.
+
+    The fillers mark a run submitted on three different grounds: the page
+    landed on a thank-you / confirmation URL, the page text says the
+    application was received, or the form simply went away with no error
+    markers (the "best-effort" branch, and a resubmit that left zero invalid
+    fields). Only the first two are positive proof the ATS accepted it, so
+    record which one we had and let the audit and the confirmation email
+    tell them apart. Never raises.
+    """
+    final_url = ""
+    try:
+        final_url = page.url or ""
+    except Exception:
+        pass
+    lowered = final_url.lower()
+    if any(kw in lowered for kw in success_url_keywords):
+        return {"submit_evidence": EVIDENCE_CONFIRMATION_URL, "submit_final_url": final_url}
+    try:
+        text = (page.evaluate("() => document.body.innerText || ''") or "").lower()
+    except Exception:
+        text = ""
+    if any(marker in text for marker in _SUCCESS_TEXT_MARKERS):
+        return {"submit_evidence": EVIDENCE_CONFIRMATION_TEXT, "submit_final_url": final_url}
+    return {"submit_evidence": EVIDENCE_UNCONFIRMED, "submit_final_url": final_url}
