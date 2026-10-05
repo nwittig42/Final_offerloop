@@ -211,33 +211,56 @@ def _stashable(contact: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _seen_people_keys(db, user_id: str) -> set:
-    """LinkedIn keys of everyone this user has already been shown or saved.
+    """Keys of everyone this user has already been shown or saved.
 
     Re-running a search used to return the exact same deck (same query, same
     id order), so "that's all of them" arrived after seven cards and the
     product felt tiny (Rylan 2026-08-27). Excluding the recent decks' people
     and saved contacts makes every repeat search dig DEEPER into the same
-    well instead of replaying it. Keys match coresignal_client._contact_key
-    (LinkedIn URL lowercase). Best-effort: an error excludes nobody.
+    well instead of replaying it. Best-effort: an error excludes nobody.
+
+    Two key shapes, both added per person:
+      - LinkedIn URL lowercase, matching coresignal_client._contact_key, for
+        live-provider dedup (Coresignal's own exclude check only knows this
+        shape).
+      - pdl_client.get_contact_identity()'s "first||last||company" string,
+        for warehouse dedup (firm_cache/reader.py's _matches_exclude_keys)
+        — the LinkedIn-only shape silently excluded nothing for any contact
+        without one (2026-10-05, same gap as OFF-24's no-LinkedIn warehouse
+        drop: FullEnrich-sourced people had no LinkedIn key to match on at
+        all, so a repeat search could resurface someone already seen).
     """
+    from app.services.pdl_client import get_contact_identity
+
     keys: set = set()
+
+    def _add(c: dict) -> None:
+        li = (c.get("LinkedIn") or c.get("linkedinUrl") or "").strip().lower()
+        if li:
+            keys.add(li)
+        identity = get_contact_identity({
+            "FirstName": c.get("FirstName") or c.get("firstName") or "",
+            "LastName": c.get("LastName") or c.get("lastName") or "",
+            "Company": c.get("Company") or c.get("company") or "",
+        })
+        if identity.strip("|"):
+            keys.add(identity)
+
     try:
         decks = (db.collection("users").document(user_id)
                    .collection("peopleDecks")
                    .order_by("createdAt", direction=_FS_DESC).limit(10).stream())
         for d in decks:
             for c in ((d.to_dict() or {}).get("people") or {}).values():
-                li = (c.get("LinkedIn") or "").strip().lower()
-                if li:
-                    keys.add(li)
+                _add(c)
     except Exception:
         logger.exception("seen-people deck scan failed uid=%s", user_id)
     try:
         for c in (db.collection("users").document(user_id)
-                    .collection("contacts").select(["linkedinUrl"]).limit(500).stream()):
-            li = ((c.to_dict() or {}).get("linkedinUrl") or "").strip().lower()
-            if li:
-                keys.add(li)
+                    .collection("contacts")
+                    .select(["linkedinUrl", "firstName", "lastName", "company"])
+                    .limit(500).stream()):
+            _add(c.to_dict() or {})
     except Exception:
         logger.exception("seen-people contact scan failed uid=%s", user_id)
     return keys

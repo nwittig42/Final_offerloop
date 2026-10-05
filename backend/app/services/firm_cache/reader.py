@@ -283,14 +283,26 @@ def _matches_location_filter(doc: dict, locations: list[str]) -> bool:
 
 
 def _matches_exclude_keys(doc: dict, exclude_keys: set) -> bool:
-    """True if this doc should be EXCLUDED (user already has this person)."""
+    """True if this doc should be EXCLUDED (user already has this person).
+
+    2026-10-05: every real caller builds exclude_keys as a SET OF STRINGS —
+    either _seen_people_keys()'s LinkedIn-URL-lowercase strings, or
+    pdl_client.get_contact_identity()'s "first||last||company" strings — but
+    this used to check a bare (first, last, company) TUPLE against that set,
+    which can never match a string. The exclusion silently did nothing for
+    every caller. Now checks both string shapes a caller might have used."""
     if not exclude_keys:
         return False
-    # get_contact_identity() key is (first, last, company) lowercased.
-    first = (doc.get("first_name") or "").lower().strip()
-    last = (doc.get("last_name") or "").lower().strip()
-    company = (doc.get("company_display") or "").lower().strip()
-    return (first, last, company) in exclude_keys
+    linkedin = (doc.get("linkedin_url") or "").strip().lower()
+    if linkedin and linkedin in exclude_keys:
+        return True
+    from app.services.pdl_client import get_contact_identity
+    identity = get_contact_identity({
+        "FirstName": doc.get("first_name") or "",
+        "LastName": doc.get("last_name") or "",
+        "Company": doc.get("company_display") or "",
+    })
+    return bool(identity.strip("|")) and identity in exclude_keys
 
 
 # ── Public entry point ───────────────────────────────────────────────────
