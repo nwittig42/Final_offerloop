@@ -2236,6 +2236,27 @@ def _fill_combobox(
             if t and t not in tries:
                 tries.append(t)
 
+        # Decline-flavored answers: if the answer looks like a refusal/decline
+        # ("I don't wish to answer", "Prefer not to say", etc.), Greenhouse
+        # tenants render the corresponding option with WILDLY varying exact
+        # text — Anthropic uses one phrasing, Robinhood another, Verkada a
+        # third. Typing only the literal answer often surfaces zero matching
+        # options. Append a small set of canonical decline synonyms so we
+        # have multiple shots at filtering the listbox down to the real
+        # decline option, which `score` will then exact-match.
+        _DECLINE_PROBES = (
+            "decline", "prefer not", "don't wish", "do not wish",
+            "rather not", "choose not",
+        )
+        cleaned_lower = cleaned.lower()
+        if any(probe in cleaned_lower for probe in (
+            "decline", "wish to answer", "wish to disclose", "prefer not",
+            "don't want to answer", "rather not", "no answer",
+        )):
+            for syn in _DECLINE_PROBES:
+                if syn not in tries:
+                    tries.append(syn)
+
         for query in tries:
             # Clear the input before each retry (Ctrl-A + Backspace works on
             # react-select hidden inputs across platforms — react-select
@@ -2273,6 +2294,14 @@ def _fill_combobox(
                                 if (t === wantedFull) return 1000;
                                 if (t === wantedQuery) return 900;
                                 if (t.includes(wantedFull)) return 800;
+                                // NEW: option contains the typed query (when
+                                // the query is substantive, >= 4 chars). Catches
+                                // the Robinhood candidate-location case where
+                                // option = "Los Angeles, CA, USA" and our typed
+                                // query is "Los Angeles" — clear winner that
+                                // previously failed the overlap-ratio fallback
+                                // (scored ~200, below the 400 threshold).
+                                if (wantedQuery.length >= 4 && t.includes(wantedQuery)) return 750;
                                 if (wantedFull.length > 3 && wantedFull.includes(t)) return 700;
                                 // Word-overlap: how many of the FULL answer's
                                 // distinct words appear in the option
