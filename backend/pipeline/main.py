@@ -65,6 +65,31 @@ def _source_breakdown(raw: list[dict]) -> dict:
     return dict(counts)
 
 
+def _fetch_existing_coresignal_ids() -> set[str]:
+    """Pull job_ids of Coresignal-sourced jobs already in Firestore. Used by
+    the Coresignal fetcher to skip Collect on jobs we already have (each
+    duplicate Collect wastes a Starter-tier credit).
+
+    Only pages source='coresignal' to keep the read cheap. Falls back to
+    an empty set on any Firestore error.
+    """
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        from backend.app.extensions import get_db
+
+        db = get_db()
+        if not db:
+            return set()
+
+        query = db.collection("jobs").where(
+            filter=FieldFilter("source", "==", "coresignal")
+        ).select([])  # projection: __name__ only, no other fields transferred
+        return {doc.id for doc in query.stream()}
+    except Exception as exc:
+        logger.warning("Coresignal existing-id lookup failed: %s", exc)
+        return set()
+
+
 def _write_run_log(mode: str, started_at: datetime, result: dict | None, error: str | None = None):
     """Write a pipeline_runs/{run_id} doc summarizing this run. Never raises."""
     try:
@@ -124,12 +149,25 @@ def _gate(normalized: list[dict]) -> tuple[list[dict], dict]:
 
 def run_pipeline(skip_fantastic: bool = False):
     from backend.pipeline.fetcher import fetch_jobs
+    from backend.pipeline.coresignal import fetch_all_coresignal
     from backend.pipeline.normalizer import normalize_all
     from backend.pipeline.writer import write_jobs
 
-    sources = "Greenhouse, Lever, Ashby, Simplify" + ("" if skip_fantastic else ", Fantastic.jobs")
+    sources = "Greenhouse, Lever, Ashby, Simplify, Coresignal" + ("" if skip_fantastic else ", Fantastic.jobs")
     logger.info("Fetching jobs from %s...", sources)
     raw = fetch_jobs(skip_fantastic=skip_fantastic)
+
+    # Coresignal runs separately so it can dedup against jobs already in
+    # Firestore before spending Collect credits. It also has a strict
+    # per-run credit budget (see backend/pipeline/coresignal.py). Skipped
+    # entirely if CORESIGNAL_API_KEY is not set.
+    try:
+        existing_ids = _fetch_existing_coresignal_ids()
+        coresignal_jobs = fetch_all_coresignal(existing_job_ids=existing_ids)
+        raw.extend(coresignal_jobs)
+    except Exception as exc:
+        logger.warning("Coresignal fetch failed (non-fatal): %s", exc)
+
     breakdown = _source_breakdown(raw)
 
     logger.info("Normalizing %d raw results...", len(raw))

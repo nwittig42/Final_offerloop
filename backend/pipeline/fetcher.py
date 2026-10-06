@@ -1010,6 +1010,12 @@ def fetch_jobs(skip_fantastic: bool = False, fj_since_hours: int | None = None) 
             None = pull full 7d window. 36 = last ~24h (recommended for daily cron).
     Returns a list of pre-normalized job dicts.
     """
+    # Coresignal is fetched separately (it needs the set of existing Firestore
+    # job_ids to dedup against so we don't burn Collect credits on jobs we
+    # already have). Callers that want Coresignal in the batch should invoke
+    # fetch_all_coresignal(existing_job_ids=...) from backend.pipeline.coresignal
+    # in the same run — kept out of this concurrent fan-out to keep the credit
+    # accounting explicit.
     with ThreadPoolExecutor(max_workers=5) as pool:
         gh_future = pool.submit(_fetch_all_greenhouse)
         lv_future = pool.submit(_fetch_all_lever)
