@@ -4,7 +4,6 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { useFirebaseAuth } from "../contexts/FirebaseAuthContext";
 import { useCreditsView } from "@/hooks/useCreditsView";
-import { useScout } from "@/contexts/ScoutContext";
 import { useTour } from "@/contexts/TourContext";
 import {
   Linkedin, Loader2, ArrowRight, ArrowUp,
@@ -264,7 +263,6 @@ const ContactSearchPage: React.FC<{
         railFilters, railFiltersNonce = 0, onParsedQuery }) => {
   const { user: authUser, checkCredits, updateCredits } = useFirebaseAuth();
   const user = isDevPreview ? DEV_MOCK_USER as any : authUser;
-  const { openPanelWithSearchHelp } = useScout();
   const { demoSurface } = useTour();
   const peopleDemoActive = demoSurface === 'people';
   const navigate = useNavigate();
@@ -1157,51 +1155,6 @@ const ContactSearchPage: React.FC<{
     return () => window.removeEventListener(SCOUT_PREFILL_EVENT, applyFromBridge);
   }, [routerLocation.pathname, searchParams, applyScoutPopulate]);
 
-  // Helper function to trigger Scout on 0 results. Forwards the parsed query +
-  // retry-chain context so the backend can generate concrete refined prompts
-  // ("try Mediobanca instead — Bocconi pipeline") rather than generic title
-  // alternatives. The extra signals are optional; the backend falls through to
-  // the legacy structured path if any are missing.
-  //
-  // Critical: we ALSO pass `tried_prompts` — the list of prompts that have
-  // already failed in this session — so Scout doesn't recommend a refined
-  // prompt the user just clicked through and bombed on. The LLM is instructed
-  // to never suggest one of these. List is rolling, 24h, 30 most recent.
-  const triggerScoutForNoResults = useCallback(
-    (extra?: {
-      parsedQuery?: any;
-      retryLevel?: number;
-      broadenedDimensions?: string[];
-    }) => {
-      let triedPrompts: string[] = [];
-      try {
-        const stored = JSON.parse(
-          localStorage.getItem('ofl_tried_prompts') || '{}',
-        ) as Record<string, number>;
-        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        triedPrompts = Object.entries(stored)
-          .filter(([, ts]) => ts >= cutoff)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 30)
-          .map(([p]) => p);
-      } catch {
-        // Non-fatal — localStorage may be disabled.
-      }
-      openPanelWithSearchHelp({
-        searchType: 'contact',
-        failedSearchParams: {
-          prompt: searchPrompt.trim(),
-          parsed_query: extra?.parsedQuery,
-          retry_level_used: extra?.retryLevel,
-          broadened_dimensions: extra?.broadenedDimensions,
-          tried_prompts: triedPrompts,
-        },
-        errorType: 'no_results',
-      });
-    },
-    [openPanelWithSearchHelp, searchPrompt],
-  );
-
   // Helper functions
   const stripUndefined = <T extends Record<string, any>>(obj: T) =>
     Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
@@ -1791,9 +1744,6 @@ const ContactSearchPage: React.FC<{
       setProgressValue(100);
       const alreadySavedFromServer = (result as any)?.already_saved_contacts || [];
       const backendMessage = (result as any)?.message || "";
-      const broadenedDims: string[] = Array.isArray((result as any)?.broadened_dimensions)
-        ? (result as any).broadened_dimensions
-        : [];
       setLastResults(result.contacts);
       setAlreadySavedResults(alreadySavedFromServer);
       setResultMessage(backendMessage);
@@ -1903,46 +1853,14 @@ const ContactSearchPage: React.FC<{
       setSearchSuggestions((result as any)?.suggestions || []);
       setSearchBroadened((result as any)?.search_broadened || false);
 
-      // Open Scout with refined-prompt suggestions in two cases:
-      //   - genuine zero results (nothing to surface)
-      //   - all matches already saved AND the chain had to broaden (retry >= 2,
-      //     i.e. title/industry got dropped) — that's the "I want fresh contacts
-      //     and the system gave me what it could" moment where suggestions
-      //     genuinely help.
+      // Nothing new to show: genuine zero results, or every match was
+      // already saved AND the chain had to broaden (retry >= 2).
       const retryLevelFromServer = Number((result as any)?.retry_level_used ?? 0);
       const allHitsAlreadySaved =
         result.contacts.length === 0 && alreadySavedFromServer.length > 0;
       const isZeroResults =
         result.contacts.length === 0 && alreadySavedFromServer.length === 0;
-      const shouldOfferRefinement =
-        isZeroResults || (allHitsAlreadySaved && retryLevelFromServer >= 2);
-
-      // Stamp the prompt as "tried and failed" before opening Scout, so the
-      // very same suggestion can't bounce back at the user on the next pass.
-      // Persists to localStorage with a 24h TTL; trimmed to 30 entries.
-      if (isZeroResults) {
-        try {
-          const promptKey = searchPrompt.trim().toLowerCase();
-          if (promptKey) {
-            const existing = JSON.parse(
-              localStorage.getItem('ofl_tried_prompts') || '{}',
-            ) as Record<string, number>;
-            existing[promptKey] = Date.now();
-            const entries = Object.entries(existing).sort((a, b) => b[1] - a[1]);
-            const trimmed = Object.fromEntries(entries.slice(0, 30));
-            localStorage.setItem('ofl_tried_prompts', JSON.stringify(trimmed));
-          }
-        } catch {
-          // Non-fatal — localStorage may be disabled.
-        }
-      }
-
-      if (shouldOfferRefinement) {
-        triggerScoutForNoResults({
-          parsedQuery: (result as any)?.parsed_query,
-          retryLevel: retryLevelFromServer,
-          broadenedDimensions: broadenedDims,
-        });
+      if (isZeroResults || (allHitsAlreadySaved && retryLevelFromServer >= 2)) {
         setSearchComplete(true);
       }
 

@@ -9,13 +9,11 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import posthog from "./lib/posthog";
 import { FirebaseAuthProvider, useFirebaseAuth } from "./contexts/FirebaseAuthContext";
 import PendingShareModal from "@/components/shares/PendingShareModal";
-import { ScoutProvider, useScout } from "./contexts/ScoutContext";
+import { ScoutProvider } from "./contexts/ScoutContext";
 import { ScoutChatProvider } from "./contexts/ScoutChatContext";
 import { TourProvider } from "./contexts/TourContext";
 import { HelmetProvider } from "react-helmet-async";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { ScoutSidePanel } from "./components/ScoutSidePanel";
-import FloatingAskScoutButton from "./components/AskScoutButton";
 import { LoginNotification } from "./components/LoginNotification";
 import { LoadingContainer } from "./components/ui/LoadingBar";
 import { IS_DEV_PREVIEW } from "./lib/devPreview";
@@ -408,7 +406,8 @@ const AppRoutes: React.FC = () => {
       <Route path="/recruiter-spreadsheet" element={<Navigate to="/find?tab=hiring-managers" replace />} />
       <Route path="/hiring-manager-tracker" element={<Navigate to="/find?tab=hiring-managers" replace />} />
       <Route path="/company-tracker" element={<Navigate to="/find?tab=companies" replace />} />
-      <Route path="/scout" element={<ProtectedRoute><ScoutRedirect /></ProtectedRoute>} />
+      {/* Scout is no longer on the website; old /scout links land on Search. */}
+      <Route path="/scout" element={<Navigate to="/find" replace />} />
       <Route path="/recruiting-timeline" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><RecruitingTimelinePage /></Suspense></ProtectedRoute>} />
       {/* Data & Stats */}
       <Route path="/data" element={<Suspense fallback={<PageLoader />}><DataStats /></Suspense>} />
@@ -506,19 +505,6 @@ const AppRoutes: React.FC = () => {
   );
 };
 
-/* ---------------- Scout Redirect Component ---------------- */
-const ScoutRedirect: React.FC = () => {
-  const { openPanel } = useScout();
-  
-  useEffect(() => {
-    // Open panel when navigating to /scout
-    openPanel();
-  }, [openPanel]);
-  
-  // Land on Search (the default surface) with the panel open
-  return <Navigate to="/find" replace />;
-};
-
 /* ---------------- Conditional Background Wrapper ----------------
    Decides whether to mount the landing background tree BEFORE rendering it.
    Authed users are redirected off "/" by PublicRoute, and during auth
@@ -549,15 +535,6 @@ const ConditionalBackground: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 };
 
-/* ---------------- Promo overlay gate ----------------
-   The /promo route is a scripted screen-capture surface and /connector is a
-   public marketing page. Suppress floating Scout UI on those paths. */
-const NotOnPromo: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { pathname } = useLocation();
-  if (pathname === '/promo' || pathname === '/connector') return null;
-  return <>{children}</>;
-};
-
 /* ---------------- Pageview Tracker ----------------
    capture_pageview is false in posthog.ts, so PostHog does not auto-fire.
    This fires exactly one $pageview per location: once on initial mount and
@@ -567,32 +544,6 @@ const PageviewTracker: React.FC = () => {
   useEffect(() => {
     posthog.capture('$pageview');
   }, [location.pathname, location.search]);
-  return null;
-};
-
-/* ---------------- Keyboard Shortcut Handler ---------------- */
-const KeyboardShortcutHandler: React.FC = () => {
-  const { openPanel, isPanelOpen, togglePanel } = useScout();
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Cmd+K or Ctrl+K to open/toggle Scout panel
-      if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
-        // Don't trigger if user is typing in an input/textarea
-        const target = event.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-          return;
-        }
-        
-        event.preventDefault();
-        togglePanel();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePanel]);
-
   return null;
 };
 
@@ -661,16 +612,11 @@ const App: React.FC = () => {
                 <ScoutProvider>
                   <ScoutChatProvider>
                     <TourProvider>
-                      <KeyboardShortcutHandler />
                       <PageviewTracker />
                       <AgentNotifierMount />
                       <LoginNotification />
                       <PendingShareModal />
                       <AppRoutes />
-                      <NotOnPromo>
-                        <ScoutSidePanel />
-                        <FloatingAskScoutButton />
-                      </NotOnPromo>
                     </TourProvider>
                   </ScoutChatProvider>
                 </ScoutProvider>

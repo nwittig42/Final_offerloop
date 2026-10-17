@@ -164,26 +164,6 @@ export const TOUR_STEPS: TourStepConfig[] = [
     route: '/coffee-chat-prep',
     demoSurface: 'meeting-prep',
   },
-  // Ask Scout. The orchestration in ScoutSidePanel opens the panel
-  // and seeds a Mark Cuban conversation so the user sees both the trigger
-  // and the assistant's strategist behavior. Anchored on the floating
-  // Ask Scout pill, which is mounted app-wide (hidden only on /dashboard),
-  // so this shares Meeting Prep's route — same-route advance, no nav.
-  // The old /agent (Loops) route was removed from the app; pointing a step
-  // there stranded the tour on the 404 page with no tooltip (the reported
-  // "tour dies near the end" bug).
-  {
-    target: '[data-tour="tour-scout-button"]',
-    title: 'Ask Scout',
-    content: "Stuck anywhere in Offerloop? Press Cmd+K or click Ask Scout for help from your AI copilot.",
-    route: '/coffee-chat-prep',
-    // Centered, not anchored: the Scout panel opens right-0 full-height for
-    // this step's seeded demo. A 'bottom' tooltip anchored on the top-right
-    // scout button lands over the panel and covers the demo, so center the
-    // tooltip in the viewport (clear of the 420px panel) instead.
-    placement: 'center',
-    demoSurface: 'scout',
-  },
   // Closer — centered send-off on Search so the tour ends where the user will
   // actually live, not parked on the Loops setup page.
   {
