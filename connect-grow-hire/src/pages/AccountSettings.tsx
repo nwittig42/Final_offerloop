@@ -12,6 +12,7 @@ import { DreamCompanyAutocomplete } from "@/components/DreamCompanyAutocomplete"
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { MainContentWrapper } from "@/components/MainContentWrapper";
 import { AppHeader } from "@/components/AppHeader";
+import { ConnectAiAssistantsCard } from "@/components/ConnectAiAssistantsCard";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
 import { db, storage, auth } from '@/lib/firebase';
 import { signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
@@ -1026,6 +1027,8 @@ export default function AccountSettings() {
                     Looking to update your profile? Open your profile →
                   </button>
                 </div>
+
+                <ConnectAiAssistantsCard style={{ marginBottom: '28px' }} />
 
                 {/* Profile Completeness */}
                 {(() => {

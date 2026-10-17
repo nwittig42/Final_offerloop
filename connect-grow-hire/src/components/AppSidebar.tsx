@@ -22,7 +22,6 @@ import {
   User,
   Gift,
   Plug,
-  Server,
   ClipboardList,
 } from "lucide-react";
 
@@ -97,7 +96,6 @@ const applicationsNavItems: NavItemDef[] = [
 
 const utilityNavItems: NavItemDef[] = [
   { title: "Integrations",  url: "/integrations",  LucideIcon: Plug },
-  { title: "MCP Server",    url: "/mcp-server",    LucideIcon: Server },
   { title: "Pricing",       url: "/pricing",       LucideIcon: Tag },
 ];
 
