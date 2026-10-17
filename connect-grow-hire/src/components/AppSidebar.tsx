@@ -12,7 +12,6 @@ import {
   Tag,
   FileText,
   Users,
-  Home,
   Search,
   Coffee,
   Inbox,
@@ -25,7 +24,6 @@ import {
   Plug,
   Server,
   ClipboardList,
-  PenLine,
 } from "lucide-react";
 
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -81,7 +79,6 @@ type NavItemDef = {
 };
 
 // RocketReach-style grouping: Discover = find/collect data, Engage = act on it.
-// Getting Started renders alone above Discover (its own section, no label).
 const discoverNavItems: NavItemDef[] = [
   { title: "Search",      url: "/find",        LucideIcon: Search },
   { title: "Job Board",   url: "/job-board",   LucideIcon: Briefcase },
@@ -96,8 +93,6 @@ const engageNavItems: NavItemDef[] = [
 
 const applicationsNavItems: NavItemDef[] = [
   { title: "Applications", url: "/applications", LucideIcon: ClipboardList },
-  { title: "Resume Workshop", url: "/resume",    LucideIcon: FileText },
-  { title: "Cover Letter", url: "/cover-letter", LucideIcon: PenLine },
 ];
 
 const utilityNavItems: NavItemDef[] = [
@@ -117,7 +112,7 @@ const userMenuItems = [
   { title: "Terms of Service",  url: "/terms-of-service",   icon: ScrollText },
 ];
 
-// Compact scale: three labeled sections + Getting Started must fit without
+// Compact scale: the labeled sections must fit without
 // scrolling, so nav rows run tighter than the old single-list layout.
 const NAV_FONT_SIZE = "12.5px";
 const NAV_PY = "7.5px";
@@ -158,11 +153,6 @@ export function AppSidebar() {
   const unreadCount = notifications.unreadReplyCount;
 
   const applicationsAttention = useApplicationsAttention();
-  const gettingStartedItem: NavItemDef = {
-    title: "Home",
-    url: "/dashboard",
-    LucideIcon: Home,
-  };
 
   const initials =
     user?.name
@@ -591,11 +581,6 @@ export function AppSidebar() {
               padding: isCollapsed ? "0 8px" : "0 14px",
             }}
           >
-            {/* Getting Started — its own unlabeled section above Discover */}
-            <div className="flex flex-col" style={{ gap: 2 }}>
-              {renderNavItem(gettingStartedItem)}
-            </div>
-            <div style={{ height: 12 }} />
             {!isCollapsed && sectionLabel("Discover")}
             {isCollapsed && (
               <div style={{ borderTop: `1px solid ${T.hairline}`, margin: "0 6px 6px" }} />

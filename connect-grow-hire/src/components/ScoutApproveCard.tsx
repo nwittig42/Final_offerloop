@@ -42,8 +42,6 @@ const PAGE_LABELS: Record<string, string> = {
   '/find?tab=hiring-managers': 'Find Hiring Managers',
   '/coffee-chat-prep': 'Meeting Prep',
   '/coffee-chat-library': 'Meeting Prep Library',
-  '/cover-letter': 'Cover Letter',
-  '/resume': 'Resume',
   '/job-board': 'Job Board',
   '/applications': 'Applications',
   '/outbox': 'your Inbox',

@@ -184,14 +184,14 @@ export const TOUR_STEPS: TourStepConfig[] = [
     placement: 'center',
     demoSurface: 'scout',
   },
-  // Closer — centered send-off on Home so the tour ends where the user will
+  // Closer — centered send-off on Search so the tour ends where the user will
   // actually live, not parked on the Loops setup page.
   {
     id: 'closing',
     target: 'body',
     title: "You're ready",
-    content: "Home shows your next moves, replies to answer, and everything running for you. Start by finding one person you want to talk to.",
-    route: '/dashboard',
+    content: "Start by finding one person you want to talk to. Replies land in your Inbox, and Loops keep working for you in the background.",
+    route: '/find',
     placement: 'center',
     nextLabel: 'Finish',
   },
@@ -350,14 +350,14 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
 
       // Joyride hit an internal error (e.g. a step whose target selector
       // matches nothing at render time). Without this branch the tour just
-      // unmounts silently mid-flow — end it cleanly on Home instead of
+      // unmounts silently mid-flow — end it cleanly on Search instead of
       // stranding the user with no tooltip and no way to resume.
       if (status === STATUS.ERROR) {
         console.warn(`[Tour] Joyride STATUS.ERROR on step ${index}; ending tour.`);
         markTourCompleteInFirestore();
         setRun(false);
         pendingStepRef.current = null;
-        navigate('/dashboard');
+        navigate('/find');
         return;
       }
 
@@ -419,9 +419,9 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
           setShowCompletion(true);
           setRun(false);
           // Natural finish (clicked Done on the last step): drop the user on
-          // the home dashboard. Skip/Close paths below intentionally do NOT
+          // Search. Skip/Close paths below intentionally do NOT
           // navigate — if a user bails early we leave them where they were.
-          navigate('/dashboard');
+          navigate('/find');
           completionTimerRef.current = setTimeout(dismissCompletion, COMPLETION_AUTO_DISMISS_MS);
           return;
         }
@@ -446,7 +446,7 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
           // STATUS.FINISHED event in some completion paths in addition to the
           // STEP_AFTER+NEXT we already navigate from, so this is a belt-and-
           // suspenders home-route nav for the natural finish.
-          navigate('/dashboard');
+          navigate('/find');
           completionTimerRef.current = setTimeout(dismissCompletion, COMPLETION_AUTO_DISMISS_MS);
         }
       }

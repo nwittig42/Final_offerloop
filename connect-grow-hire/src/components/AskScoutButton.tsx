@@ -128,7 +128,7 @@ export const AskScoutButton: React.FC<AskScoutButtonProps> = ({
  *   • /agent and /agent/** — Loops surfaces have ScoutGuide / inline Scouts
  *   • /onboarding — signup flow; no app chrome until onboarding completes
  */
-const HIDE_PILL_ON = new Set(["/dashboard", "/", "/for-students"]);
+const HIDE_PILL_ON = new Set(["/", "/for-students"]);
 const HIDE_PILL_PREFIXES = ["/agent", "/onboarding"];
 
 const FloatingAskScoutButton: React.FC = () => {

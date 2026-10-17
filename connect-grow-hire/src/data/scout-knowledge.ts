@@ -10,19 +10,6 @@
 // ============================================================================
 
 export const PAGES = {
-  home: {
-    route: "/home",
-    name: "Home / Dashboard",
-    description: "Your central hub for tracking networking progress, managing emails, and planning your recruiting timeline.",
-    tabs: ["Dashboard", "Inbox", "Calendar"],
-    features: [
-      "Activity statistics and progress tracking",
-      "Email thread management in Inbox",
-      "Personalized recruiting calendar and timeline"
-    ],
-    keywords: ["home", "dashboard", "main", "start", "overview", "stats", "activity"]
-  },
-
   contactSearch: {
     route: "/find",
     name: "Contact Search",
@@ -494,7 +481,6 @@ export const TROUBLESHOOTING = {
 export const ROUTE_MAPPING = {
   // Direct page routes
   pages: {
-    "/home": ["home", "dashboard", "main", "start"],
     "/find": ["contact search", "find contacts", "search contacts", "network", "networking", "outreach", "email"],
     "/find?tab=companies": ["firm search", "company search", "find companies", "find firms", "search firms", "employers"],
     "/job-board": ["job board", "jobs", "job listings", "openings", "positions", "resume", "cover letter", "recruiter"],
@@ -503,7 +489,7 @@ export const ROUTE_MAPPING = {
     "/account-settings": ["settings", "account", "profile", "gmail", "resume upload", "preferences"],
     "/my-network": ["my network", "contacts", "contact directory", "contact library", "saved contacts", "my contacts", "people", "companies"],
     "/coffee-chat-library": ["coffee chat library", "past preps", "prep history"],
-    "/home?tab=outbox": ["outbox", "emails", "drafts", "sent", "replies", "messages"]
+    "/outbox": ["outbox", "emails", "drafts", "sent", "replies", "messages"]
   },
 
   // Intent to route mapping
@@ -515,7 +501,7 @@ export const ROUTE_MAPPING = {
     viewPricing: "/pricing",
     manageAccount: "/account-settings",
     viewSavedContacts: "/my-network",
-    viewEmails: "/home?tab=outbox",
+    viewEmails: "/outbox",
     connectGmail: "/account-settings",
     uploadResume: "/account-settings",
     checkCredits: "/pricing"
@@ -543,12 +529,6 @@ export const SUGGESTED_QUESTIONS = [
  * the bare pathname (see ScoutSidePanel), so the tab entries actually match.
  */
 export const SCOUT_CHIPS_BY_PAGE: Record<string, readonly string[]> = {
-  "/dashboard": [
-    "What should I do first?",
-    "Find me 5 people to reach out to",
-    "Build me a networking plan for this month",
-    "What's waiting on me right now?",
-  ],
   "/find": [
     "Help me narrow my search",
     "Find alumni from my school at my target firms",
@@ -602,18 +582,6 @@ export const SCOUT_CHIPS_BY_PAGE: Record<string, readonly string[]> = {
     "How do I reuse a past prep?",
     "What questions should I ask in a coffee chat?",
     "How many preps do I get on my plan?",
-  ],
-  "/resume": [
-    "How do I improve my resume score?",
-    "What does the score measure?",
-    "How is my resume used across Offerloop?",
-    "Tailor my resume advice to my target role",
-  ],
-  "/cover-letter": [
-    "Write a cover letter for a job posting",
-    "What makes a strong cover letter?",
-    "Why does it need my resume first?",
-    "How many credits per letter?",
   ],
   "/upload-list": [
     "How should I format my CSV?",

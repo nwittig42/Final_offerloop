@@ -118,7 +118,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   };
 
   const resolveDestination = () => {
-    let dest = "/home";
+    let dest = "/find";
     if (returnTo) {
       try {
         let decoded = returnTo;

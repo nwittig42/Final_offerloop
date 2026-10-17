@@ -58,7 +58,7 @@ const SignIn: React.FC = () => {
   }, [location.search]);
 
   const finishAuth = (next: "onboarding" | "home") =>
-    forceNavigate(next === "onboarding" ? "/onboarding" : (returnPath ?? "/home"));
+    forceNavigate(next === "onboarding" ? "/onboarding" : (returnPath ?? "/find"));
 
   useEffect(() => setActiveTab(initialTab), [initialTab]);
 
@@ -81,7 +81,7 @@ const SignIn: React.FC = () => {
     const params = new URLSearchParams(location.search);
     if (params.get("signout") === "true") return;
 
-    forceNavigate(user.needsOnboarding ? "/onboarding" : (returnPath ?? "/home"));
+    forceNavigate(user.needsOnboarding ? "/onboarding" : (returnPath ?? "/find"));
   }, [user, isLoading, location.search, location.pathname, returnPath]);
 
   const handleGoogleAuth = async () => {

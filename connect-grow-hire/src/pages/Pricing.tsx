@@ -818,7 +818,7 @@ const Pricing = () => {
               Never navigate(-1): a Stripe-cancel bounce would otherwise dump them
               back on Stripe. */}
           <button
-            onClick={() => navigate(user ? '/dashboard' : '/')}
+            onClick={() => navigate(user ? '/find' : '/')}
             className="of-link"
             style={{
               display: 'inline-flex',

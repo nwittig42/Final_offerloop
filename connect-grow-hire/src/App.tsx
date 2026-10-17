@@ -26,7 +26,7 @@ import SignIn from "./pages/SignIn";
 import AuthCallback from "./pages/AuthCallback";
 import UscBeta from "@/pages/UscBeta";
 
-// Landing page is lazy: authed users get redirected to /dashboard and never
+// Landing page is lazy: authed users get redirected to /find and never
 // render it, so its heavy image/component tree must stay out of the critical
 // entry chunk.
 const Index = React.lazy(() => import("./pages/Index"));
@@ -57,8 +57,6 @@ const McpServerPage = React.lazy(() => import("./pages/McpServerPage"));
 const McpChatGptSetupPage = React.lazy(() => import("./pages/McpChatGptSetupPage"));
 const UploadListPage = React.lazy(() => import("./pages/UploadListPage"));
 const ApplicationsPage = React.lazy(() => import("./pages/ApplicationsPage"));
-const ResumePage = React.lazy(() => import("./pages/ResumePage"));
-const CoverLetterPage = React.lazy(() => import("./pages/CoverLetterPage"));
 const ReferPage = React.lazy(() => import("./pages/ReferPage"));
 const Pricing = React.lazy(() => import("./pages/Pricing"));
 const DocumentationPage = React.lazy(() => import("./pages/DocumentationPage"));
@@ -83,10 +81,6 @@ const CoffeeChatPrepPage = React.lazy(() => import("./pages/CoffeeChatPrepPage")
 const FindPage = React.lazy(() => import("./pages/FindPage"));
 const EmailTemplatesPage = React.lazy(() => import("./pages/EmailTemplatesPage"));
 const RecruitingTimelinePage = React.lazy(() => import("./pages/RecruitingTimelinePage"));
-// Factory extracted so we can prefetch the chunk the moment auth resolves
-// (see DashboardPrefetch), making the post-redirect Suspense fallback instant.
-const importDashboardPage = () => import("./pages/DashboardPage");
-const DashboardPage = React.lazy(importDashboardPage);
 // New Lovable Onboarding Flow
 const OnboardingFlow = React.lazy(() => import("./pages/OnboardingFlow").then(m => ({ default: m.OnboardingFlow })));
 // Dev-only preview routes (no auth) for design iteration on the new Profile page
@@ -247,29 +241,6 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
   return <>{children}</>;
 };
 
-/* Default landing surface. Search (/find) is the everyday home; Getting
-   Started (/dashboard) greets brand-new users and anyone returning after a
-   week away. Computed once per session so re-renders can't flip the answer
-   after the last-seen stamp updates. */
-const LAST_SEEN_KEY = "ofl_last_seen_at";
-const LANDING_ABSENCE_MS = 7 * 24 * 60 * 60 * 1000;
-let cachedLandingPath: string | null = null;
-function getDefaultLandingPath(): string {
-  if (cachedLandingPath) return cachedLandingPath;
-  try {
-    const raw = localStorage.getItem(LAST_SEEN_KEY);
-    const last = raw ? Number(raw) : NaN;
-    localStorage.setItem(LAST_SEEN_KEY, String(Date.now()));
-    cachedLandingPath =
-      !raw || Number.isNaN(last) || Date.now() - last > LANDING_ABSENCE_MS
-        ? "/dashboard"
-        : "/find";
-  } catch {
-    cachedLandingPath = "/find";
-  }
-  return cachedLandingPath;
-}
-
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useFirebaseAuth();
   const location = useLocation();
@@ -310,7 +281,7 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (user) {
     const rawNext = params.get('next') || params.get('redirect') || '';
     const safeNext = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : null;
-    const redirectPath = user.needsOnboarding ? "/onboarding" : (safeNext ?? getDefaultLandingPath());
+    const redirectPath = user.needsOnboarding ? "/onboarding" : (safeNext ?? "/find");
     devLog("🛣️ [PUBLIC ROUTE] User authenticated, redirecting to:", redirectPath);
     return <Navigate to={redirectPath} replace />;
   }
@@ -401,7 +372,7 @@ const AppRoutes: React.FC = () => {
       />
 
       {/* Protected App Pages - Wrapped in Suspense for lazy loading */}
-      <Route path="/dashboard" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><DashboardPage /></Suspense></ProtectedRoute>} />
+      <Route path="/dashboard" element={<Navigate to="/find" replace />} />
       <Route path="/find" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><FindPage /></Suspense></ProtectedRoute>} />
       <Route path="/my-network" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><MyNetworkPage /></Suspense></ProtectedRoute>} />
       <Route path="/my-network/:tab" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><MyNetworkPage /></Suspense></ProtectedRoute>} />
@@ -409,7 +380,7 @@ const AppRoutes: React.FC = () => {
       <Route path="/outbox" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><NetworkTrackerRedesign /></Suspense></ProtectedRoute>} />
       <Route path="/tracker" element={<Navigate to="/outbox" replace />} />
       {/* Legacy /home redirect to contact search */}
-      <Route path="/home" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/home" element={<Navigate to="/find" replace />} />
       <Route path="/contact-directory" element={<Navigate to="/my-network/people" replace />} />
       <Route path="/coffee-chat-library" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><CoffeeChatLibrary /></Suspense></ProtectedRoute>} />
       <Route path="/account-settings" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><AccountSettings /></Suspense></ProtectedRoute>} />
@@ -418,8 +389,9 @@ const AppRoutes: React.FC = () => {
       <Route path="/mcp-server/chatgpt" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><McpChatGptSetupPage /></Suspense></ProtectedRoute>} />
       <Route path="/upload-list" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><UploadListPage /></Suspense></ProtectedRoute>} />
       <Route path="/applications" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><ApplicationsPage /></Suspense></ProtectedRoute>} />
-      <Route path="/resume" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><ResumePage /></Suspense></ProtectedRoute>} />
-      <Route path="/cover-letter" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><CoverLetterPage /></Suspense></ProtectedRoute>} />
+      {/* Resume Workshop and Cover Letter were removed; old links land on Search. */}
+      <Route path="/resume" element={<Navigate to="/find" replace />} />
+      <Route path="/cover-letter" element={<Navigate to="/find" replace />} />
       <Route path="/refer" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><ReferPage /></Suspense></ProtectedRoute>} />
       <Route path="/pricing" element={<Suspense fallback={<PageLoader />}><Pricing /></Suspense>} />
       <Route path="/documentation" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><DocumentationPage /></Suspense></ProtectedRoute>} />
@@ -637,21 +609,6 @@ function AgentNotifierActive() {
   return null;
 }
 
-/* ---------------- Dashboard Prefetch ----------------
-   The moment auth resolves to an onboarded user, start downloading the
-   dashboard chunk. By the time PublicRoute redirects "/" → "/dashboard",
-   the lazy chunk is already in flight (or cached), so the post-redirect
-   Suspense fallback is near-instant instead of a second visible load. */
-const DashboardPrefetch: React.FC = () => {
-  const { user, isLoading } = useFirebaseAuth();
-  useEffect(() => {
-    if (!isLoading && user && !user.needsOnboarding) {
-      importDashboardPage();
-    }
-  }, [isLoading, user]);
-  return null;
-};
-
 /* ---------------- Job Feed Prefetch ----------------
    The job feed is the slowest data fetch in the app (the server gathers +
    ranks jobs for the user). Fetching it here — the moment auth resolves to an
@@ -691,7 +648,6 @@ const App: React.FC = () => {
       <TooltipProvider>
         <FirebaseAuthProvider>
           <ErrorBoundary>
-            <DashboardPrefetch />
             <JobFeedPrefetch />
             <BrowserRouter
               future={{
