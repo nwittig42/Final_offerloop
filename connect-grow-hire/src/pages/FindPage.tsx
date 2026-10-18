@@ -17,7 +17,6 @@ import MountainsLake from "@/assets/for-students/mountains-lake.png";
 import { IS_DEV_PREVIEW, DEV_MOCK_USER } from "@/lib/devPreview";
 import { getUniversityShortName } from "@/lib/universityUtils";
 import { PersonalizationStrip } from "@/components/personalization/PersonalizationStrip";
-import { TrialBanner } from "@/components/TrialBanner";
 import { FindFilterRail } from "@/components/find/FindFilterRail";
 import {
   FindTab, PeopleFilters, CompanyFilters, EMPTY_PEOPLE_FILTERS, EMPTY_COMPANY_FILTERS,
@@ -424,15 +423,6 @@ const FindPage: React.FC = () => {
             {/* Page title — wrapped in a z-index:1 layer so it sits above
                 the mountain backdrop. */}
             <div style={{ flexShrink: 0, position: "relative", zIndex: 1 }}>
-              {/* Pro trial banner — auto-hides for paid and post-trial users.
-                  Renders "Try Pro free" CTA for eligible users, or an active-trial
-                  countdown mid-trial. Mounted the way Nick had it on the Find surface. */}
-              <div style={{ maxWidth: 1000, margin: '0 auto', padding: '16px 40px 0' }}>
-                <TrialBanner
-                  variant="full"
-                  onUpgrade={() => navigate('/pricing')}
-                />
-              </div>
               <div style={{ maxWidth: 1000, margin: '0 auto', padding: '36px 40px 6px' }}>
                 <PageTitle
                   align="center"
