@@ -31,8 +31,7 @@ import {
 } from "@/components/jobs/FindHumansModal";
 import { ApplicationProfileModal } from "@/components/jobs/ApplicationProfileModal";
 import { IconClose } from "@/components/jobs/icons";
-import { Search, X } from "lucide-react";
-import offerloopIcon from "@/assets/offerloopiconlogo.png";
+import { JobBoardSearchBar, jobPillClass } from "@/components/jobs/JobBoardSearchBar";
 import { JobRow } from "@/components/jobs/browse/JobRow";
 import { JobGrid } from "@/components/jobs/browse/JobGrid";
 import type { BrowseCardActions } from "@/components/jobs/browse/BrowseJobCard";
@@ -59,16 +58,6 @@ interface BrowseJobsPageProps {
   // List/Gallery toggle. Standalone use (no props) just hides the toggle.
   view?: JobBoardView;
   onViewChange?: (view: JobBoardView) => void;
-}
-
-// Filter pill styling, copied from Find's PeopleSearchBar so both boards read
-// as one product.
-function jobPillClass(active: boolean) {
-  return `inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-4 text-[14px] font-semibold transition-colors ${
-    active
-      ? "border-[#01754F] bg-[#01754F] text-white hover:bg-[#015c3e]"
-      : "border-[#A3A3A3] bg-white text-ink-2 hover:border-ink-2 hover:bg-paper-2"
-  }`;
 }
 
 export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery", onViewChange }) => {
@@ -343,38 +332,11 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
               background: "var(--paper, #fff)",
             }}
           >
-            {/* Same search treatment as Find: logo, pill search bar, then the
+            {/* Same search treatment as Find: logo + pill search bar, then the
                 filter pills underneath. The search itself is live (debounced
-                above); the button just commits it immediately. */}
+                above). */}
             <div className="space-y-3">
-              <div className="flex items-center gap-4">
-                <img src={offerloopIcon} alt="Offerloop" className="h-10 w-10 shrink-0 object-contain" />
-                <form
-                  onSubmit={(e) => { e.preventDefault(); setSearchTerm((t) => t.trim()); }}
-                  className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-full border border-line bg-white px-5 shadow-[0_1px_2px_rgba(15,23,42,0.05)] focus-within:border-[var(--accent,#4A60A8)]"
-                >
-                  <Search className="h-5 w-5 shrink-0 text-ink-2" />
-                  <input
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Search jobs, e.g. summer analyst internships in New York"
-                    aria-label="Search jobs"
-                    className="min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-3"
-                  />
-                  {searchTerm && (
-                    <button type="button" onClick={() => setSearchTerm("")} aria-label="Clear search" className="text-ink-3 hover:text-ink-2">
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={!searchTerm.trim()}
-                    className="h-8 shrink-0 rounded-full bg-[var(--accent,#4A60A8)] px-4 text-[13px] font-semibold text-white disabled:opacity-40"
-                  >
-                    Search
-                  </button>
-                </form>
-              </div>
+              <JobBoardSearchBar value={searchTerm} onChange={setSearchTerm} />
 
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 <span className={jobPillClass(true)} aria-hidden>

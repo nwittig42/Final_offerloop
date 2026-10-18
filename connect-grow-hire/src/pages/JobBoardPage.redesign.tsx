@@ -39,6 +39,7 @@ import { JobBoardSkeleton } from "@/components/JobBoardSkeleton";
 import { jobFeedQueryKey, JOB_FEED_STALE_MS } from "@/lib/jobFeedQuery";
 import { readScoutPrefillEnvelope, SCOUT_PREFILL_EVENT } from "@/lib/scoutBridge";
 import { JobBoardViewToggle, type JobBoardView } from "@/components/jobs/JobBoardViewToggle";
+import { JobBoardSearchBar, jobPillClass } from "@/components/jobs/JobBoardSearchBar";
 import {
   FindHumansModal,
   type FindHumansJob,
@@ -69,7 +70,6 @@ import {
   IconPlus,
   IconRefresh,
   IconSavedBookmark,
-  IconSearch,
 } from "@/components/jobs/icons";
 
 import {
@@ -956,17 +956,53 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
       <div className="flex h-screen w-full overflow-hidden">
         <AppSidebar />
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <AppHeader title="Job Board" />
+          <AppHeader title="" />
           <div className="flex-1 min-h-0 overflow-hidden">
             <div className="jb-editorial">
               {/* ---- FilterBar (pinned) ---- */}
               <div className="jb-fb">
-                <div
-                  className="jb-fb-row"
-                  style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 16, flexWrap: "wrap" }}
-                >
-                  <h1 className="jb-fb-title" style={{ margin: 0 }}>Browse all jobs</h1>
-                  {onViewChange && <JobBoardViewToggle view={view} onChange={onViewChange} />}
+                {/* Same header as the Gallery view and Find: logo + pill search
+                    bar, then this board's filters as pills underneath. */}
+                <div className="space-y-3">
+                  <JobBoardSearchBar value={search} onChange={setSearch} />
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1" data-tour="tour-job-board-filters">
+                    <button type="button" className={jobPillClass(false)} onClick={() => setShowSaveSearch(true)}>
+                      <IconSavedBookmark />
+                      Save Search
+                    </button>
+                    <button type="button" className={jobPillClass(false)} onClick={() => setShowMoreFilters(true)}>
+                      <IconFilter />
+                      More Filters
+                    </button>
+                    <button
+                      type="button"
+                      className={jobPillClass(autoApplyOnly)}
+                      aria-pressed={autoApplyOnly}
+                      onClick={() => setAutoApplyOnly((v) => !v)}
+                      title={
+                        autoApplyOnly
+                          ? "Currently showing only jobs with one-click Auto-apply. Click to also show jobs that require manual application (Workday, custom careers pages)."
+                          : "Currently showing all jobs. Click to show only jobs with one-click Auto-apply."
+                      }
+                    >
+                      Auto-apply only
+                    </button>
+                    <button
+                      type="button"
+                      className={jobPillClass(false)}
+                      title="Refresh and reshuffle"
+                      aria-label="Refresh and reshuffle"
+                      onClick={() => loadFeed(true)}
+                      disabled={feedLoading}
+                    >
+                      <IconRefresh />
+                    </button>
+                    {onViewChange && (
+                      <div className="ml-auto shrink-0 pl-2">
+                        <JobBoardViewToggle view={view} onChange={onViewChange} />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Top-level tabs — Outbox-style segmented control */}
@@ -1053,63 +1089,6 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
                       </button>
                     );
                   })}
-                </div>
-
-                <div className="jb-fb-actions" data-tour="tour-job-board-filters">
-                  <div className="jb-search">
-                    <span className="jb-search-icon"><IconSearch /></span>
-                    <input
-                      type="text"
-                      placeholder="Search for jobs by Name, Company or Title..."
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                  </div>
-                  <button
-                    className="jb-fb-btn"
-                    type="button"
-                    onClick={() => setShowSaveSearch(true)}
-                  >
-                    <IconSavedBookmark />
-                    Save Search
-                  </button>
-                  <button
-                    className="jb-fb-btn"
-                    type="button"
-                    onClick={() => setShowMoreFilters(true)}
-                  >
-                    <IconFilter />
-                    More Filters
-                  </button>
-                  <button
-                    className="jb-fb-btn"
-                    type="button"
-                    onClick={() => setAutoApplyOnly((v) => !v)}
-                    title={
-                      autoApplyOnly
-                        ? "Currently showing only jobs with one-click Auto-apply. Click to also show jobs that require manual application (Workday, custom careers pages)."
-                        : "Currently showing all jobs. Click to show only jobs with one-click Auto-apply."
-                    }
-                    style={{
-                      background: autoApplyOnly ? "#3B82F6" : undefined,
-                      color: autoApplyOnly ? "#fff" : undefined,
-                      borderColor: autoApplyOnly ? "#3B82F6" : undefined,
-                    }}
-                  >
-                    <span style={{ marginRight: 4 }}>
-                      {autoApplyOnly ? "✓" : ""}
-                    </span>
-                    Auto-apply only
-                  </button>
-                  <button
-                    className="jb-fb-btn jb-fb-btn-icon"
-                    type="button"
-                    title="Refresh and reshuffle"
-                    onClick={() => loadFeed(true)}
-                    disabled={feedLoading}
-                  >
-                    <IconRefresh />
-                  </button>
                 </div>
 
                 <div className="jb-chips">
