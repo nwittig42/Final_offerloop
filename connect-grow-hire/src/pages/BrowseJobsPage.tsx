@@ -30,7 +30,9 @@ import {
   type FindHumansJob,
 } from "@/components/jobs/FindHumansModal";
 import { ApplicationProfileModal } from "@/components/jobs/ApplicationProfileModal";
-import { IconSearch, IconClose } from "@/components/jobs/icons";
+import { IconClose } from "@/components/jobs/icons";
+import { Search, X } from "lucide-react";
+import offerloopIcon from "@/assets/offerloopiconlogo.png";
 import { JobRow } from "@/components/jobs/browse/JobRow";
 import { JobGrid } from "@/components/jobs/browse/JobGrid";
 import type { BrowseCardActions } from "@/components/jobs/browse/BrowseJobCard";
@@ -57,6 +59,16 @@ interface BrowseJobsPageProps {
   // List/Gallery toggle. Standalone use (no props) just hides the toggle.
   view?: JobBoardView;
   onViewChange?: (view: JobBoardView) => void;
+}
+
+// Filter pill styling, copied from Find's PeopleSearchBar so both boards read
+// as one product.
+function jobPillClass(active: boolean) {
+  return `inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-4 text-[14px] font-semibold transition-colors ${
+    active
+      ? "border-[#01754F] bg-[#01754F] text-white hover:bg-[#015c3e]"
+      : "border-[#A3A3A3] bg-white text-ink-2 hover:border-ink-2 hover:bg-paper-2"
+  }`;
 }
 
 export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery", onViewChange }) => {
@@ -320,7 +332,7 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
       <div className="flex h-screen w-full overflow-hidden">
         <AppSidebar />
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <AppHeader title="Job Board" />
+          <AppHeader title="" />
 
           {/* Search + browse pills (pinned) */}
           <div
@@ -331,98 +343,64 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
               background: "var(--paper, #fff)",
             }}
           >
-            {/* Title + view toggle */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                marginBottom: 14,
-                flexWrap: "wrap",
-              }}
-            >
-              {/* Matches the list view's .jb-fb-title treatment so the two
-                  views share one header. Inlined because this page does not
-                  load the redesign stylesheet. */}
-              <h1 style={{
-                fontFamily: "'Libre Baskerville', Georgia, serif",
-                fontSize: 30, fontWeight: 400, lineHeight: "36px",
-                color: "#1e2d4d", margin: 0,
-              }}>
-                Browse all jobs
-              </h1>
-              {onViewChange && <JobBoardViewToggle view={view} onChange={onViewChange} />}
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                maxWidth: 560,
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid var(--line, #E5E5E5)",
-                background: "var(--paper-2, #FAFBFF)",
-              }}
-            >
-              <span style={{ color: "var(--ink-3, #94A3B8)", display: "inline-flex" }}>
-                <IconSearch />
-              </span>
-              <input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search jobs by title, company, or keyword…"
-                style={{
-                  flex: 1,
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  fontSize: 14,
-                  fontFamily: "inherit",
-                  color: "var(--ink-1, #0F172A)",
-                }}
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm("")}
-                  aria-label="Clear search"
-                  style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-3, #94A3B8)" }}
+            {/* Same search treatment as Find: logo, pill search bar, then the
+                filter pills underneath. The search itself is live (debounced
+                above); the button just commits it immediately. */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-4">
+                <img src={offerloopIcon} alt="Offerloop" className="h-10 w-10 shrink-0 object-contain" />
+                <form
+                  onSubmit={(e) => { e.preventDefault(); setSearchTerm((t) => t.trim()); }}
+                  className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-full border border-line bg-white px-5 shadow-[0_1px_2px_rgba(15,23,42,0.05)] focus-within:border-[var(--accent,#4A60A8)]"
                 >
-                  <IconClose />
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-              {BROWSE_PILLS.map((c) => {
-                const active = pillActiveKey === c.key;
-                return (
+                  <Search className="h-5 w-5 shrink-0 text-ink-2" />
+                  <input
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Search jobs, e.g. summer analyst internships in New York"
+                    aria-label="Search jobs"
+                    className="min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-3"
+                  />
+                  {searchTerm && (
+                    <button type="button" onClick={() => setSearchTerm("")} aria-label="Clear search" className="text-ink-3 hover:text-ink-2">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
-                    key={c.key}
-                    type="button"
-                    onClick={() => openGridForCategory(c)}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "6px 14px",
-                      borderRadius: 999,
-                      border: `1px solid ${active ? "var(--brand-blue, #3B82F6)" : "var(--line, #E5E5E5)"}`,
-                      background: active ? "var(--brand-blue, #3B82F6)" : "var(--paper, #fff)",
-                      color: active ? "#fff" : "var(--ink-2, #475569)",
-                      fontSize: 13,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
+                    type="submit"
+                    disabled={!searchTerm.trim()}
+                    className="h-8 shrink-0 rounded-full bg-[var(--accent,#4A60A8)] px-4 text-[13px] font-semibold text-white disabled:opacity-40"
                   >
-                    <c.icon size={14} strokeWidth={1.75} style={{ flexShrink: 0 }} />
-                    {c.label}
+                    Search
                   </button>
-                );
-              })}
+                </form>
+              </div>
+
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                <span className={jobPillClass(true)} aria-hidden>
+                  Jobs
+                </span>
+                <span className="mx-1 h-7 w-px shrink-0 bg-line" />
+                {BROWSE_PILLS.map((c) => {
+                  const active = pillActiveKey === c.key;
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => (active ? backToRows() : openGridForCategory(c))}
+                      className={jobPillClass(active)}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                })}
+                {onViewChange && (
+                  <div className="ml-auto shrink-0 pl-2">
+                    <JobBoardViewToggle view={view} onChange={onViewChange} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
