@@ -18,6 +18,9 @@ Known limits (inherent to pixel tracking, not bugs):
     - Apple Mail Privacy Protection preloads images, so an "open" can be a
       machine, not a person.
     - Clients that block remote images never report an open.
+    - Tokens for drafts with no stored message/thread id (made before those
+      were recorded) only get an estimated send time, so the sender's own
+      first render may count.
     - The sender re-reading their own sent email in Gmail later loads the pixel too
       and cannot be told apart from the recipient. Loads that happen while the
       email is still an unsent draft ARE filtered out (see _sent_at); so are loads within SELF_VIEW_GRACE of the send time.
@@ -161,6 +164,7 @@ def register(token, uid, kind, recipient_email=None, contact_id=None,
             "gmailMessageId": message_id or "",
             "createdAt": now,
             "sentAt": now if sent else None,
+            "sentAtSource": "api" if sent else None,
             "openCount": 0,
         })
     except Exception as e:
@@ -210,11 +214,17 @@ def _draft_still_exists(uid, draft_id):
         return None
 
 
-def _message_sent_time(uid, message_id):
-    """Send time (datetime) when Gmail says this message was sent, else None.
+def _ms_to_dt(value):
+    return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
 
-    None covers every "can't tell" case: no credentials, Gmail errors, a 404
-    (the id is no longer valid), or the message still being a draft.
+
+def _gmail_sent_time(uid, message_id, thread_id, created):
+    """Send time (datetime) when Gmail says this email was sent, else None.
+
+    Tries the stored message id first. Gmail issues a new message id when a
+    draft is edited, so when that lookup fails the thread is searched for a
+    SENT message newer than the token. None covers every "can't tell" case:
+    no credentials, Gmail errors, or the message still being a draft.
     """
     try:
         from app.services.gmail_client import _load_user_gmail_creds, _gmail_service
@@ -222,44 +232,74 @@ def _message_sent_time(uid, message_id):
         if not creds:
             return None
         service = _gmail_service(creds)
-        msg = service.users().messages().get(
-            userId="me", id=message_id, format="minimal").execute()
-        labels = msg.get("labelIds") or []
-        if "SENT" not in labels or "DRAFT" in labels:
-            return None
-        return datetime.fromtimestamp(int(msg["internalDate"]) / 1000, tz=timezone.utc)
     except Exception as e:
-        logger.info("[email_tracking] message lookup failed uid=%s: %s", uid, e)
+        logger.info("[email_tracking] gmail setup failed uid=%s: %s", uid, e)
         return None
+
+    if message_id:
+        try:
+            msg = service.users().messages().get(
+                userId="me", id=message_id, format="minimal").execute()
+            labels = msg.get("labelIds") or []
+            if "DRAFT" in labels:
+                return None
+            if "SENT" in labels:
+                return _ms_to_dt(msg["internalDate"])
+        except Exception as e:
+            logger.info("[email_tracking] message lookup failed uid=%s: %s", uid, e)
+
+    if thread_id:
+        try:
+            thread = service.users().threads().get(
+                userId="me", id=thread_id, format="minimal").execute()
+            times = []
+            for m in thread.get("messages") or []:
+                labels = m.get("labelIds") or []
+                if "SENT" in labels and "DRAFT" not in labels:
+                    t = _ms_to_dt(m["internalDate"])
+                    if not created or t >= created:
+                        times.append(t)
+            if times:
+                return max(times)
+        except Exception as e:
+            logger.info("[email_tracking] thread lookup failed uid=%s: %s", uid, e)
+    return None
 
 
 def _sent_at(uid, data, contact):
-    """When did this tracked email leave the user's account? None = not yet.
+    """When did this tracked email leave the user's account?
+
+    Returns (sent_at, source), or (None, None) when it is still unsent.
+    source is "api" (sent directly by us), "gmail" (read from Gmail) or
+    "estimate" (inferred; never persisted).
 
     While it is still a draft, the only person loading the pixel is the user
     looking at their own draft, so those hits must not count.
     """
     stored = _parse_iso(data.get("sentAt"))
     if stored:
-        return stored
-    message_id = data.get("gmailMessageId")
-    if message_id:
-        sent = _message_sent_time(uid, message_id)
+        # Legacy tokens without a source were stamped at register time.
+        return stored, data.get("sentAtSource") or "api"
+    created = _parse_iso(data.get("createdAt"))
+    if data.get("gmailMessageId") or data.get("gmailThreadId"):
+        sent = _gmail_sent_time(uid, data.get("gmailMessageId"),
+                                data.get("gmailThreadId"), created)
         if sent:
-            return sent
+            return sent, "gmail"
     draft_id = data.get("gmailDraftId")
     if draft_id:
         exists = _draft_still_exists(uid, draft_id)
         if exists is not None:
             # Draft gone means sent, but Gmail didn't say when: treat as
             # sent long enough ago that the sender's own render is over.
-            return None if exists else _now() - SELF_VIEW_GRACE - timedelta(seconds=1)
+            if exists:
+                return None, None
+            return _now() - SELF_VIEW_GRACE - timedelta(seconds=1), "estimate"
     # Couldn't ask Gmail: fall back to the contact's own sent stamp.
-    created = _parse_iso(data.get("createdAt"))
     sent = _parse_iso(contact.get("emailSentAt"))
     if created and sent and sent >= created:
-        return sent
-    return None
+        return sent, "estimate"
+    return None, None
 
 
 def record_open(token):
@@ -284,17 +324,19 @@ def record_open(token):
 
         contact_ref, contact = _resolve_contact(db, uid, data)
 
-        sent_at = _sent_at(uid, data, contact)
+        sent_at, source = _sent_at(uid, data, contact)
         if sent_at is None:
             ref.update({"preSendHits": Increment(1), "lastHitAt": now_iso})
             return False
 
-        if not data.get("sentAt"):
-            ref.update({"sentAt": _iso(sent_at)})
-            data["sentAt"] = _iso(sent_at)
+        # Only send times Gmail told us are stored; estimates are recomputed.
+        learned = {}
+        if source == "gmail" and not data.get("sentAt"):
+            learned = {"sentAt": _iso(sent_at), "sentAtSource": "gmail"}
 
-        if now - sent_at < SELF_VIEW_GRACE:
-            ref.update({"selfViewHits": Increment(1), "lastHitAt": now_iso})
+        # Direct API sends have no sender-side render to ignore.
+        if source != "api" and now - sent_at < SELF_VIEW_GRACE:
+            ref.update({**learned, "selfViewHits": Increment(1), "lastHitAt": now_iso})
             return False
 
         last = _parse_iso(data.get("lastOpenedAt"))
@@ -302,6 +344,7 @@ def record_open(token):
             return False
 
         tracking_updates = {
+            **learned,
             "openCount": Increment(1),
             "lastOpenedAt": now_iso,
             "lastHitAt": now_iso,

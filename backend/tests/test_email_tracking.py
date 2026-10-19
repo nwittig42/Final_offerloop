@@ -184,7 +184,6 @@ def test_direct_send_open_stamps_the_contact(db):
     db.contacts("u1")["c1"] = {"email": "a@b.com", "gmailThreadId": "t1"}
     email_tracking.register("tok", "u1", "outreach", recipient_email="A@b.com",
                             thread_id="t1", sent=True)
-    db.tracking()["tok"]["sentAt"] = _ago(minutes=5)  # past the self-view grace
 
     assert email_tracking.record_open("tok") is True
 
@@ -197,7 +196,6 @@ def test_direct_send_open_stamps_the_contact(db):
 def test_burst_of_hits_counts_once(db):
     db.contacts("u1")["c1"] = {"email": "a@b.com"}
     email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com", sent=True)
-    db.tracking()["tok"]["sentAt"] = _ago(minutes=5)  # past the self-view grace
 
     assert email_tracking.record_open("tok") is True
     assert email_tracking.record_open("tok") is False
@@ -207,7 +205,6 @@ def test_burst_of_hits_counts_once(db):
 def test_later_open_increments_but_keeps_first_open(db):
     db.contacts("u1")["c1"] = {"email": "a@b.com"}
     email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com", sent=True)
-    db.tracking()["tok"]["sentAt"] = _ago(minutes=5)  # past the self-view grace
     email_tracking.record_open("tok")
     first = db.contacts("u1")["c1"]["emailOpenedAt"]
     db.tracking()["tok"]["lastOpenedAt"] = "2020-01-01T00:00:00Z"
@@ -237,7 +234,7 @@ def test_hit_after_draft_was_sent_counts(db):
         assert email_tracking.record_open("tok") is True
 
     assert db.contacts("u1")["c1"]["emailOpenCount"] == 1
-    assert db.tracking()["tok"]["sentAt"]
+    assert not db.tracking()["tok"].get("sentAt")  # estimates are not persisted
 
 
 def test_falls_back_to_contact_sent_stamp_when_gmail_unreachable(db):
@@ -253,8 +250,8 @@ def test_falls_back_to_contact_sent_stamp_when_gmail_unreachable(db):
 
 def test_hit_within_grace_of_send_time_does_not_count(db):
     db.contacts("u1")["c1"] = {"email": "a@b.com"}
-    email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com", sent=True)
-    db.tracking()["tok"]["sentAt"] = _ago(seconds=20)
+    email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com")
+    db.tracking()["tok"].update(sentAt=_ago(seconds=20), sentAtSource="gmail")
 
     assert email_tracking.record_open("tok") is False
 
@@ -264,27 +261,48 @@ def test_hit_within_grace_of_send_time_does_not_count(db):
 
 def test_hit_after_grace_counts(db):
     db.contacts("u1")["c1"] = {"email": "a@b.com"}
+    email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com")
+    db.tracking()["tok"].update(sentAt=_ago(minutes=5), sentAtSource="gmail")
+
+    assert email_tracking.record_open("tok") is True
+
+
+def test_direct_send_open_within_grace_counts(db):
+    db.contacts("u1")["c1"] = {"email": "a@b.com"}
     email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com", sent=True)
-    db.tracking()["tok"]["sentAt"] = _ago(minutes=5)
+    db.tracking()["tok"]["sentAt"] = _ago(seconds=20)
 
     assert email_tracking.record_open("tok") is True
 
 
 class _FakeGmail:
-    def __init__(self, label_ids, internal_ms):
-        self.msg = {"labelIds": label_ids, "internalDate": str(internal_ms)}
+    """messages().get returns `msg` (or raises if None); threads().get returns `thread`."""
+
+    def __init__(self, label_ids=None, internal_ms=None, thread=None):
+        self.msg = (None if label_ids is None
+                    else {"labelIds": label_ids, "internalDate": str(internal_ms)})
+        self.thread = thread
+        self._kind = None
 
     def users(self):
         return self
 
     def messages(self):
+        self._kind = "msg"
+        return self
+
+    def threads(self):
+        self._kind = "thread"
         return self
 
     def get(self, **_kw):
         return self
 
     def execute(self):
-        return self.msg
+        data = self.msg if self._kind == "msg" else self.thread
+        if data is None:
+            raise RuntimeError("404")
+        return data
 
 
 def _ms_ago(**kw):
@@ -304,6 +322,7 @@ def test_draft_send_time_read_from_gmail_message(db):
     with creds, svc:
         assert email_tracking.record_open("tok") is False
     assert db.tracking()["tok"]["selfViewHits"] == 1
+    assert "emailOpenedAt" not in db.contacts("u1")["c1"]
 
     db.tracking().clear()
     old = _ms_ago(minutes=10)
@@ -312,6 +331,52 @@ def test_draft_send_time_read_from_gmail_message(db):
         assert email_tracking.record_open("tok") is True
     sent = email_tracking._parse_iso(db.tracking()["tok"]["sentAt"])
     assert abs(sent.timestamp() * 1000 - old) < 1000
+    assert db.tracking()["tok"]["sentAtSource"] == "gmail"
+
+
+def _thread_of(*msgs):
+    return {"messages": [{"labelIds": l, "internalDate": str(ms)} for l, ms in msgs]}
+
+
+def _edited_draft(db, thread):
+    db.contacts("u1")["c1"] = {"gmailDraftId": "d1"}
+    email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com",
+                            draft_id="d1", message_id="m1", thread_id="t1")
+    db.tracking()["tok"]["createdAt"] = _ago(hours=1)
+    gmail = _FakeGmail(thread=thread)  # messages().get raises: stored id went stale
+    return (patch("app.services.gmail_client._load_user_gmail_creds", return_value=object()),
+            patch("app.services.gmail_client._gmail_service", return_value=gmail))
+
+
+def test_edited_draft_send_time_read_from_thread(db):
+    creds, svc = _edited_draft(db, _thread_of((["SENT"], _ms_ago(seconds=10))))
+    with creds, svc:
+        assert email_tracking.record_open("tok") is False
+    assert db.tracking()["tok"]["selfViewHits"] == 1
+
+    db.tracking().clear()
+    old = _ms_ago(minutes=10)
+    creds, svc = _edited_draft(db, _thread_of((["SENT"], old)))
+    with creds, svc:
+        assert email_tracking.record_open("tok") is True
+    sent = email_tracking._parse_iso(db.tracking()["tok"]["sentAt"])
+    assert abs(sent.timestamp() * 1000 - old) < 1000
+
+
+def test_thread_with_no_sent_message_falls_through(db):
+    creds, svc = _edited_draft(db, _thread_of((["DRAFT"], _ms_ago(minutes=10))))
+    with creds, svc, patch.object(email_tracking, "_draft_still_exists", return_value=True):
+        assert email_tracking.record_open("tok") is False
+    assert db.tracking()["tok"]["preSendHits"] == 1
+
+
+def test_estimated_send_time_is_not_persisted(db):
+    db.contacts("u1")["c1"] = {"gmailDraftId": "d1"}
+    email_tracking.register("tok", "u1", "outreach", recipient_email="a@b.com", draft_id="d1")
+    with patch.object(email_tracking, "_draft_still_exists", return_value=False):
+        assert email_tracking.record_open("tok") is True
+    assert not db.tracking()["tok"]["sentAt"]
+    assert not db.tracking()["tok"].get("sentAtSource")
 
 
 def test_message_still_labeled_draft_is_not_sent(db):
@@ -319,11 +384,11 @@ def test_message_still_labeled_draft_is_not_sent(db):
     with creds, svc, patch.object(email_tracking, "_draft_still_exists", return_value=True):
         assert email_tracking.record_open("tok") is False
     assert db.tracking()["tok"]["preSendHits"] == 1
+    assert not db.tracking()["tok"]["sentAt"]
 
 
 def test_open_with_no_matching_contact_still_recorded_on_token(db):
     email_tracking.register("tok", "u1", "outreach", recipient_email="gone@b.com", sent=True)
-    db.tracking()["tok"]["sentAt"] = _ago(minutes=5)  # past the self-view grace
     assert email_tracking.record_open("tok") is True
     assert db.tracking()["tok"]["openCount"] == 1
 
