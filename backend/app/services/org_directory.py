@@ -45,6 +45,8 @@ def _org_public(doc_id: str, d: dict) -> dict:
         "type": d.get("type") or "",
         "memberCount": d.get("memberCount") or 0,
         "aliases": [a for a in (d.get("aliases") or []) if isinstance(a, str) and a.strip()],
+        # The org's own color for its space in the app (header band, accents).
+        "accentColor": d.get("accentColor") or "",
     }
 
 
@@ -133,6 +135,17 @@ def resolve_org_targets(prompt: str, filter_org_ids, user_data: dict | None, org
     if not targets:
         return [], prompt
     return targets, (cleaned if named else prompt)
+
+
+def join_hint(prompt: str, user_data: dict | None, orgs: list[dict]) -> dict | None:
+    """When a search names a joinable org the user isn't in ("TKE alumni"),
+    the org to point them at so they can join. Never reveals any members."""
+    mine = set(active_org_ids(user_data))
+    named, _ = match_orgs_in_prompt(prompt, [o for o in orgs if o["id"] not in mine])
+    if not named:
+        return None
+    org = next(o for o in orgs if o["id"] == named[0])
+    return {"id": org["id"], "name": org["name"], "shortName": org["shortName"]}
 
 
 def load_org_members(db, org_id: str) -> list[dict]:

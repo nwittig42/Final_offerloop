@@ -8,7 +8,7 @@ up in onboarding, Account Settings or search.
 Usage:
   python org_directory_seed_org.py --cred <fs.json> --org-id usc_tke \\
     --short-name "USC TKE" --school "University of Southern California" \\
-    --alias tke --alias "tau kappa epsilon" --alias teke --dry-run
+    --alias tke --alias "tau kappa epsilon" --alias teke --accent "#A6192E" --dry-run
   ... same with --live to write.
 
 --cred is a Firebase service account JSON. Never commit it.
@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--short-name", required=True)
     ap.add_argument("--school", required=True)
     ap.add_argument("--alias", action="append", default=[])
+    ap.add_argument("--accent", help="the org's color as #RRGGBB, used for its space in the app")
     ap.add_argument("--not-joinable", action="store_true", help="hide the org from the app again")
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
@@ -49,6 +50,8 @@ def main():
         "aliases": sorted({a.strip().lower() for a in args.alias if a.strip()}),
         "joinable": not args.not_joinable,
     }
+    if args.accent:
+        update["accentColor"] = args.accent
     print("current:", snap.to_dict())
     print("update:", update)
     if args.dry_run:

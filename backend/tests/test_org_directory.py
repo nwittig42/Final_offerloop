@@ -217,3 +217,20 @@ def test_prompt_search_non_member_gets_normal_search(search_client):
     body = r.get_json()
     assert "org_ids" not in body["parsed_query"]
     assert all(c.get("source") != "org_directory" for c in body["contacts"])
+    assert body["parsed_query"]["org_hint"]["id"] == "usc_tke"  # offered the join
+
+
+def test_prompt_search_vague_org_name_from_non_member_offers_join(search_client):
+    r, _, provider = _search(search_client, "TKE alumni", {}, [_member()], parsed={"confidence": "low"})
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["contacts"] == []
+    assert body["parsed_query"]["org_hint"] == {"id": "usc_tke", "name": "USC Tau Kappa Epsilon", "shortName": "USC TKE"}
+    assert "members-only" in body["message"]
+    provider.assert_not_called()
+
+
+def test_join_hint_only_for_orgs_you_are_not_in():
+    assert od.join_hint("TKE alumni", ACTIVE, [TKE]) is None
+    assert od.join_hint("Goldman analysts", {}, [TKE]) is None
+    assert od.join_hint("tke brothers at Bain", {}, [TKE])["id"] == "usc_tke"

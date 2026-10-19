@@ -228,12 +228,15 @@ def prompt_search():
         org_targets: list[str] = []
         org_list: list[dict] = []
         org_prompt = prompt
+        org_hint = None
         try:
-            from app.services.org_directory import active_org_ids, list_orgs, resolve_org_targets
-            if db and active_org_ids(user_data):
+            from app.services.org_directory import join_hint, list_orgs, resolve_org_targets
+            if db:
                 raw_filters = data.get("filters") if isinstance(data.get("filters"), dict) else {}
                 org_list = list_orgs(db)
                 org_targets, org_prompt = resolve_org_targets(prompt, raw_filters.get("organizations"), user_data, org_list)
+                # Named an org they haven't joined: the UI offers the join.
+                org_hint = join_hint(prompt, user_data, org_list) if not org_targets else None
         except Exception as e:
             print(f"[OrgDirectory] org resolve failed, running a normal search: {e}")
             org_targets = []
@@ -255,6 +258,17 @@ def prompt_search():
                 "error": parsed.get("error", "Failed to parse prompt"),
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
             }), 400
+        if parsed.get("confidence") == "low" and not org_targets and org_hint:
+            # "TKE alumni" from a non-member: point them at joining instead of
+            # calling the search too vague.
+            return jsonify({
+                "contacts": [],
+                "already_saved_contacts": [],
+                "total_contacts": 0,
+                "tier": user_tier,
+                "parsed_query": {"org_hint": org_hint},
+                "message": f"{org_hint['shortName']} alumni are in a members-only directory. Join with your chapter's password to search them.",
+            }), 200
         if parsed.get("confidence") == "low" and not org_targets:
             return jsonify({
                 "error": "Your search was too vague. Please add more specifics (e.g. job title, company, or location).",
@@ -454,6 +468,8 @@ def prompt_search():
         }
         if org_targets:
             parsed_query_payload["org_ids"] = org_targets
+        if org_hint:
+            parsed_query_payload["org_hint"] = org_hint
 
         if not contacts and not already_saved_contacts:
             response_data = {
