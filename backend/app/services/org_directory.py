@@ -193,13 +193,15 @@ def member_contact(member: dict, org: dict) -> dict | None:
         "College": org.get("school") or "",
         "EducationTop": org.get("school") or "Not available",
         "WorkSummary": " at ".join(p for p in (title, company) if p) or headline,
-        "Phone": member.get("phone") or "",
+        # Directory phone numbers are never surfaced (Nick, 2026-10-18).
+        "Phone": "",
         "PhotoUrl": member.get("photoUrl") or "",
         "JoinedYear": None,
         "EmailSource": "fullenrich" if work_email else ("org_directory" if dir_email else ""),
         "EmailVerified": bool(work_email and member.get("workEmailStatus") == "DELIVERABLE"),
         "DataVersion": "org_directory",
         "source": "org_directory",
+        "PersonKey": member.get("personKey") or "",
         "OrgId": org["id"],
         "OrgBadge": org_badge(org, member),
         "OrgHeadline": headline,
@@ -283,21 +285,51 @@ def rank(contacts: list[dict]) -> list[dict]:
     )
 
 
+def directory_contacts(db, org: dict) -> list[dict]:
+    """Every reachable alum in one org's directory, ranked."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for m in load_org_members(db, org["id"]):
+        c = member_contact(m, org)
+        if c is None:
+            continue
+        key = (c["Email"] or c["LinkedIn"]).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return rank(out)
+
+
+def directory_row(contact: dict) -> dict:
+    """What the browsable directory shows before a member is unlocked: who
+    they are and where they work, never their email or phone."""
+    return {
+        "personKey": contact["PersonKey"],
+        "firstName": contact["FirstName"],
+        "lastName": contact["LastName"],
+        "title": contact["Title"],
+        "company": contact["Company"],
+        "headline": contact["OrgHeadline"],
+        "year": contact["OrgYear"],
+        "badge": contact["OrgBadge"],
+        "linkedinUrl": contact["LinkedIn"],
+        "photoUrl": contact["PhotoUrl"],
+        "school": contact["College"],
+        "hasEmail": bool(contact["Email"]),
+    }
+
+
 def search_org_directory(db, org_ids: list[str], parsed: dict | None, orgs: list[dict], prompt: str | None = None, cap: int = 200) -> list[dict]:
     by_id = {o["id"]: o for o in orgs}
     seen: set[str] = set()
     out: list[dict] = []
     for org_id in org_ids:
-        org = by_id.get(org_id)
-        if not org:
+        if org_id not in by_id:
             continue
-        for m in load_org_members(db, org_id):
-            c = member_contact(m, org)
-            if c is None:
-                continue
+        for c in directory_contacts(db, by_id[org_id]):
             key = (c["Email"] or c["LinkedIn"]).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(c)
+            if key not in seen:
+                seen.add(key)
+                out.append(c)
     return rank(filter_by_query(out, parsed, prompt))[:cap]

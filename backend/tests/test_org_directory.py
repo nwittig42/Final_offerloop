@@ -21,7 +21,7 @@ def _member(**kw):
         "firstName": "Jamie", "lastName": "Park", "email": "jamie@gmail.com",
         "directoryHeadline": "Goldman Sachs Investment Banking Analyst",
         "link_membershipType": "alumni", "link_membershipStatus": "active",
-        "link_chapterYear": 2017, "link_classOfYear": None, "personKey": "email:jamie@gmail.com",
+        "link_chapterYear": 2017, "link_classOfYear": None, "personKey": "email:jamie@gmail.com", "phone": "(213) 555-0100",
     }
     m.update(kw)
     return m
@@ -64,6 +64,7 @@ def test_member_contact_prefers_work_email_and_badge():
     assert c["OrgBadge"] == "USC TKE Alumni '17"
     assert c["College"] == "University of Southern California"
     assert c["WorkSummary"] == "Goldman Sachs Investment Banking Analyst"
+    assert c["Phone"] == ""  # never surfaced, even when the directory has one
     no_year = od.member_contact(_member(link_chapterYear=None), TKE)
     assert no_year["OrgBadge"] == "USC TKE Alumni"
     class_year = od.member_contact(_member(link_chapterYear=None, link_classOfYear=2009), TKE)

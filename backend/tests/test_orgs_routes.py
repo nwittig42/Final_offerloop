@@ -101,3 +101,116 @@ def test_list_returns_joinable_orgs_and_memberships(client):
     body = r.get_json()
     assert [o["id"] for o in body["orgs"]] == ["usc_tke"]
     assert body["memberships"] == ["usc_tke"]
+
+
+# ---------------------------------------------------------------------------
+# Browsable directory + unlock
+# ---------------------------------------------------------------------------
+from google.api_core.exceptions import AlreadyExists  # noqa: E402
+
+TKE = {"id": "usc_tke", "name": "USC Tau Kappa Epsilon", "shortName": "USC TKE", "school": "USC",
+       "type": "fraternity", "memberCount": 2127, "aliases": ["tke"]}
+
+
+def _contact(key="p1", email="jamie@gmail.com"):
+    return {"PersonKey": key, "FirstName": "Jamie", "LastName": "Park", "Title": "", "Company": "",
+            "OrgHeadline": "Goldman Sachs Analyst", "OrgYear": 2017, "OrgBadge": "USC TKE Alumni '17",
+            "LinkedIn": "", "PhotoUrl": "", "College": "USC", "Email": email, "Phone": "", "PersonalEmail": email}
+
+
+def _dir_call(client, method, path, member=True, contacts=(), body=None, deduct=(True, 490)):
+    db = MagicMock()
+    reveal_ref = MagicMock()
+    user_ref = db.collection.return_value.document.return_value
+    user_ref.collection.return_value.document.return_value = reveal_ref
+    user_ref.collection.return_value.where.return_value.stream.return_value = []
+    deduct_mock = MagicMock(return_value=deduct)
+    with patch("app.routes.orgs.get_db", return_value=db), \
+         patch("app.routes.orgs._member_org", return_value=TKE if member else None), \
+         patch("app.routes.orgs.directory_contacts", return_value=list(contacts)), \
+         patch("app.services.auth.deduct_credits_atomic", deduct_mock):
+        kwargs = {"headers": {"Authorization": "Bearer t"}}
+        if body is not None:
+            kwargs["json"] = body
+        r = getattr(client, method)(path, **kwargs)
+    return r, reveal_ref, deduct_mock
+
+
+def test_members_requires_membership(client):
+    r, _, _ = _dir_call(client, "get", "/api/orgs/usc_tke/members", member=False)
+    assert r.status_code == 403
+
+
+def test_members_rows_never_carry_email_or_phone(client):
+    r, _, _ = _dir_call(client, "get", "/api/orgs/usc_tke/members", contacts=[_contact()])
+    body = r.get_json()
+    assert r.status_code == 200
+    row = body["members"][0]
+    assert row["hasEmail"] is True and row["badge"] == "USC TKE Alumni '17"
+    assert "jamie@gmail.com" not in json_dumps(body["members"])
+    assert not any(k.lower().endswith(("email", "phone")) and k != "hasEmail" for k in row)
+
+
+def json_dumps(v):
+    import json
+    return json.dumps(v)
+
+
+def test_reveal_charges_find_contact_once(client):
+    r, reveal_ref, deduct = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", contacts=[_contact()], body={"personKey": "p1"})
+    assert r.status_code == 200
+    assert r.get_json()["contact"]["Email"] == "jamie@gmail.com"
+    deduct.assert_called_once_with("test-user-id", 10, "org_directory_reveal")
+    reveal_ref.create.assert_called_once()
+
+
+def test_reveal_already_unlocked_is_free(client):
+    db_reveal_exists = AlreadyExists("exists")
+    db = MagicMock()
+    reveal_ref = db.collection.return_value.document.return_value.collection.return_value.document.return_value
+    reveal_ref.create.side_effect = db_reveal_exists
+    deduct = MagicMock()
+    with patch("app.routes.orgs.get_db", return_value=db), \
+         patch("app.routes.orgs._member_org", return_value=TKE), \
+         patch("app.routes.orgs.directory_contacts", return_value=[_contact()]), \
+         patch("app.services.auth.deduct_credits_atomic", deduct):
+        r = client.post("/api/orgs/usc_tke/reveal", json={"personKey": "p1"}, headers={"Authorization": "Bearer t"})
+    assert r.get_json()["already_revealed"] is True
+    deduct.assert_not_called()
+
+
+def test_reveal_no_email_is_not_charged(client):
+    r, _, deduct = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", contacts=[_contact(email="")], body={"personKey": "p1"})
+    assert r.status_code == 404 and r.get_json()["error"] == "no_email"
+    deduct.assert_not_called()
+
+
+def test_reveal_out_of_credits_releases_the_claim(client):
+    r, reveal_ref, _ = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", contacts=[_contact()],
+                                 body={"personKey": "p1"}, deduct=(False, 3))
+    assert r.status_code == 402
+    reveal_ref.delete.assert_called_once()
+
+
+def test_reveal_requires_membership(client):
+    r, _, deduct = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", member=False, body={"personKey": "p1"})
+    assert r.status_code == 403
+    deduct.assert_not_called()
+
+
+def test_member_org_gate():
+    from flask import Flask, request
+    from app.routes import orgs as orgs_mod
+    app = Flask(__name__)
+    org_doc = _snap({"name": "USC Tau Kappa Epsilon", "shortName": "USC TKE", "joinable": True}, doc_id="usc_tke")
+    cases = [
+        ({"orgMemberships": {"usc_tke": {"status": "active"}}}, "usc_tke"),
+        ({"orgMemberships": {"usc_tke": {"status": "pending"}}}, None),
+        ({}, None),
+    ]
+    for user_data, expected in cases:
+        db, _ = _db(org_doc, [_snap(user_data)])
+        with app.test_request_context():
+            request.firebase_user = FAKE_USER
+            got = orgs_mod._member_org(db, "usc_tke")
+        assert (got or {}).get("id") == expected, user_data
