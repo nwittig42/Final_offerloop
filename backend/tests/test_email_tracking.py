@@ -336,3 +336,30 @@ def test_register_for_draft_stores_message_id(db):
     doc = db.tracking()["tok"]
     assert doc["gmailMessageId"] == "m1"
     assert doc["gmailDraftId"] == "d1"
+
+
+def test_every_draft_register_passes_message_id():
+    """Draft tokens must store the Gmail message id (read later for send time)."""
+    import ast
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    offenders = []
+    for path in sorted(app_dir.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "email_tracking" not in source:
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "register"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "email_tracking"):
+                continue
+            kws = {k.arg for k in node.keywords}
+            if "draft_id" in kws and "message_id" not in kws:
+                offenders.append(f"{path.relative_to(app_dir.parent)}:{node.lineno}")
+    assert not offenders, (
+        "email_tracking.register(draft_id=...) without message_id:\n  "
+        + "\n  ".join(offenders)
+    )

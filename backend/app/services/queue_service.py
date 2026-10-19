@@ -848,6 +848,7 @@ def approve_queue_contact(
                 email_tracking.register(
                     tracking_token, uid, "outreach", recipient_email=to_email,
                     draft_id=draft_id,
+                    message_id=draft.get("message", {}).get("id"),
                     thread_id=draft.get("message", {}).get("threadId"),
                 )
             else:
