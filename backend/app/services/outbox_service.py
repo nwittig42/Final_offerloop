@@ -543,6 +543,13 @@ def update_contact_stage(uid, contact_id, new_stage):
     """Update pipelineStage and related timestamps."""
     if new_stage not in ALLOWED_PIPELINE_STAGES:
         raise ValueError(f"Invalid stage: {new_stage}. Must be one of: {', '.join(sorted(ALLOWED_PIPELINE_STAGES))}")
+    # email_opened is a valid stored value but only the tracking pixel sets it
+    # (services/email_tracking.record_open). A user can move an opened contact
+    # to another stage, never into email_opened.
+    if new_stage == EMAIL_OPENED:
+        raise ValueError(
+            f"Invalid stage: {new_stage}. It is set automatically when the recipient opens the email."
+        )
 
     ref, data = _get_contact(uid, contact_id)
     prev_stage = data.get("pipelineStage") or ""

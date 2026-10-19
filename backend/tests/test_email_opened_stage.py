@@ -300,3 +300,71 @@ def test_loop_thread_backfill_treats_opened_as_sent():
         with pytest.raises(_Stop):
             loop_service._backfill_thread_ids_for_contacts(
                 "u1", {"c1": {"email": "a@b.com", "pipelineStage": "email_opened"}})
+
+
+# ---------------------------------------------------------------------------
+# Only the pixel sets email_opened
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def client():
+    # Just the outbox blueprint: the full app needs native PDF libs.
+    from flask import Flask
+    from app.routes.outbox import outbox_bp
+    app = Flask(__name__)
+    app.register_blueprint(outbox_bp)
+    return app.test_client()
+
+
+@pytest.fixture
+def _bypass_firebase_auth():
+    with patch("firebase_admin._apps", {"[DEFAULT]": MagicMock()}), \
+         patch("firebase_admin.auth.verify_id_token",
+               return_value={"uid": "u1", "email": "student@example.com"}):
+        yield
+
+
+def _put_stage(client, stage, current):
+    ref = MagicMock()
+    with patch("app.services.outbox_service._get_contact",
+               return_value=(ref, {"pipelineStage": current})):
+        resp = client.put("/api/outbox/threads/c1/stage", json={"stage": stage},
+                          headers={"Authorization": "Bearer fake"})
+    return resp, ref
+
+
+def test_manual_stage_change_to_email_opened_is_rejected(client, _bypass_firebase_auth):
+    from app.services import outbox_service
+
+    for current in ("waiting_on_reply", "email_sent", "email_opened"):
+        resp, ref = _put_stage(client, "email_opened", current)
+        assert resp.status_code == 400
+        assert "Invalid stage" in resp.get_json()["error"]
+        assert not ref.update.called
+
+    # Same shape/status as any other invalid stage.
+    bogus, _ = _put_stage(client, "not_a_stage", "waiting_on_reply")
+    assert bogus.status_code == 400 and "Invalid stage" in bogus.get_json()["error"]
+
+    # Still a valid stored value.
+    assert "email_opened" in outbox_service.ALLOWED_PIPELINE_STAGES
+    with pytest.raises(ValueError, match="Invalid stage"):
+        outbox_service.update_contact_stage("u1", "c1", "email_opened")
+
+
+@pytest.mark.parametrize("target", ["replied", "meeting_scheduled", "waiting_on_reply", "closed"])
+def test_manual_stage_change_from_email_opened_still_works(client, _bypass_firebase_auth, target):
+    with patch("app.services.cooldown_service.record_outreach"):
+        resp, ref = _put_stage(client, target, "email_opened")
+    assert resp.status_code == 200, resp.get_json()
+    assert ref.update.call_args[0][0]["pipelineStage"] == target
+    assert resp.get_json()["thread"]["pipelineStage"] == target
+
+
+def test_bulk_contact_create_ignores_requested_email_opened():
+    """POST /api/contacts/bulk only honors new/draft_created from the client."""
+    import inspect
+    from app.routes import contacts
+
+    src = inspect.getsource(contacts)
+    assert "if req_stage in ('new', 'draft_created'):" in src
