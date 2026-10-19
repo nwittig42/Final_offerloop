@@ -159,6 +159,20 @@ export interface Contact {
   EmailSource?: string;
   EmailVerified?: boolean;
   EmailConfidenceScore?: number; // 0-100 from the providing source
+  // Set on contacts from an org alumni directory (OFF-42).
+  OrgId?: string;
+  OrgBadge?: string; // e.g. "USC TKE Alumni '17"
+}
+
+// An org alumni directory a student can join (OFF-42).
+export interface Org {
+  id: string;
+  name: string;
+  shortName: string;
+  school: string;
+  type: string;
+  memberCount: number;
+  aliases: string[];
 }
 
 // Recruiter interface (extends Contact but specific to recruiters)
@@ -1448,6 +1462,23 @@ class ApiService {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+  }
+
+  // Org alumni directories (OFF-42). Joining is instant for now; the backend
+  // owns membership (clients can't write orgMemberships).
+  async getOrgs(): Promise<{ orgs: Org[]; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ orgs: Org[]; memberships: string[] }>('/orgs', { method: 'GET', headers });
+  }
+
+  async joinOrg(orgId: string): Promise<{ ok: boolean; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/join`, { method: 'POST', headers });
+  }
+
+  async leaveOrg(orgId: string): Promise<{ ok: boolean; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/leave`, { method: 'POST', headers });
   }
 
   /**

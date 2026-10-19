@@ -25,6 +25,8 @@ export interface Person {
   matchScore: number | null;
   rank: number;
   deckId: string;
+  // Org alumni directory badge, e.g. "USC TKE Alumni '17" (OFF-42).
+  orgBadge?: string;
 }
 
 function str(v: unknown): string {
@@ -117,6 +119,7 @@ export function personFromSearch(c: Contact, index: number): Person {
     matchScore: null,
     rank: index,
     deckId: "",
+    orgBadge: str(c.OrgBadge),
   };
 }
 

@@ -3,7 +3,7 @@
 // black/grey text scale, grey capsule chips, and capsule buttons (blue for
 // the main action). Same content as the app's People card: who they are,
 // where they work, why we picked them, Info and Contact.
-import { Bookmark, GraduationCap, Loader2, MapPin, User, X } from "lucide-react";
+import { Bookmark, GraduationCap, Loader2, MapPin, User, Users, X } from "lucide-react";
 import { CompanyLogo } from "@/components/CompanyLogo";
 import { linkedInHref } from "@/components/contacts/contactsModel";
 import { relationFor, type Person } from "./peopleModel";
@@ -131,7 +131,13 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
         ) : (
           <FitBadge score={person.matchScore} sample={isSample} />
         )}
-        {person.school && <Chip icon={<GraduationCap className="h-3 w-3" />}>{person.school}</Chip>}
+        {person.orgBadge && (
+          <span className="inline-flex h-6 max-w-full items-center gap-1 rounded-full px-2.5 text-[12px] font-semibold" style={{ background: "#EEF1FA", color: "#3A4E8C" }}>
+            <Users className="h-3 w-3 shrink-0" />
+            <span className="truncate">{person.orgBadge}</span>
+          </span>
+        )}
+        {person.school && !person.orgBadge && <Chip icon={<GraduationCap className="h-3 w-3" />}>{person.school}</Chip>}
         {person.title && <Chip icon={<User className="h-3 w-3" />}>{relationFor(person.title)}</Chip>}
       </div>
 

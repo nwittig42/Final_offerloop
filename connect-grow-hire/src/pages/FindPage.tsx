@@ -20,6 +20,8 @@ import { IS_DEV_PREVIEW, DEV_MOCK_USER } from "@/lib/devPreview";
 import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
 import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
+import { useOrgs } from "@/hooks/useOrgs";
+import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
 import { GOLD_RING } from "@/components/find/people/PersonAvatar";
@@ -41,12 +43,16 @@ const TOP_COUNT = 4;
 const PENDING_QUERY_KEY = "offerloop_pending_query";
 
 // When only filters are set, build the sentence the prompt parser expects.
-function promptFromFilters(f: PeopleFilters): string {
+// Org pills read as "who are USC TKE alumni"; the backend strips that back
+// out and searches the directory (the ids travel in `filters` too).
+function promptFromFilters(f: PeopleFilters, orgs: Org[]): string {
   const parts = [f.titles.length ? f.titles.join(" or ") : "People"];
   if (f.companies.length) parts.push(`at ${f.companies.join(" or ")}`);
   if (f.industries.length) parts.push(`in ${f.industries.join(" or ")}`);
   if (f.locations.length) parts.push(`in ${f.locations.join(" or ")}`);
   if (f.schools.length) parts.push(`who went to ${f.schools.join(" or ")}`);
+  const orgNames = orgs.filter((o) => f.organizations.includes(o.id)).map((o) => o.shortName);
+  if (orgNames.length) parts.push(`who are ${orgNames.join(" or ")} alumni`);
   return parts.join(" ");
 }
 
@@ -210,6 +216,7 @@ const FindPage: React.FC = () => {
     } catch { return ""; }
   });
   const [filters, setFilters] = useState<PeopleFilters>(EMPTY_PEOPLE_FILTERS);
+  const { joined: joinedOrgs } = useOrgs(!!user?.uid && !IS_DEV_PREVIEW);
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<Person[] | null>(null);
   const [resultsLabel, setResultsLabel] = useState("");
@@ -217,7 +224,7 @@ const FindPage: React.FC = () => {
 
   const runSearch = useCallback(async (q: string, f: PeopleFilters) => {
     setFilters(f);
-    const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f) : "");
+    const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f, joinedOrgs) : "");
     if (!prompt) { setResults(null); return; }
     setSearching(true);
     setResultsLabel(prompt);
@@ -240,7 +247,7 @@ const FindPage: React.FC = () => {
     } finally {
       setSearching(false);
     }
-  }, [emailTemplate, queryClient]);
+  }, [emailTemplate, queryClient, joinedOrgs]);
 
   // ?q= hands a query in from elsewhere (Loop cards, Getting Started). Run
   // it once, then drop it (and any legacy ?tab=) from the URL.
@@ -349,6 +356,7 @@ const FindPage: React.FC = () => {
                   filters={filters}
                   onSearch={runSearch}
                   userSchool={userUniversity}
+                  orgs={joinedOrgs}
                   searching={searching}
                 />
               </div>
