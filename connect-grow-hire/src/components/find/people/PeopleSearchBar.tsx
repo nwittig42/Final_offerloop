@@ -3,7 +3,8 @@
 // opens every group in a side sheet. Filters are the same dimensions the
 // backend prompt parser understands (types/findFilters.ts).
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ChevronDown, X } from "lucide-react";
+import { ArrowRight, ChevronDown, Plus, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
@@ -177,10 +178,13 @@ interface PeopleSearchBarProps {
   userSchool: string | null;
   // Org alumni directories the student has joined (OFF-42).
   orgs?: Org[];
+  // Not in any org yet: a "Join organization" pill sits where the org pill
+  // would be, linking to Account Settings (where the password is entered).
+  showJoinOrg?: boolean;
   searching: boolean;
 }
 
-export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], searching }: PeopleSearchBarProps) {
+export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], showJoinOrg = false, searching }: PeopleSearchBarProps) {
   const [allOpen, setAllOpen] = useState(false);
   const [allDraft, setAllDraft] = useState<PeopleFilters>(filters);
   useEffect(() => { if (allOpen) setAllDraft(filters); }, [allOpen, filters]);
@@ -276,6 +280,15 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
           <button type="button" onClick={toggleAlumni} aria-pressed={alumniOn} className={pillClass(alumniOn)}>
             Alumni
           </button>
+        )}
+        {showJoinOrg && (
+          <Link
+            to="/account-settings#organizations"
+            title="Add your fraternity, sorority, club or team to search its alumni"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-dashed border-[#A3A3A3] bg-white px-4 text-[14px] font-semibold text-ink-2 transition-colors hover:border-ink-2 hover:bg-paper-2"
+          >
+            <Plus className="h-4 w-4" /> Join organization
+          </Link>
         )}
         {orgs.map((o) => {
           const on = filters.organizations.includes(o.id);

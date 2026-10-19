@@ -365,27 +365,10 @@ const FindPage: React.FC = () => {
                   onSearch={runSearch}
                   userSchool={userUniversity}
                   orgs={joinedOrgs}
+                  showJoinOrg={joinedOrgs.length === 0 && allOrgs.length > 0}
                   searching={searching}
                 />
               </div>
-
-              {/* Not in an org yet: point at Account Settings (OFF-42) */}
-              {joinedOrgs.length === 0 && allOrgs.length > 0 && (
-                <Link
-                  to="/account-settings#organizations"
-                  className="group mt-4 flex w-full items-center gap-3 rounded-[18px] bg-white px-4 py-3 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
-                  style={{ fontFamily: APPLE_FONT }}
-                >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
-                    <Users className="h-4 w-4" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">Part of a fraternity, club or org?</span>
-                    <span className="block truncate text-[12.5px] text-[#6E6E73]">Add it in Account Settings to unlock its whole alumni network</span>
-                  </span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-[#0071E3] transition-transform group-hover:translate-x-0.5" />
-                </Link>
-              )}
 
               {/* Org alumni directories the student belongs to (OFF-42) */}
               {joinedOrgs.length > 0 && (
