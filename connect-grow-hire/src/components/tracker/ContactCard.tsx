@@ -31,6 +31,8 @@ function stageBorderColor(c: OutboxThread, isSelected: boolean): string {
   if (c.pipelineStage === "draft_deleted") return "border-l-red-300 hover:bg-red-50/30";
   if (c.pipelineStage === "draft_created") return "border-l-amber-400 hover:bg-amber-50/30";
   if (c.pipelineStage === "email_sent" || c.pipelineStage === "waiting_on_reply") return "border-l-[#3B82F6]/50 hover:bg-[#FAFBFF]";
+  // Opened: teal, between Contacted blue and Connected green.
+  if (c.pipelineStage === "email_opened") return "border-l-teal-400 hover:bg-teal-50/30";
   if (c.pipelineStage === "meeting_scheduled" || c.pipelineStage === "connected") return "border-l-green-400 hover:bg-green-50/30";
   return "border-l-transparent hover:bg-gray-50";
 }
@@ -60,7 +62,7 @@ function actionChip(c: OutboxThread, bucket: BucketType): Chip | null {
     return { label: "Follow Up", className: "bg-orange-100 text-orange-700" };
   }
   // Sent / waiting — open thread
-  if (c.pipelineStage === "email_sent" || c.pipelineStage === "waiting_on_reply") {
+  if (c.pipelineStage === "email_sent" || c.pipelineStage === "waiting_on_reply" || c.pipelineStage === "email_opened") {
     if (c.gmailThreadId) return { label: "Open Thread", className: "bg-gray-100 text-gray-600" };
   }
   // Fallback

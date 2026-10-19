@@ -97,6 +97,7 @@ export default function NetworkTrackerRedesign() {
     saved: true,
     drafted: true,
     contacted: false,
+    opened: false,
     connected: false,
     interviewing: false,
     offer: false,
@@ -806,6 +807,7 @@ export default function NetworkTrackerRedesign() {
                           </div>
                           <ProtoPipelineDots
                             activeStage={selectedContact.stage}
+                            openedAt={selectedContact.lastOpenedAt}
                             onStageClick={(stage) => {
                               if (inboxDemoActive) return;
                               stageMutation.mutate({ contactId: selectedContact.id, stage });

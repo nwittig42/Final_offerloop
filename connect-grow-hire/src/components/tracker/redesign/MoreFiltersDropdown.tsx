@@ -19,13 +19,14 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
 export const FILTER_LABELS: Record<string, string> = {
   "stage:saved": "Saved",
   "stage:contacted": "Contacted",
+  "stage:opened": "Opened",
   "stage:connected": "Connected",
   "stage:interviewing": "Interviewing",
   "stage:offer": "Offer",
   "has-reply": "Has unread reply",
 };
 
-const STAGE_FILTERS = ["stage:saved", "stage:contacted", "stage:connected", "stage:interviewing", "stage:offer"];
+const STAGE_FILTERS = ["stage:saved", "stage:contacted", "stage:opened", "stage:connected", "stage:interviewing", "stage:offer"];
 const SIGNAL_FILTERS = ["has-reply"];
 
 interface MoreFiltersDropdownProps {

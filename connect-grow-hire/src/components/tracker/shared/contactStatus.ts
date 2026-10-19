@@ -45,8 +45,8 @@ export function statusLine(c: OutboxThread): string {
   }
 
   // 4. Sent / waiting
-  if (c.pipelineStage === "waiting_on_reply" || c.pipelineStage === "email_sent") {
-    if (c.emailOpenedAt) {
+  if (c.pipelineStage === "waiting_on_reply" || c.pipelineStage === "email_sent" || c.pipelineStage === "email_opened") {
+    if (c.pipelineStage === "email_opened" && c.emailOpenedAt) {
       return `Opened ${formatTimeAgo(c.emailLastOpenedAt || c.emailOpenedAt)} — waiting for reply`;
     }
     if (c.emailSentAt) return `Sent ${formatTimeAgo(c.emailSentAt)} — waiting for reply`;

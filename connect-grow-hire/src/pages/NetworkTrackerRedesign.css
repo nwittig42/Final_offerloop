@@ -630,6 +630,7 @@
   z-index: 0;
 }
 .tracker-redesign .pipeline-dot[data-clickable] { cursor: pointer; }
+.tracker-redesign .pipeline-dot[data-locked] { cursor: not-allowed; }
 .tracker-redesign .pipeline-dot[data-clickable]:hover { box-shadow: 0 0 0 4px var(--primary-100); }
 .tracker-redesign .pipeline-track-fill {
   position: absolute;

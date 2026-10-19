@@ -4,12 +4,14 @@ import type { OutboxThread, PipelineStage, AutoPrepStatus } from "@/services/api
 import { ActionBar } from "./ActionBar";
 import { formatTimeAgo, formatDate, decodeHtmlEntities } from "@/lib/formatters";
 
-const STAGE_OPTIONS: { value: PipelineStage; label: string }[] = [
+const STAGE_OPTIONS: { value: PipelineStage; label: string; disabled?: boolean }[] = [
   { value: "new", label: "New" },
   { value: "draft_created", label: "Draft Created" },
   { value: "draft_deleted", label: "Draft Deleted" },
   { value: "email_sent", label: "Email Sent" },
   { value: "waiting_on_reply", label: "Waiting on Reply" },
+  // Set only by the open-tracking pixel: shown when current, never pickable.
+  { value: "email_opened", label: "Opened", disabled: true },
   { value: "replied", label: "They Replied" },
   { value: "meeting_scheduled", label: "Meeting Scheduled" },
   { value: "connected", label: "Connected" },
@@ -122,7 +124,7 @@ export function ConversationPanel({
         {contact.emailSentAt && (
           <p className="text-xs text-gray-500">
             Sent on {formatDate(contact.emailSentAt)}
-            {contact.emailOpenedAt && ` · Opened ${formatDate(contact.emailOpenedAt)}`}
+            {contact.pipelineStage === "email_opened" && contact.emailOpenedAt && ` · Opened ${formatDate(contact.emailOpenedAt)}`}
           </p>
         )}
 
@@ -241,7 +243,7 @@ export function ConversationPanel({
           >
             <option value="" disabled>Select stage...</option>
             {STAGE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
+              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
                 {opt.label}
               </option>
             ))}

@@ -8,13 +8,14 @@ import { daysBetween, formatTimeAgo } from "@/lib/formatters";
 
 // ── Prototype's domain model (from network-tracker.html) ─────────────────────
 
-export const PROTO_STAGES = ["saved", "drafted", "contacted", "connected", "interviewing", "offer"] as const;
+export const PROTO_STAGES = ["saved", "drafted", "contacted", "opened", "connected", "interviewing", "offer"] as const;
 export type ProtoStage = (typeof PROTO_STAGES)[number];
 
 export const PROTO_STAGE_LABELS: Record<ProtoStage, string> = {
   saved: "Saved",
   drafted: "Drafted",
   contacted: "Contacted",
+  opened: "Opened",
   connected: "Connected",
   interviewing: "Interviewing",
   offer: "Offer",
@@ -87,6 +88,10 @@ export function protoStageToBackend(stage: ProtoStage): PipelineStage {
       return "draft_created";
     case "contacted":
       return "email_sent";
+    // Never written by a click (the dot is disabled); the pixel sets it. The
+    // inverse is here only so the switch stays exhaustive and round-trips.
+    case "opened":
+      return "email_opened";
     case "connected":
       return "connected";
     case "interviewing":
@@ -109,6 +114,8 @@ function stageOnlyMap(s: PipelineStage | null | undefined): ProtoStage | null {
     case "email_sent":
     case "waiting_on_reply":
       return "contacted";
+    case "email_opened":
+      return "opened";
     case "replied":
     case "connected":
       return "connected";
@@ -145,9 +152,10 @@ const TERMINAL_LABELS: Record<string, string> = {
 function deriveStatus(t: OutboxThread): ProtoStatus {
   if (t.hasUnreadReply) return "Reply";
   if (t.pipelineStage === "draft_created" || t.pipelineStage === "draft_deleted") return "Draft";
-  if (t.pipelineStage === "email_sent" || t.pipelineStage === "waiting_on_reply") {
-    return t.emailOpenedAt ? "Opened" : "Sent";
-  }
+  if (t.pipelineStage === "email_sent" || t.pipelineStage === "waiting_on_reply") return "Sent";
+  // The stage is the source of truth: a follow-up resets an opened contact to
+  // waiting_on_reply, which must read as Sent even though emailOpenedAt is set.
+  if (t.pipelineStage === "email_opened") return "Opened";
   if (t.pipelineStage === "meeting_scheduled" || t.pipelineStage === "connected") return "Done";
   if (t.pipelineStage === "replied") return "View";
   return "Action";
@@ -221,7 +229,7 @@ export function openedSummary(c: Pick<ProtoContact, "lastOpenedAt" | "openCount"
 export type GroupedByStage = Record<ProtoStage, ProtoContact[]>;
 
 function emptyByStage(): GroupedByStage {
-  return { saved: [], drafted: [], contacted: [], connected: [], interviewing: [], offer: [] };
+  return { saved: [], drafted: [], contacted: [], opened: [], connected: [], interviewing: [], offer: [] };
 }
 
 // Default-view accordion source. Terminal contacts (stage=null) are excluded.

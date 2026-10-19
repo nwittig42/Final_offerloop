@@ -342,6 +342,7 @@ export type PipelineStage =
   | "draft_deleted"
   | "email_sent"
   | "waiting_on_reply"
+  | "email_opened"
   | "replied"
   | "meeting_scheduled"
   | "connected"
