@@ -101,7 +101,7 @@ function makePipelineGapSuggestions(
 function makeFollowUpSuggestions(threads: OutboxThread[]): Suggestion[] {
   const now = Date.now();
   const stale = threads.filter(t => {
-    if (t.pipelineStage !== 'waiting_on_reply') return false;
+    if (t.pipelineStage !== 'waiting_on_reply' && t.pipelineStage !== 'email_opened') return false;
     if (!t.emailSentAt) return false;
     if (t.followUpCount !== 0) return false;
     const sentAt = new Date(t.emailSentAt).getTime();

@@ -159,7 +159,9 @@ def create_nudge_draft(nudge_id: str):
             compose_url = f"https://mail.google.com/mail/?view=cm&to={quote(to_email)}&su={quote(subject)}&body={quote(follow_up_text)}"
             return jsonify({"ok": True, "composeUrl": compose_url, "draftId": None}), 200
 
-        msg = MIMEText(follow_up_text)
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(uid)
+        msg = email_tracking.tracked_text_mime(follow_up_text, tracking_token)
         msg["to"] = to_email
         msg["subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -168,6 +170,12 @@ def create_nudge_draft(nudge_id: str):
             userId="me", body={"message": {"raw": raw}}
         ).execute()
         draft_id = draft.get("id", "")
+        email_tracking.register(
+            tracking_token, uid, "follow_up", recipient_email=to_email,
+            contact_id=contact_id, draft_id=draft_id,
+            message_id=draft.get("message", {}).get("id"),
+            thread_id=draft.get("message", {}).get("threadId"),
+        )
 
         # Mark nudge as acted_on
         from datetime import datetime, timezone

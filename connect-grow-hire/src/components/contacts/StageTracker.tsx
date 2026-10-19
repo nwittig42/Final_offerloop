@@ -1,10 +1,11 @@
 // Stage progress on the contact card: an Apple Fitness-style ring that fills
-// to the current step (Saved → Offer) in the stage's color, with the six steps
+// to the current step (Saved → Offer) in the stage's color, with the seven steps
 // beside it. Clicking a step moves the contact there. Contacts with no tracked conversation yet are read-only (the backend
 // stage endpoint works on outbox threads).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiService } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
+import { openedSummary } from "./openedLabel";
 import { STAGES, STAGE_LABELS, THREADS_KEY, stageStyle, stageToBackend, type ContactRow, type Stage } from "./contactsModel";
 
 export function StageTracker({ contact }: { contact: ContactRow }) {
@@ -15,6 +16,8 @@ export function StageTracker({ contact }: { contact: ContactRow }) {
 
   const mutation = useMutation({
     mutationFn: async (stage: Stage) => {
+      // Opened is set only by the tracking pixel, never by the user.
+      if (stage === "opened") throw new Error("Opened is set automatically when the email is opened");
       const res = stage === "offer"
         ? await apiService.markOutboxThreadWon(contact.id)
         : await apiService.patchOutboxStage(contact.id, stageToBackend(stage));
@@ -29,6 +32,7 @@ export function StageTracker({ contact }: { contact: ContactRow }) {
 
   const total = STAGES.length;
   const progress = currentIdx < 0 ? 0 : (currentIdx + 1) / total;
+  const openedNote = openedSummary(contact.thread);
   const next = currentIdx >= 0 && currentIdx < total - 1 ? STAGES[currentIdx + 1] : null;
 
   return (
@@ -51,6 +55,10 @@ export function StageTracker({ contact }: { contact: ContactRow }) {
               : "Draft an email to start tracking this conversation"}
           </div>
 
+          {contact.stage === "opened" && openedNote && (
+            <div className="mt-0.5 text-[12.5px] text-ink-3">{openedNote}</div>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-1.5">
             {STAGES.map((s, i) => {
               const reached = i <= currentIdx;
@@ -59,12 +67,12 @@ export function StageTracker({ contact }: { contact: ContactRow }) {
                 <button
                   key={s}
                   type="button"
-                  disabled={!editable || mutation.isPending || isCurrent}
+                  disabled={!editable || mutation.isPending || isCurrent || s === "opened"}
                   onClick={() => mutation.mutate(s)}
-                  title={editable ? `Move to ${STAGE_LABELS[s]}` : "Draft an email to start tracking this conversation"}
+                  title={s === "opened" ? (openedSummary(contact.thread) || "Set automatically when the email is opened") : editable ? `Move to ${STAGE_LABELS[s]}` : "Draft an email to start tracking this conversation"}
                   className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] transition-colors ${
                     isCurrent ? "font-semibold" : reached ? "text-ink-2" : "text-ink-3"
-                  } ${editable && !isCurrent ? "cursor-pointer hover:border-slate-400 hover:text-ink-2" : "cursor-default"}`}
+                  } ${editable && !isCurrent && s !== "opened" ? "cursor-pointer hover:border-slate-400 hover:text-ink-2" : "cursor-default"}`}
                   style={{
                     borderColor: isCurrent ? color : "#E2E8F0",
                     background: isCurrent ? `${color}14` : "#fff",

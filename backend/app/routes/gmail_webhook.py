@@ -18,6 +18,7 @@ from google.cloud.firestore_v1 import ArrayUnion, transactional
 
 from app.config import GMAIL_WEBHOOK_SECRET
 from app.extensions import get_db
+from app.models.pipeline_stages import stage_after_send_confirmed
 from app.services.gmail_client import (
     find_uid_by_gmail_address,
     get_gmail_service_for_user,
@@ -491,7 +492,9 @@ def _process_gmail_notification(email_address, history_id):
 
                 update_fields = {
                     "draftStillExists": False,
-                    "pipelineStage": "waiting_on_reply",
+                    # An open can be counted before this webhook confirms the
+                    # send; such a contact goes straight to email_opened.
+                    "pipelineStage": stage_after_send_confirmed(contact_data),
                     "inOutbox": True,
                     "lastActivityAt": now_iso,
                     "updatedAt": now_iso,
@@ -507,7 +510,7 @@ def _process_gmail_notification(email_address, history_id):
                 if msg_snippet:
                     update_fields["lastMessageSnippet"] = msg_snippet
 
-                logger.info(f"[gmail_webhook] uid={uid} contact_id={contact_doc.id} UPDATING sent message: stage draft_created->waiting_on_reply, fields={list(update_fields.keys())}")
+                logger.info(f"[gmail_webhook] uid={uid} contact_id={contact_doc.id} UPDATING sent message: stage {current_stage}->{update_fields['pipelineStage']}, fields={list(update_fields.keys())}")
                 contact_ref.update(update_fields)
 
                 # Metrics: email_actually_sent

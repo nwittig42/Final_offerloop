@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from app.extensions import get_db
+from app.models.pipeline_stages import AWAITING_REPLY_STAGES
 from app.services.outbox_service import REPLIED_STAGES, _parse_iso
 from app.utils.industry_classifier import classify_industry
 from app.utils.users import get_user_school
@@ -22,9 +23,8 @@ from app.utils.users import get_user_school
 logger = logging.getLogger(__name__)
 
 # Stages where the user sent an email and could receive a reply
-ELIGIBLE_STAGES = frozenset({
-    "email_sent", "waiting_on_reply", "replied",
-    "meeting_scheduled", "connected", "no_response",
+ELIGIBLE_STAGES = AWAITING_REPLY_STAGES | frozenset({
+    "replied", "meeting_scheduled", "connected", "no_response",
 })
 
 

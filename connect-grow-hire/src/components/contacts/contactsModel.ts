@@ -10,13 +10,14 @@ import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
 import { firebaseApi, type Contact } from "@/services/firebaseApi";
 import { apiService, type CoffeeChatPrep, type OutboxThread, type PipelineStage } from "@/services/api";
 
-export const STAGES = ["saved", "drafted", "contacted", "connected", "interviewing", "offer"] as const;
+export const STAGES = ["saved", "drafted", "contacted", "opened", "connected", "interviewing", "offer"] as const;
 export type Stage = (typeof STAGES)[number];
 
 export const STAGE_LABELS: Record<Stage, string> = {
   saved: "Saved",
   drafted: "Drafted",
   contacted: "Contacted",
+  opened: "Opened",
   connected: "Connected",
   interviewing: "Interviewing",
   offer: "Offer",
@@ -33,6 +34,7 @@ export const STAGE_STYLES: Record<Stage, StageStyle> = {
   saved:        { dot: "#94A3B8", pill: "bg-slate-100 text-slate-600" },
   drafted:      { dot: "#F59E0B", pill: "bg-amber-50 text-amber-700" },
   contacted:    { dot: "#3B82F6", pill: "bg-blue-50 text-blue-700" },
+  opened:       { dot: "#14B8A6", pill: "bg-teal-50 text-teal-700" },
   connected:    { dot: "#8B5CF6", pill: "bg-violet-50 text-violet-700" },
   interviewing: { dot: "#6366F1", pill: "bg-indigo-50 text-indigo-700" },
   offer:        { dot: "#10B981", pill: "bg-emerald-50 text-emerald-700" },
@@ -50,7 +52,7 @@ const TERMINAL_LABELS: Partial<Record<PipelineStage, string>> = {
   closed: "Closed",
 };
 
-// Backend's 11 pipeline stages collapse into the six the UI shows. Terminal
+// Backend's 11 pipeline stages collapse into the seven the UI shows. Terminal
 // stages (no_response / bounced / closed) return null and are labelled
 // separately. A won thread (resolution=meeting_booked) is always Offer.
 export function threadStage(t: OutboxThread | undefined): Stage | null {
@@ -63,6 +65,8 @@ export function threadStage(t: OutboxThread | undefined): Stage | null {
     case "email_sent":
     case "waiting_on_reply":
       return "contacted";
+    case "email_opened":
+      return "opened";
     case "replied":
     case "connected":
       return "connected";
@@ -84,6 +88,7 @@ export function stageToBackend(stage: Stage): PipelineStage {
     case "saved": return "new";
     case "drafted": return "draft_created";
     case "contacted": return "email_sent";
+    case "opened": return "email_opened";
     case "connected": return "connected";
     case "interviewing":
     case "offer": return "meeting_scheduled";
@@ -143,7 +148,7 @@ export function rankerContactId(candidateId: string): string {
   return `ranker_${candidateId}`;
 }
 
-function toRow(c: Contact & Record<string, any>, thread: OutboxThread | undefined, prep: CoffeeChatPrep | undefined): ContactRow {
+export function toRow(c: Contact & Record<string, any>, thread: OutboxThread | undefined, prep: CoffeeChatPrep | undefined): ContactRow {
   const firstName = c.firstName || "";
   const lastName = c.lastName || "";
   const stage = threadStage(thread);

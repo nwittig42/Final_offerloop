@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from google.cloud.firestore_v1 import transactional
 
 from app.extensions import get_db
+from app.models.pipeline_stages import AWAITING_REPLY_STAGES
 from app.services.openai_client import get_openai_client
 from app.services.outbox_service import _parse_iso
 from app.utils.users import (
@@ -27,9 +28,7 @@ from app.utils.users import (
 logger = logging.getLogger("nudge_service")
 
 # Contacts in these stages are eligible for follow-up nudges
-NUDGE_ELIGIBLE_STAGES = frozenset({
-    "email_sent", "waiting_on_reply", "draft_created",
-})
+NUDGE_ELIGIBLE_STAGES = AWAITING_REPLY_STAGES | frozenset({"draft_created"})
 
 # Default follow-up timing: 7 calendar days (CEO review decision)
 DEFAULT_FOLLOWUP_DAYS = 7
