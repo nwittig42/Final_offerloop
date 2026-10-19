@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search, X } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
@@ -23,6 +23,19 @@ import { orgLogo } from "@/lib/orgLogos";
 
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
 const PAGE = 48;
+
+// "#A6192E" -> "rgba(166, 25, 46, a)"
+function withAlpha(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+// Darker version of a hex color (f = 0.55 keeps 55% of each channel).
+function shade(hex: string, f: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const c = (v: number) => Math.round(v * f).toString(16).padStart(2, "0");
+  return `#${c((n >> 16) & 255)}${c((n >> 8) & 255)}${c(n & 255)}`;
+}
 
 type Sort = "complete" | "recent" | "oldest" | "name";
 
@@ -122,6 +135,22 @@ export default function OrgDirectoryPage() {
   }, [emailTemplate, queryClient]);
 
   const org = data?.org;
+  // Orgs with a logo (TKE) get the branded page: their color as the
+  // background and the crest large behind the cards. Others keep the band.
+  const logo = org ? orgLogo(org.id) : null;
+  const branded = !!logo;
+  const accent = orgAccent(org);
+  const pageBackground: React.CSSProperties = branded
+    ? {
+        backgroundColor: accent,
+        // Top layer tints the crest underneath it into a watermark.
+        backgroundImage: `linear-gradient(160deg, ${withAlpha(accent, 0.80)} 0%, ${withAlpha(shade(accent, 0.55), 0.90)} 100%), url(${logo})`,
+        backgroundRepeat: "no-repeat, no-repeat",
+        backgroundPosition: "center, right -4% center",
+        backgroundSize: "cover, min(82vh, 820px) auto",
+        backgroundAttachment: "fixed, fixed",
+      }
+    : { background: "#ECEFF6" };
   const notMember = (error as Error | null)?.message === "not_a_member";
 
   return (
@@ -130,10 +159,17 @@ export default function OrgDirectoryPage() {
         <AppSidebar />
         <MainContentWrapper>
           <AppHeader title="" />
-          <div className="flex-1 overflow-y-auto" style={{ background: "#ECEFF6" }}>
-            <div className="mx-auto max-w-[1320px] px-4 pb-16 pt-4 sm:px-10" style={{ fontFamily: APPLE_FONT }}>
-              <Link to="/find" className="mt-4 inline-flex items-center gap-1 text-[13px] text-[#3A4E8C] hover:underline">
-                <ArrowLeft className="h-3.5 w-3.5" /> Back to Find
+          <div className="flex-1 overflow-y-auto" style={pageBackground}>
+            <div className="mx-auto max-w-[1320px] px-4 pb-16 pt-6 sm:px-10" style={{ fontFamily: APPLE_FONT }}>
+              <Link
+                to="/find"
+                className={`inline-flex h-11 items-center gap-2 rounded-full px-5 text-[15px] font-semibold transition-colors ${
+                  branded
+                    ? "bg-white/15 text-white ring-1 ring-white/30 hover:bg-white/25"
+                    : "bg-white text-[#1D1D1F] shadow-[0_1px_2px_rgba(0,0,0,0.06)] hover:bg-[#FAFAFA]"
+                }`}
+              >
+                <ArrowLeft className="h-5 w-5" strokeWidth={2.2} /> Back to Find
               </Link>
 
               {error ? (
@@ -149,47 +185,68 @@ export default function OrgDirectoryPage() {
                 </div>
               ) : (
                 <>
-                  {/* The org's own space: a header band in its color */}
-                  <div
-                    className="mt-3 flex items-center gap-4 rounded-[26px] px-5 py-6 text-white sm:px-8"
-                    style={{ background: `linear-gradient(160deg, ${orgAccent(org)} 0%, #1A1A1A 140%)` }}
-                  >
-                    {org && (orgLogo(org.id) ? (
-                      <span className="hidden h-[72px] w-[72px] shrink-0 items-center justify-center rounded-[18px] bg-white p-2 shadow-[0_4px_14px_rgba(0,0,0,0.25)] sm:flex" aria-hidden>
-                        <img src={orgLogo(org.id)!} alt="" className="h-full w-full object-contain" />
+                  {branded ? (
+                    /* An org with its own logo gets its own space: its color as
+                       the page, its crest large behind everything. */
+                    <div className="mt-8 flex items-center gap-5 text-white">
+                      <span className="hidden h-20 w-20 shrink-0 items-center justify-center rounded-[20px] bg-white p-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.3)] sm:flex" aria-hidden>
+                        <img src={logo!} alt="" className="h-full w-full object-contain" />
                       </span>
-                    ) : (
-                      <span className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-[16px] bg-white/15 text-[17px] font-bold tracking-wide ring-1 ring-white/25 sm:flex" aria-hidden>
-                        {orgMonogram(org)}
-                      </span>
-                    ))}
-                    <div className="min-w-0">
-                      <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]" style={{ fontFamily: APPLE_FONT, color: "#FFFFFF" }}>
-                        {org ? `${org.name} alumni` : "Alumni directory"}
-                      </h1>
-                      <p className="mt-1 text-[14px] text-white/75">
-                        {data ? `${data.members.length.toLocaleString()} alumni` : "Loading…"}
-                        {org?.school ? ` · ${org.school}` : ""}. Free for members. Contact drafts an intro in your voice.
-                      </p>
+                      <div className="min-w-0">
+                        <h1 className="text-[34px] font-semibold leading-tight tracking-[-0.02em] sm:text-[40px]" style={{ fontFamily: APPLE_FONT, color: "#FFFFFF" }}>
+                          {org!.name} alumni
+                        </h1>
+                        <p className="mt-1 text-[15px] text-white/80">
+                          {data ? `${data.members.length.toLocaleString()} alumni` : "Loading…"}
+                          {org?.school ? ` · ${org.school}` : ""}. Free for members. Contact drafts an intro in your voice.
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    /* The org's own space: a header band in its color */
+                    <div
+                      className="mt-6 flex items-center gap-4 rounded-[26px] px-5 py-6 text-white sm:px-8"
+                      style={{ background: `linear-gradient(160deg, ${orgAccent(org)} 0%, #1A1A1A 140%)` }}
+                    >
+                      {org && (
+                        <span className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-[16px] bg-white/15 text-[17px] font-bold tracking-wide ring-1 ring-white/25 sm:flex" aria-hidden>
+                          {orgMonogram(org)}
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]" style={{ fontFamily: APPLE_FONT, color: "#FFFFFF" }}>
+                          {org ? `${org.name} alumni` : "Alumni directory"}
+                        </h1>
+                        <p className="mt-1 text-[14px] text-white/75">
+                          {data ? `${data.members.length.toLocaleString()} alumni` : "Loading…"}
+                          {org?.school ? ` · ${org.school}` : ""}. Free for members. Contact drafts an intro in your voice.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
-                  <div className="mt-5 flex flex-wrap items-center gap-3">
-                    <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-white px-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)] sm:max-w-[420px]">
-                      <Search className="h-4 w-4 shrink-0 text-[#86868B]" />
+                  {/* Finding someone is the main job here, so the search leads. */}
+                  <div className="mt-7 flex flex-wrap items-center gap-3">
+                    <label className="flex h-14 min-w-0 flex-1 items-center gap-3 rounded-full bg-white px-6 shadow-[0_6px_24px_rgba(0,0,0,0.18)] ring-2 ring-transparent transition-shadow focus-within:ring-white/70 sm:max-w-[760px]">
+                      <Search className="h-5 w-5 shrink-0 text-[#6E6E73]" strokeWidth={2.2} />
                       <input
                         value={text}
                         onChange={(e) => setText(e.target.value)}
-                        placeholder="Search by name, company, role or year"
+                        placeholder={org ? `Search ${org.shortName} alumni by name, company, role or year` : "Search by name, company, role or year"}
                         aria-label="Search the directory"
-                        className="min-w-0 flex-1 bg-transparent text-[14px] text-[#1D1D1F] outline-none placeholder:text-[#86868B]"
+                        className="min-w-0 flex-1 bg-transparent text-[17px] text-[#1D1D1F] outline-none placeholder:text-[#86868B]"
                       />
+                      {text && (
+                        <button type="button" onClick={() => setText("")} aria-label="Clear search" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#86868B] hover:bg-[#F5F5F7]">
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
                     </label>
                     <select
                       value={sort}
                       onChange={(e) => setSort(e.target.value as Sort)}
                       aria-label="Sort"
-                      className="h-10 rounded-full bg-white px-4 text-[14px] text-[#1D1D1F] shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none"
+                      className="h-14 rounded-full bg-white px-5 text-[15px] text-[#1D1D1F] shadow-[0_6px_24px_rgba(0,0,0,0.12)] outline-none"
                     >
                       <option value="complete">Most complete first</option>
                       <option value="recent">Newest first</option>
@@ -197,7 +254,9 @@ export default function OrgDirectoryPage() {
                       <option value="name">Last name A–Z</option>
                     </select>
                     {data && text && (
-                      <span className="text-[13px] text-[#6E6E73]">{people.length.toLocaleString()} match{people.length === 1 ? "" : "es"}</span>
+                      <span className={`text-[14px] ${branded ? "text-white/85" : "text-[#6E6E73]"}`}>
+                        {people.length.toLocaleString()} match{people.length === 1 ? "" : "es"}
+                      </span>
                     )}
                   </div>
 
@@ -216,7 +275,7 @@ export default function OrgDirectoryPage() {
                     ))}
                   </div>
                   {data && people.length === 0 && (
-                    <p className="mt-8 text-center text-[14px] text-[#6E6E73]">No alumni match "{text}".</p>
+                    <p className={`mt-8 text-center text-[15px] ${branded ? "text-white/85" : "text-[#6E6E73]"}`}>No alumni match "{text}".</p>
                   )}
                   {shown < people.length && <div ref={sentinel} className="h-10" />}
                 </>
