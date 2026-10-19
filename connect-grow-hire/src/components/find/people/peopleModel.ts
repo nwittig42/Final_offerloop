@@ -25,8 +25,10 @@ export interface Person {
   matchScore: number | null;
   rank: number;
   deckId: string;
-  // Org alumni directory badge, e.g. "USC TKE Alumni '17" (OFF-42).
+  // Org alumni directory badge, e.g. "USC TKE Alumni" (OFF-42).
   orgBadge?: string;
+  // Real graduation year from an org directory; absent when it doesn't list one.
+  gradYear?: number | null;
 }
 
 function str(v: unknown): string {
@@ -120,6 +122,7 @@ export function personFromSearch(c: Contact, index: number): Person {
     rank: index,
     deckId: "",
     orgBadge: str(c.OrgBadge),
+    gradYear: typeof c.OrgGradYear === "number" ? c.OrgGradYear : null,
   };
 }
 
@@ -147,6 +150,7 @@ export function personFromDirectory(m: DirectoryMember, index: number, revealedE
     rank: index,
     deckId: "",
     orgBadge: m.badge,
+    gradYear: m.gradYear,
   };
 }
 

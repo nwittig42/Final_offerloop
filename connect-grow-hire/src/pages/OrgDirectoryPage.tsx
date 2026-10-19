@@ -17,6 +17,8 @@ import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
 import { personFromDirectory, type Person } from "@/components/find/people/peopleModel";
+import { orgAccent, orgMonogram } from "@/hooks/useOrgs";
+import { ORGS_PAGE_BG } from "@/components/find/orgs/OrgsView";
 
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
 const PAGE = 48;
@@ -130,10 +132,10 @@ export default function OrgDirectoryPage() {
         <AppSidebar />
         <MainContentWrapper>
           <AppHeader title="" />
-          <div className="flex-1 overflow-y-auto bg-[#F5F5F7]">
+          <div className="flex-1 overflow-y-auto" style={{ background: ORGS_PAGE_BG }}>
             <div className="mx-auto max-w-[1320px] px-4 pb-16 pt-4 sm:px-10" style={{ fontFamily: APPLE_FONT }}>
-              <Link to="/find" className="mt-4 inline-flex items-center gap-1 text-[13px] text-[var(--accent,#4A60A8)] hover:underline">
-                <ArrowLeft className="h-3.5 w-3.5" /> Back to Find
+              <Link to="/find?view=orgs" className="mt-4 inline-flex items-center gap-1 text-[13px] text-[#3A4E8C] hover:underline">
+                <ArrowLeft className="h-3.5 w-3.5" /> Organizations
               </Link>
 
               {error ? (
@@ -149,14 +151,25 @@ export default function OrgDirectoryPage() {
                 </div>
               ) : (
                 <>
-                  <div className="mt-3">
-                    <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em] text-[#1D1D1F]">
-                      {org ? `${org.name} alumni` : "Alumni directory"}
-                    </h1>
-                    <p className="mt-1 text-[14px] text-[#6E6E73]">
-                      {data ? `${data.members.length.toLocaleString()} alumni you can reach` : "Loading…"}
-                      {org?.school ? ` · ${org.school}` : ""}. Browsing is free. Contact unlocks their email for 10 credits and drafts an intro.
-                    </p>
+                  {/* The org's own space: a header band in its color */}
+                  <div
+                    className="mt-3 flex items-center gap-4 rounded-[26px] px-5 py-6 text-white sm:px-8"
+                    style={{ background: `linear-gradient(160deg, ${orgAccent(org)} 0%, #1A1A1A 140%)` }}
+                  >
+                    {org && (
+                      <span className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-[16px] bg-white/15 text-[17px] font-bold tracking-wide ring-1 ring-white/25 sm:flex" aria-hidden>
+                        {orgMonogram(org)}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]">
+                        {org ? `${org.name} alumni` : "Alumni directory"}
+                      </h1>
+                      <p className="mt-1 text-[14px] text-white/75">
+                        {data ? `${data.members.length.toLocaleString()} alumni you can reach` : "Loading…"}
+                        {org?.school ? ` · ${org.school}` : ""}. Browsing is free. Contact unlocks their email for 10 credits and drafts an intro.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -176,8 +189,8 @@ export default function OrgDirectoryPage() {
                       aria-label="Sort"
                       className="h-10 rounded-full bg-white px-4 text-[14px] text-[#1D1D1F] shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none"
                     >
-                      <option value="recent">Most recent class first</option>
-                      <option value="oldest">Oldest class first</option>
+                      <option value="recent">Newest first</option>
+                      <option value="oldest">Oldest first</option>
                       <option value="name">Last name A–Z</option>
                     </select>
                     {data && text && (

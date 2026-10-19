@@ -184,9 +184,16 @@ def load_org_members(db, org_id: str) -> list[dict]:
 
 
 def org_badge(org: dict, member: dict) -> str:
-    year = member.get("link_chapterYear") or member.get("link_classOfYear")
-    base = f"{org.get('shortName') or org.get('name')} Alumni"
-    return f"{base} '{int(year) % 100:02d}" if isinstance(year, int) else base
+    # No year here: the "'YY" on a directory name is the year they joined
+    # the chapter, not graduation. The real class year rides separately as
+    # OrgGradYear and only when the directory lists one.
+    return f"{org.get('shortName') or org.get('name')} Alumni"
+
+
+def grad_year(member: dict) -> int | None:
+    """The directory's own "Class of YYYY", never estimated from the join year."""
+    y = member.get("link_classOfYear")
+    return y if isinstance(y, int) and 1900 < y < 2100 else None
 
 
 def member_contact(member: dict, org: dict) -> dict | None:
@@ -234,7 +241,9 @@ def member_contact(member: dict, org: dict) -> dict | None:
         "OrgId": org["id"],
         "OrgBadge": org_badge(org, member),
         "OrgHeadline": headline,
+        # Join or class year, only for ordering by recency.
         "OrgYear": year if isinstance(year, int) else None,
+        "OrgGradYear": grad_year(member),
     }
 
 
@@ -341,6 +350,7 @@ def directory_row(contact: dict) -> dict:
         "company": contact["Company"],
         "headline": contact["OrgHeadline"],
         "year": contact["OrgYear"],
+        "gradYear": contact["OrgGradYear"],
         "badge": contact["OrgBadge"],
         "linkedinUrl": contact["LinkedIn"],
         "photoUrl": contact["PhotoUrl"],

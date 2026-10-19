@@ -173,7 +173,7 @@ TKE = {"id": "usc_tke", "name": "USC Tau Kappa Epsilon", "shortName": "USC TKE",
 
 def _contact(key="p1", email="jamie@gmail.com"):
     return {"PersonKey": key, "FirstName": "Jamie", "LastName": "Park", "Title": "", "Company": "",
-            "OrgHeadline": "Goldman Sachs Analyst", "OrgYear": 2017, "OrgBadge": "USC TKE Alumni '17",
+            "OrgHeadline": "Goldman Sachs Analyst", "OrgYear": 2017, "OrgGradYear": 2020, "OrgBadge": "USC TKE Alumni",
             "LinkedIn": "", "PhotoUrl": "", "College": "USC", "Email": email, "Phone": "", "PersonalEmail": email}
 
 
@@ -205,7 +205,7 @@ def test_members_rows_never_carry_email_or_phone(client):
     body = r.get_json()
     assert r.status_code == 200
     row = body["members"][0]
-    assert row["hasEmail"] is True and row["badge"] == "USC TKE Alumni '17"
+    assert row["hasEmail"] is True and row["badge"] == "USC TKE Alumni" and row["gradYear"] == 2020
     assert "jamie@gmail.com" not in json_dumps(body["members"])
     assert not any(k.lower().endswith(("email", "phone")) and k != "hasEmail" for k in row)
 

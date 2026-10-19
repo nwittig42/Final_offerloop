@@ -92,6 +92,17 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             {person.title || " "}
           </div>
         </div>
+        {/* Class year from an org directory (OFF-42): only when it's real. */}
+        {person.gradYear ? (
+          <span
+            className="-mt-1 shrink-0 select-none leading-none"
+            title={`Class of ${person.gradYear}`}
+            aria-label={`Class of ${person.gradYear}`}
+            style={{ fontFamily: '"Instrument Serif", Georgia, serif', fontStyle: "italic", fontSize: 30, color: "#8A6116" }}
+          >
+            ’{String(person.gradYear % 100).padStart(2, "0")}
+          </span>
+        ) : null}
         {onToggleBookmark && !isSample && (
           <button
             type="button"

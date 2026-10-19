@@ -61,14 +61,18 @@ def test_member_contact_prefers_work_email_and_badge():
     c = od.member_contact(_member(workEmail="jpark@gs.com", workEmailStatus="DELIVERABLE"), TKE)
     assert c["Email"] == "jpark@gs.com"
     assert c["EmailVerified"] is True
-    assert c["OrgBadge"] == "USC TKE Alumni '17"
+    # The "'17" on the name is the chapter join year, so the badge carries no year.
+    assert c["OrgBadge"] == "USC TKE Alumni"
     assert c["College"] == "University of Southern California"
     assert c["WorkSummary"] == "Goldman Sachs Investment Banking Analyst"
     assert c["Phone"] == ""  # never surfaced, even when the directory has one
-    no_year = od.member_contact(_member(link_chapterYear=None), TKE)
-    assert no_year["OrgBadge"] == "USC TKE Alumni"
-    class_year = od.member_contact(_member(link_chapterYear=None, link_classOfYear=2009), TKE)
-    assert class_year["OrgBadge"] == "USC TKE Alumni '09"
+
+
+def test_grad_year_is_only_the_real_class_year():
+    # Join year only: no graduation year, never an estimate.
+    assert od.member_contact(_member(link_chapterYear=2020), TKE)["OrgGradYear"] is None
+    assert od.member_contact(_member(link_chapterYear=2020, link_classOfYear=2023), TKE)["OrgGradYear"] == 2023
+    assert od.member_contact(_member(link_chapterYear=None, link_classOfYear=2009), TKE)["OrgGradYear"] == 2009
 
 
 def test_filter_by_query_company_and_title():
@@ -104,7 +108,7 @@ def test_search_org_directory_joins_links_and_people():
     db.get_all.return_value = [person]
     out = od.search_org_directory(db, ["usc_tke"], {"companies": [{"name": "Goldman"}]}, [TKE])
     assert [c["Email"] for c in out] == ["jamie@gmail.com"]
-    assert out[0]["OrgBadge"] == "USC TKE Alumni '17"
+    assert out[0]["OrgBadge"] == "USC TKE Alumni"
     od._members_cache.clear()
 
 
@@ -179,7 +183,7 @@ def test_prompt_search_tke_alumni_alone_is_not_too_vague(search_client):
     r, parse, provider = _search(search_client, "TKE alumni", ACTIVE, [_member()])
     assert r.status_code == 200, r.get_json()
     body = r.get_json()
-    assert [c["OrgBadge"] for c in body["contacts"]] == ["USC TKE Alumni '17"]
+    assert [c["OrgBadge"] for c in body["contacts"]] == ["USC TKE Alumni"]
     assert body["parsed_query"]["org_ids"] == ["usc_tke"]
     parse.assert_not_called()  # nothing left to parse once "TKE alumni" is stripped
     provider.assert_not_called()

@@ -161,7 +161,8 @@ export interface Contact {
   EmailConfidenceScore?: number; // 0-100 from the providing source
   // Set on contacts from an org alumni directory (OFF-42).
   OrgId?: string;
-  OrgBadge?: string; // e.g. "USC TKE Alumni '17"
+  OrgBadge?: string; // e.g. "USC TKE Alumni"
+  OrgGradYear?: number | null; // the directory's real "Class of" year, else null
 }
 
 // An org alumni directory a student can join (OFF-42).
@@ -173,6 +174,8 @@ export interface Org {
   type: string;
   memberCount: number;
   aliases: string[];
+  // The org's own color ("" = app default), for its space in the app.
+  accentColor: string;
 }
 
 // One alum in an org's browsable directory. No email or phone until a
@@ -184,7 +187,8 @@ export interface DirectoryMember {
   title: string;
   company: string;
   headline: string;
-  year: number | null;
+  year: number | null; // join or class year, for ordering only
+  gradYear: number | null; // real "Class of" year, never estimated
   badge: string;
   linkedinUrl: string;
   photoUrl: string;

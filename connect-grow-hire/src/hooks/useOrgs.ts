@@ -45,3 +45,17 @@ export function sortOrgsForSchool(orgs: Org[], school: string | null | undefined
     s.toLowerCase() === school.toLowerCase() || (!!short && getUniversityShortName(s) === short);
   return [...orgs].sort((a, b) => Number(mine(b.school)) - Number(mine(a.school)));
 }
+
+const DEFAULT_ACCENT = "#3A4E8C";
+
+// The org's color, or the app's indigo when it has none.
+export function orgAccent(org: Pick<Org, "accentColor"> | null | undefined): string {
+  return org?.accentColor && /^#[0-9a-fA-F]{6}$/.test(org.accentColor) ? org.accentColor : DEFAULT_ACCENT;
+}
+
+// "USC TKE" -> "TKE": the org's own letters for its monogram.
+export function orgMonogram(org: Pick<Org, "shortName" | "name">): string {
+  const words = (org.shortName || org.name).split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1] || "";
+  return (last.length <= 4 ? last : words.map((w) => w[0]).join("")).toUpperCase().slice(0, 4);
+}
