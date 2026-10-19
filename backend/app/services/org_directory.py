@@ -216,15 +216,34 @@ def _names(items) -> list[str]:
     return out
 
 
-def filter_by_query(contacts: list[dict], parsed: dict | None) -> list[dict]:
+_NON_ROLE = {"people", "person", "folks", "anyone", "someone", "everyone", "contacts", "guys"}
+
+
+def _role_requested(parsed: dict, prompt: str) -> bool:
+    """The parser invents titles for any company ("People at Google" gets a
+    full title list), so only filter by title when the user typed a role."""
+    rest = (prompt or "").lower()
+    for n in _names(parsed.get("companies")) + _names(parsed.get("locations")):
+        rest = rest.replace(n, " ")
+    words = [w for w in _tidy(re.sub(r"[^\w\s]", " ", rest)).split() if w not in _NON_ROLE and w not in _DANGLING]
+    return bool(words)
+
+
+def filter_by_query(contacts: list[dict], parsed: dict | None, prompt: str | None = None) -> list[dict]:
     """Narrow by company and title. Locations, schools and industries are
-    ignored: directories carry no such data, and every member shares the school."""
+    ignored: directories carry no such data, and every member shares the school.
+    `prompt` is the user's remaining text; titles apply only if it names a role
+    (None means always apply them)."""
     parsed = parsed or {}
     companies = _names(parsed.get("companies"))
-    titles = _names(parsed.get("title_variations"))
-    for c in parsed.get("companies") or []:
-        if isinstance(c, dict):
-            titles.extend(_names(c.get("matched_titles")))
+    titles: list[str] = []
+    if prompt is None or _role_requested(parsed, prompt):
+        titles = _names(parsed.get("title_variations"))
+        for c in parsed.get("companies") or []:
+            if isinstance(c, dict):
+                titles.extend(_names(c.get("matched_titles")))
+        # "Investment Banking Analyst" also matches a bare "Analyst" headline.
+        titles += [t.split()[-1] for t in titles if " " in t]
 
     def haystack(c: dict) -> str:
         return " ".join([c.get("Company") or "", c.get("Title") or "", c.get("OrgHeadline") or ""]).lower()
@@ -251,7 +270,7 @@ def rank(contacts: list[dict]) -> list[dict]:
     )
 
 
-def search_org_directory(db, org_ids: list[str], parsed: dict | None, orgs: list[dict], cap: int = 200) -> list[dict]:
+def search_org_directory(db, org_ids: list[str], parsed: dict | None, orgs: list[dict], prompt: str | None = None, cap: int = 200) -> list[dict]:
     by_id = {o["id"]: o for o in orgs}
     seen: set[str] = set()
     out: list[dict] = []
@@ -268,4 +287,4 @@ def search_org_directory(db, org_ids: list[str], parsed: dict | None, orgs: list
                 continue
             seen.add(key)
             out.append(c)
-    return rank(filter_by_query(out, parsed))[:cap]
+    return rank(filter_by_query(out, parsed, prompt))[:cap]

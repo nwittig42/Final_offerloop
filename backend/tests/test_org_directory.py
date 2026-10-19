@@ -111,3 +111,97 @@ def test_active_org_ids_ignores_garbage():
     assert od.active_org_ids(None) == []
     assert od.active_org_ids({"orgMemberships": "x"}) == []
     assert od.active_org_ids({"orgMemberships": {"a": {"status": "active"}, "b": {"status": "pending"}, "c": 1}}) == ["a"]
+
+
+def test_titles_only_apply_when_a_role_was_typed():
+    gs_vp = od.member_contact(_member(email="v@x.com", directoryHeadline="Goldman Sachs Vice President"), TKE)
+    gs_md = od.member_contact(_member(email="m@x.com", directoryHeadline="Goldman Sachs Managing Director"), TKE)
+    parsed = {"companies": [{"name": "Goldman Sachs", "matched_titles": ["Investment Banking Analyst"]}],
+              "title_variations": ["Investment Banking Analyst", "Vice President"]}
+    # "Goldman Sachs" alone: the parser's invented titles must not narrow it.
+    assert od.filter_by_query([gs_vp, gs_md], parsed, "Goldman Sachs") == [gs_vp, gs_md]
+    assert od.filter_by_query([gs_vp, gs_md], parsed, "people at Goldman Sachs") == [gs_vp, gs_md]
+    # A typed role does narrow, and the generic tail ("President") counts.
+    assert od.filter_by_query([gs_vp, gs_md], parsed, "VPs at Goldman Sachs") == [gs_vp]
+
+
+# ---------------------------------------------------------------------------
+# /api/prompt-search in org mode
+# ---------------------------------------------------------------------------
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+FAKE_USER = {"uid": "test-user-id", "email": "test@example.com"}
+
+
+@pytest.fixture
+def search_client():
+    from flask import Flask
+    from app.routes.runs import runs_bp
+    app = Flask(__name__)
+    app.register_blueprint(runs_bp)
+    with patch("firebase_admin._apps", {"[DEFAULT]": MagicMock()}), \
+         patch("firebase_admin.auth.verify_id_token", return_value=FAKE_USER):
+        yield app.test_client()
+
+
+def _search(client, prompt, user_data, members, parsed=None, filters=None, saved_emails=()):
+    db = MagicMock()
+    user_doc = MagicMock(exists=True)
+    user_doc.to_dict.return_value = {"subscriptionTier": "pro", "credits": 500, **user_data}
+    db.collection.return_value.document.return_value.get.return_value = user_doc
+    exclusion = {"identity_set": set(), "email_set": set(saved_emails), "linkedin_set": set(), "name_company_set": set()}
+    provider = MagicMock(side_effect=AssertionError("provider ladder called in org mode"))
+    with patch("app.routes.runs.get_db", return_value=db), \
+         patch("app.routes.runs.check_and_reset_credits", return_value=500), \
+         patch("app.routes.runs._build_exclusion_data_from_firestore", return_value=exclusion), \
+         patch("app.routes.runs.parse_search_prompt_structured", return_value=parsed or {"confidence": "low"}) as parse, \
+         patch("app.routes.runs.coresignal_client.search_contacts_from_prompt", provider), \
+         patch("app.routes.runs.deduct_credits_atomic", return_value=(True, 440)), \
+         patch("app.services.org_directory.list_orgs", return_value=[TKE]), \
+         patch("app.services.org_directory.load_org_members", return_value=members):
+        body = {"prompt": prompt, "batchSize": 6, "mode": "preview"}
+        if filters:
+            body["filters"] = filters
+        r = client.post("/api/prompt-search", data=json.dumps(body), content_type="application/json",
+                        headers={"Authorization": "Bearer t"})
+    return r, parse, provider
+
+
+def test_prompt_search_tke_alumni_alone_is_not_too_vague(search_client):
+    r, parse, provider = _search(search_client, "TKE alumni", ACTIVE, [_member()])
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert [c["OrgBadge"] for c in body["contacts"]] == ["USC TKE Alumni '17"]
+    assert body["parsed_query"]["org_ids"] == ["usc_tke"]
+    parse.assert_not_called()  # nothing left to parse once "TKE alumni" is stripped
+    provider.assert_not_called()
+
+
+def test_prompt_search_no_org_match_does_not_fall_through(search_client):
+    parsed = {"confidence": "high", "companies": [{"name": "Bain & Company"}], "title_variations": []}
+    r, _, provider = _search(search_client, "TKE alumni at Bain & Company", ACTIVE, [_member()], parsed=parsed)
+    body = r.get_json()
+    assert r.status_code == 200
+    assert body["contacts"] == []
+    assert "No USC TKE alumni matched" in body["message"]
+    provider.assert_not_called()
+
+
+def test_prompt_search_skips_already_saved_members(search_client):
+    members = [_member(email="saved@x.com", link_chapterYear=2020), _member(email="new@x.com", link_chapterYear=2010)]
+    r, _, _ = _search(search_client, "anything", ACTIVE, members, filters={"organizations": ["usc_tke"]},
+                      parsed={"confidence": "low"}, saved_emails=("saved@x.com",))
+    assert [c["Email"] for c in r.get_json()["contacts"]] == ["new@x.com"]
+
+
+def test_prompt_search_non_member_gets_normal_search(search_client):
+    r, parse, _ = _search(search_client, "TKE alumni", {}, [_member()],
+                          parsed={"confidence": "high", "companies": [], "title_variations": ["analyst"]})
+    assert r.status_code == 200, r.get_json()
+    parse.assert_called_once_with("TKE alumni")  # full prompt, normal parse
+    body = r.get_json()
+    assert "org_ids" not in body["parsed_query"]
+    assert all(c.get("source") != "org_directory" for c in body["contacts"])
