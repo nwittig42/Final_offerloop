@@ -9,6 +9,8 @@ import { linkedInHref } from "@/components/contacts/contactsModel";
 import { relationFor, type Person } from "./peopleModel";
 import { PersonAvatar } from "./PersonAvatar";
 import { LinkedInLink } from "./LinkedInLink";
+import { useEffect, useState } from "react";
+import { MIN_LOGO_PX, findUniversity, sameUniversity, universityLogoSources } from "@/lib/universityLogos";
 
 export type ContactState = "idle" | "working" | "drafted" | "no_email";
 
@@ -45,6 +47,53 @@ function Chip({ icon, children }: { icon: React.ReactNode; children: React.React
   );
 }
 
+// School pill: the school's logo from the library (src/lib/universityLogos)
+// in place of its name. A school we have no logo for, or whose logo fails
+// to load, keeps the text pill. When the person went to the student's own
+// school, the pill takes the school's color and says "Alum".
+function SchoolChip({ school, sameSchool }: { school: string; sameSchool: boolean }) {
+  const uni = findUniversity(school);
+  const sources = uni ? universityLogoSources(uni) : [];
+  const [idx, setIdx] = useState(0);
+  useEffect(() => setIdx(0), [school]);
+  const logo = sources[idx];
+  const color = uni?.color ?? "#0066CC";
+
+  const highlight: React.CSSProperties = sameSchool
+    ? { background: `${color}1A`, boxShadow: `inset 0 0 0 1px ${color}59` }
+    : { background: FILL };
+  const title = sameSchool ? `${school}, same school as you` : school;
+  const alum = sameSchool && (
+    <span className="text-[11px] font-semibold" style={{ color }}>Alum</span>
+  );
+
+  if (!logo) {
+    return (
+      <span
+        className="inline-flex h-6 max-w-full items-center gap-1 rounded-full px-2.5 text-[12px] font-medium"
+        style={{ ...highlight, color: sameSchool ? color : "#424245" }}
+        title={title}
+      >
+        <GraduationCap className="h-3 w-3 shrink-0" style={{ color: sameSchool ? color : INK_3 }} />
+        <span className="truncate">{school}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5" style={highlight} title={title}>
+      <img
+        src={logo}
+        alt={school}
+        className="h-4 w-auto max-w-[40px] object-contain"
+        loading="lazy"
+        onLoad={(e) => { if (e.currentTarget.naturalWidth < MIN_LOGO_PX) setIdx((i) => i + 1); }}
+        onError={() => setIdx((i) => i + 1)}
+      />
+      {alum}
+    </span>
+  );
+}
+
 interface PersonCardProps {
   person: Person;
   contactState: ContactState;
@@ -56,9 +105,11 @@ interface PersonCardProps {
   featured?: boolean;
   bookmarked?: boolean;
   onToggleBookmark?: () => void;
+  // The signed-in student's school: highlights the pill on fellow alumni.
+  userSchool?: string | null;
 }
 
-export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, bookmarked = false, onToggleBookmark }: PersonCardProps) {
+export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, bookmarked = false, onToggleBookmark, userSchool = null }: PersonCardProps) {
   const linkedIn = linkedInHref(person.linkedinUrl);
   const isSample = person.source === "sample";
   const reason = person.reasons[0] || (featured ? "Most in common with you" : "");
@@ -131,7 +182,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
         ) : (
           <FitBadge score={person.matchScore} sample={isSample} />
         )}
-        {person.school && <Chip icon={<GraduationCap className="h-3 w-3" />}>{person.school}</Chip>}
+        {person.school && <SchoolChip school={person.school} sameSchool={sameUniversity(person.school, userSchool)} />}
         {person.title && <Chip icon={<User className="h-3 w-3" />}>{relationFor(person.title)}</Chip>}
       </div>
 

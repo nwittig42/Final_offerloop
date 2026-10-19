@@ -420,6 +420,7 @@ const FindPage: React.FC = () => {
                       onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
                       bookmarked={bookmarks.isBookmarked(p)}
                       onToggleBookmark={() => void bookmarks.toggle(p)}
+                      userSchool={userUniversity}
                     />
                   );
                   // Search results are one flat grid. The feed leads with the
