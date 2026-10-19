@@ -1,5 +1,7 @@
 """Tests for email open tracking (services/email_tracking.py + pixel route)."""
+import ast
 from email import message_from_bytes
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -291,37 +293,42 @@ def test_pixel_route_serves_gif_even_when_recording_fails(client):
 UNTRACKED_OK = {}
 
 
+def _gmail_send_calls(tree):
+    """Calls shaped like <x>.drafts().create(...) / <x>.messages().send(...),
+    wherever line breaks fall."""
+    wanted = {"create": "drafts", "send": "messages"}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in wanted
+                and isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Attribute)
+                and node.func.value.func.attr == wanted[node.func.attr]):
+            yield node
+
+
 def test_every_gmail_send_site_is_tracked():
     """Every Gmail draft/send site must carry the pixel (email_tracking) or
     pass tracking_kind to the shared sender."""
-    import ast
-    import re
-    from pathlib import Path
-
     app_dir = Path(__file__).resolve().parent.parent / "app"
-    pattern = re.compile(r"drafts\(\)\.create\(|messages\(\)\.send\(")
     offenders = []
     for path in sorted(app_dir.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
-        if not pattern.search(source):
-            continue
         lines = source.splitlines()
-        funcs = [n for n in ast.walk(ast.parse(source))
+        tree = ast.parse(source)
+        funcs = [n for n in ast.walk(tree)
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        for lineno, line in enumerate(lines, 1):
-            if not pattern.search(line) or line.lstrip().startswith("#"):
-                continue
-            enclosing = [f for f in funcs if f.lineno <= lineno <= f.end_lineno]
+        for call in _gmail_send_calls(tree):
+            where = f"{path.relative_to(app_dir.parent)}:{call.lineno}"
+            enclosing = [f for f in funcs if f.lineno <= call.lineno <= f.end_lineno]
             if not enclosing:
-                offenders.append(f"{path.relative_to(app_dir.parent)}:{lineno} (module level)")
+                offenders.append(f"{where} (module level)")
                 continue
             fn = max(enclosing, key=lambda f: f.lineno)  # innermost
-            body = "\n".join(lines[fn.lineno - 1:fn.end_lineno])
-            key = f"{path.name}:{fn.name}"
-            if key in UNTRACKED_OK:
+            if f"{path.name}:{fn.name}" in UNTRACKED_OK:
                 continue
+            body = "\n".join(lines[fn.lineno - 1:fn.end_lineno])
             if "email_tracking" not in body and "tracking_kind" not in body:
-                offenders.append(f"{path.relative_to(app_dir.parent)}:{lineno} in {fn.name}()")
+                offenders.append(f"{where} in {fn.name}()")
     assert not offenders, (
         "Gmail draft/send sites without open tracking (use email_tracking, or add "
         "to UNTRACKED_OK with a reason):\n  " + "\n  ".join(offenders)
@@ -340,9 +347,6 @@ def test_register_for_draft_stores_message_id(db):
 
 def test_every_draft_register_passes_message_id():
     """Draft tokens must store the Gmail message id (read later for send time)."""
-    import ast
-    from pathlib import Path
-
     app_dir = Path(__file__).resolve().parent.parent / "app"
     offenders = []
     for path in sorted(app_dir.rglob("*.py")):
