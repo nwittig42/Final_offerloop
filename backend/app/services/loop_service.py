@@ -451,6 +451,8 @@ def create_loop(uid: str, tier: str, payload: dict) -> dict:
     db.collection("users").document(uid) \
       .collection("loops").document(loop_id).set(doc)
 
+    # A Loop names firms and roles the People deck ranks toward.
+    _refresh_people_deck(uid, db)
     return {"id": loop_id, **doc}
 
 
@@ -550,6 +552,8 @@ def update_loop(
 
     if filtered:
         ref.update(filtered)
+        if {"briefParsed", "briefText", "status"} & set(filtered):
+            _refresh_people_deck(uid, db)
     return get_loop(uid, loop_id)
 
 
@@ -565,7 +569,18 @@ def delete_loop(uid: str, loop_id: str) -> bool:
     if not ref.get().exists:
         return False
     ref.delete()
+    _refresh_people_deck(uid, db)
     return True
+
+
+def _refresh_people_deck(uid: str, db) -> None:
+    """Rebuild the student's saved People deck in the background. Never
+    raises: a Loop save must not fail over a deck refresh."""
+    try:
+        from app.services.people_deck_cache import mark_stale
+        mark_stale(uid, db, reason="loop")
+    except Exception:
+        logger.debug("people deck refresh failed uid=%s", uid)
 
 
 # ── Lifecycle ───────────────────────────────────────────────────────────────

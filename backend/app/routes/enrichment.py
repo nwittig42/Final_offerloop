@@ -259,6 +259,13 @@ def enrich_linkedin_for_onboarding():
 
         try:
             user_ref.set(enrichment_update, merge=True, timeout=15.0)
+            # LinkedIn instead of (or on top of) a resume: same head start
+            # on the People deck as a resume upload.
+            try:
+                from app.services.people_deck_cache import schedule_build
+                schedule_build(uid, "linkedin")
+            except Exception:
+                logger.debug("[LinkedIn Enrich] people deck build not queued")
         except Exception as write_err:
             logger.error(f"[LinkedIn Enrich] Firestore write failed: {write_err}")
             return jsonify({

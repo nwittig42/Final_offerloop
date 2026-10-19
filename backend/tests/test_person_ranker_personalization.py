@@ -304,6 +304,40 @@ def test_feedback_returns_200_and_tags_the_variant(http_client, authed):
                              headers={"Authorization": "Bearer fake"})
     assert r.status_code == 200
     assert log.call_args.kwargs["variant"] == pr.ranker_variant("test-uid")
-    written = db.collection.return_value.document.return_value.collection.return_value \
-        .document.return_value.set.call_args[0][0]
-    assert written["company"] == "evercore"
+    sets = db.collection.return_value.document.return_value.collection.return_value \
+        .document.return_value.set.call_args_list
+    (pref,) = [c.args[0] for c in sets if "signal" in c.args[0]]
+    assert pref["company"] == "evercore"
+    # The swipe also takes them out of the saved deck.
+    assert any("removed" in c.args[0] for c in sets)
+
+
+def test_general_deck_comes_from_the_saved_list(http_client, authed):
+    db = MagicMock()
+    db.get_all.return_value = []
+    served = ([_deck_item("ann", "Evercore")], {"ann": {"rank_score": 30}})
+    with patch("backend.app.routes.ranker.get_db", return_value=db), \
+         patch("backend.app.routes.ranker.people_deck_cache.serve", return_value=served), \
+         patch("backend.app.routes.ranker.rank_people_for_user") as live, \
+         patch("backend.app.routes.ranker._run_in_background"):
+        r = http_client.get("/api/ranker/candidates?limit=10&prefetch=0",
+                            headers={"Authorization": "Bearer fake"})
+    assert r.status_code == 200
+    assert [c["person"]["id"] for c in r.get_json()["candidates"]] == ["ann"]
+    live.assert_not_called()
+
+
+def test_company_deck_stays_live(http_client, authed):
+    db = MagicMock()
+    db.get_all.return_value = []
+    with patch("backend.app.routes.ranker.get_db", return_value=db), \
+         patch("backend.app.routes.ranker.people_deck_cache.serve") as saved, \
+         patch("backend.app.routes.ranker.rank_people_for_user",
+               return_value=[_deck_item("bob", "Stripe")]) as live, \
+         patch("backend.app.routes.ranker.suggest_chips", return_value=[]), \
+         patch("backend.app.routes.ranker._run_in_background"):
+        r = http_client.get("/api/ranker/candidates?limit=10&prefetch=0&company=Stripe",
+                            headers={"Authorization": "Bearer fake"})
+    assert r.status_code == 200
+    saved.assert_not_called()
+    live.assert_called_once()

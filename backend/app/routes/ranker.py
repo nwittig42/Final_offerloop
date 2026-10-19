@@ -30,6 +30,7 @@ from app.services.person_ranker import (
     ranker_variant,
     suggest_chips,
 )
+from app.services import people_deck_cache
 from app.utils.recommendation_events import log_recommendation_event
 
 # ── Spend guardrails for the deck (2026-09-08) ──────────────────────────
@@ -277,10 +278,20 @@ def get_ranked_candidates():
     dig_state = "not_needed"   # not_needed | ran | not_asked | capped
 
     deck_features: dict = {}
-    candidates = rank_people_for_user(
-        uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-        company=company, role=role, focus=focus, features_out=deck_features,
-    )
+    candidates = None
+    # The general deck (no company / role / focus) is served from the
+    # student's saved list, built in the background after onboarding, so
+    # the page fills instantly (people_deck_cache). Narrow decks stay live.
+    general_deck = not (company or role or focus)
+    if general_deck:
+        served = people_deck_cache.serve(uid, db, limit, exclude_ids)
+        if served:
+            candidates, deck_features = served
+    if candidates is None:
+        candidates = rank_people_for_user(
+            uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
+            company=company, role=role, focus=focus, features_out=deck_features,
+        )
 
     # Dry well? DIG (2026-08-30). "Show more from your targets" rank-orders the
     # warehouse, so a target firm nobody has searched yet (Rylan's well was
@@ -590,6 +601,7 @@ def post_ranker_feedback():
         try:
             (db.collection("users").document(uid)
                .collection("peoplePreferences").document(candidate_id).delete())
+            people_deck_cache.restore(uid, db, candidate_id)
         except Exception as exc:
             logger.warning("feedback: restore delete failed uid=%s cid=%s: %s", uid, candidate_id, exc)
         try:
@@ -643,6 +655,7 @@ def post_ranker_feedback():
                "updated_ts":   firestore.SERVER_TIMESTAMP,
                **_swiped_person_fields(db, candidate_id),
            }))
+        people_deck_cache.remove(uid, db, candidate_id)
     except Exception as exc:
         logger.warning(
             "feedback: peoplePreferences write failed uid=%s cid=%s: %s",
@@ -1289,6 +1302,7 @@ def candidate_outreach(candidate_id):
             contact_doc["gmailThreadId"] = gmail_thread_id
     try:
         contact_ref.set(contact_doc)
+        people_deck_cache.remove(uid, db, candidate_id)
     except Exception as exc:
         logger.warning(
             "outreach: contact doc write failed uid=%s cid=%s: %s "

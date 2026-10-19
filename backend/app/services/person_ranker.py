@@ -141,11 +141,14 @@ def rank_people_for_user(
     role: str | None = None,
     focus: str | None = None,
     features_out: dict | None = None,
+    max_limit: int = MAX_RANKED_LIMIT,
 ) -> list[dict]:
     """Return a diversified, ranked feed of people uid should reach out to.
 
     features_out, when given, is filled with {candidate_id: features} for
     every person returned, so the route can log what the ranker saw.
+    max_limit raises the HTTP ceiling for the background deck build
+    (people_deck_cache), which saves a longer list than one response holds.
 
     Response element shape:
       {
@@ -169,7 +172,7 @@ def rank_people_for_user(
       * unexpected Firestore / scorer errors (never raises — the deck
         contract requires an empty deck rather than a 500)
     """
-    limit = max(1, min(int(limit or DEFAULT_RANKED_LIMIT), MAX_RANKED_LIMIT))
+    limit = max(1, min(int(limit or DEFAULT_RANKED_LIMIT), max(MAX_RANKED_LIMIT, int(max_limit))))
 
     user_ctx = _load_user_context(uid, db)
     if user_ctx is None:
@@ -230,9 +233,15 @@ def rank_people_for_user(
         try:
             from app.services.warehouse_warm import _demand_ranked_firms
             seeds = [disp for disp, _slug, _score in _demand_ranked_firms(db)[:12]]
+        except ImportError:
+            # warehouse_warm (the nightly demand ranking) only exists on the
+            # mobile backend. Without it every brand-new student opened an
+            # empty deck; fall back to the firms students in their lane
+            # most often network into.
+            seeds = default_seed_firms(user_ctx["profile"])
         except Exception:
             logger.exception("person_ranker: seed-firm fallback failed uid=%s", uid)
-            seeds = []
+            seeds = default_seed_firms(user_ctx["profile"])
         if not seeds:
             logger.info("person_ranker: sparse profile uid=%s and no seeds, returning empty deck", uid)
             return []
@@ -723,6 +732,64 @@ def _score_one(user_ctx: dict, candidate: dict) -> dict:
         return {"score": 0, "tier": "cold", "reasons": [], "briefing": ""}
 
 
+# ── Starter firms for a profile with no targets ───────────────────────
+
+# Keyword → the firms students in that lane most often network into. Same
+# lanes as the website feed (connect-grow-hire find/people/feedSeeds.ts).
+_SEED_LANES = [
+    (re.compile(r"invest(ment)? bank|\bib\b|banking|private equity|\bpe\b|hedge fund|asset management|sales (and|&) trading|capital markets|finance", re.I),
+     ["Goldman Sachs", "JPMorgan Chase", "Morgan Stanley", "Evercore", "Blackstone", "Bank of America"]),
+    (re.compile(r"consult|strategy|management consulting", re.I),
+     ["McKinsey & Company", "Boston Consulting Group", "Bain & Company", "Deloitte", "Accenture"]),
+    (re.compile(r"account|audit|\btax\b|\bcpa\b|assurance", re.I),
+     ["Deloitte", "PwC", "EY", "KPMG"]),
+    (re.compile(r"software|engineer|computer science|\bcs\b|tech|product manag|data scien|machine learning|\bai\b", re.I),
+     ["Google", "Meta", "Apple", "Amazon", "Microsoft"]),
+    (re.compile(r"market|brand|advertis|media|entertainment|consumer", re.I),
+     ["Procter & Gamble", "Nike", "The Walt Disney Company", "Netflix", "L'Oréal"]),
+    (re.compile(r"real estate", re.I),
+     ["CBRE", "JLL", "Blackstone"]),
+]
+_SEED_DEFAULT_MIX = ["Goldman Sachs", "McKinsey & Company", "Google", "Deloitte",
+                     "JPMorgan Chase", "Amazon", "Morgan Stanley", "Boston Consulting Group"]
+
+
+def default_seed_firms(profile: Optional[dict], max_firms: int = 12) -> list[str]:
+    """Firms to start a deck from when the student named none: their lane
+    (track, industries, roles, major, resume titles) first, then a broad mix."""
+    profile = profile or {}
+    goals = profile.get("goals") or {}
+    academics = profile.get("academics") or {}
+    resume = profile.get("resumeParsed") or {}
+    parts: list[str] = []
+    for v in (goals.get("careerTrack"), profile.get("careerTrack"), profile.get("preferredJobRole"),
+              academics.get("major"), profile.get("major")):
+        if v:
+            parts.append(str(v))
+    for key in ("targetIndustries", "industriesOfInterest", "careerInterests", "preferredJobRolesOrTitles"):
+        raw = goals.get(key) or profile.get(key) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        parts += [str(x.get("name") if isinstance(x, dict) else x) for x in raw if x]
+    for exp in (resume.get("experience") or [])[:4]:
+        if isinstance(exp, dict) and exp.get("title"):
+            parts.append(str(exp["title"]))
+    text = " | ".join(parts)
+
+    out: list[str] = []
+    def _add(name: str) -> None:
+        if name.lower() not in {x.lower() for x in out}:
+            out.append(name)
+    if text:
+        for pat, firms in _SEED_LANES:
+            if pat.search(text):
+                for f in firms:
+                    _add(f)
+    for f in _SEED_DEFAULT_MIX:
+        _add(f)
+    return out[:max_firms]
+
+
 # ── Personalization (v1) ──────────────────────────────────────────────
 
 
@@ -823,14 +890,19 @@ def _diversify_people(scored: list[dict], k: int) -> list[dict]:
     picked: list[dict] = []
     company_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
+    keys: dict[int, tuple] = {}
+    for item in remaining:
+        cand = item["candidate"]
+        keys[id(item)] = (
+            _normalize_company(cand.get("Company") or "") or "_unknown",
+            _title_role_families(cand.get("Title") or ""),
+        )
 
     while remaining and len(picked) < k:
         best_i = 0
         best_adj = float("-inf")
         for i, item in enumerate(remaining):
-            cand = item["candidate"]
-            co = _normalize_company(cand.get("Company") or "") or "_unknown"
-            fams = _title_role_families(cand.get("Title") or "")
+            co, fams = keys[id(item)]
             co_ct = company_counts.get(co, 0)
             fam_penalty = (
                 sum(family_counts.get(f, 0) ** 2 for f in fams) if fams else 0
@@ -845,9 +917,7 @@ def _diversify_people(scored: list[dict], k: int) -> list[dict]:
                 best_i = i
 
         chosen = remaining.pop(best_i)
-        cand = chosen["candidate"]
-        co = _normalize_company(cand.get("Company") or "") or "_unknown"
-        fams = _title_role_families(cand.get("Title") or "")
+        co, fams = keys[id(chosen)]
         company_counts[co] = company_counts.get(co, 0) + 1
         for f in fams:
             family_counts[f] = family_counts.get(f, 0) + 1
