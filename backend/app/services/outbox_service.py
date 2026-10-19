@@ -551,6 +551,7 @@ def update_contact_stage(uid, contact_id, new_stage):
 
     ref.update(updates)
     data.update(updates)
+    _log_connection_outcomes(uid, contact_id, data, updates)
 
     # Cooldown: record outreach on first transition into a send stage.
     # Gated on prev_stage so we don't double-count when the Gmail webhook
@@ -565,6 +566,42 @@ def update_contact_stage(uid, contact_id, new_stage):
                 logger.warning(f"[outbox] cooldown record failed for contact={contact_id}: {cd_err}")
 
     return _contact_to_dict(contact_id, data)
+
+
+def _log_connection_outcomes(uid, contact_id, data, updates):
+    """Recommendation events for the outcome the ranker optimizes: a
+    meeting booked or a connection made. Fires once per contact per
+    outcome (only when this update stamped the timestamp for the first
+    time), with a deterministic doc id so a retry cannot double-count.
+
+    Deck contacts are stored as ranker_{candidate_id}; the event carries
+    the bare candidate id so it joins the deck's deck_served and swipe rows.
+    """
+    try:
+        from app.utils.recommendation_events import log_recommendation_event
+        deck_contact = str(contact_id).startswith("ranker_")
+        candidate_id = str(contact_id)[len("ranker_"):] if deck_contact else str(contact_id)
+        common = dict(
+            contact_id=candidate_id,
+            contact_email=data.get("email") or data.get("draftToEmail") or "",
+            surface=data.get("source") or ("ios_swipe_deck" if deck_contact else ""),
+            attribution_source="ranker_deck" if deck_contact else "",
+            extra={
+                "contact_doc_id": contact_id,
+                "company": data.get("company") or "",
+                "title": data.get("jobTitle") or data.get("title") or "",
+                "linkedin": data.get("linkedinUrl") or data.get("LinkedIn") or "",
+                "pipeline_stage": data.get("pipelineStage") or "",
+            },
+        )
+        if updates.get("meetingScheduledAt"):
+            log_recommendation_event("meeting_scheduled", uid,
+                                     doc_id=f"meeting_{uid}_{contact_id}", **common)
+        if updates.get("connectedAt"):
+            log_recommendation_event("connection_made", uid,
+                                     doc_id=f"connected_{uid}_{contact_id}", **common)
+    except Exception as exc:
+        logger.warning(f"[outbox] connection outcome log failed for contact={contact_id}: {exc}")
 
 
 def clear_unread_reply(uid, contact_id):
@@ -639,6 +676,7 @@ def mark_contact_won(uid, contact_id, resolution_details=None):
         updates["meetingScheduledAt"] = now
     ref.update(updates)
     data.update(updates)
+    _log_connection_outcomes(uid, contact_id, data, updates)
     return _contact_to_dict(contact_id, data)
 
 
@@ -673,6 +711,7 @@ def mark_contact_resolution(uid, contact_id, resolution, details=None):
 
     ref.update(updates)
     data.update(updates)
+    _log_connection_outcomes(uid, contact_id, data, updates)
     return _contact_to_dict(contact_id, data)
 
 
