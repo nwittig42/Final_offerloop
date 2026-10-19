@@ -18,9 +18,9 @@ Known limits (inherent to pixel tracking, not bugs):
     - Apple Mail Privacy Protection preloads images, so an "open" can be a
       machine, not a person.
     - Clients that block remote images never report an open.
-    - The sender re-reading their own sent email in Gmail loads the pixel too
+    - The sender re-reading their own sent email in Gmail later loads the pixel too
       and cannot be told apart from the recipient. Loads that happen while the
-      email is still an unsent draft ARE filtered out (see _is_sent).
+      email is still an unsent draft ARE filtered out (see _sent_at); so are loads within SELF_VIEW_GRACE of the send time.
 
 Tracking must never block or break a send: every public function here
 swallows its own errors.
@@ -48,6 +48,10 @@ PIXEL_GIF = (
 # A single open often produces a burst of image requests (proxy retries,
 # preview pane then full view). Hits this close together count once.
 DEDUPE_WINDOW = timedelta(seconds=30)
+
+# Gmail renders a just-sent message to its sender, which loads the pixel. Hits
+# this soon after the send time are the sender's own view, not the recipient's.
+SELF_VIEW_GRACE = timedelta(seconds=60)
 
 
 def _now():
@@ -206,23 +210,56 @@ def _draft_still_exists(uid, draft_id):
         return None
 
 
-def _is_sent(uid, data, contact):
-    """Has this tracked email actually left the user's account?
+def _message_sent_time(uid, message_id):
+    """Send time (datetime) when Gmail says this message was sent, else None.
+
+    None covers every "can't tell" case: no credentials, Gmail errors, a 404
+    (the id is no longer valid), or the message still being a draft.
+    """
+    try:
+        from app.services.gmail_client import _load_user_gmail_creds, _gmail_service
+        creds = _load_user_gmail_creds(uid)
+        if not creds:
+            return None
+        service = _gmail_service(creds)
+        msg = service.users().messages().get(
+            userId="me", id=message_id, format="minimal").execute()
+        labels = msg.get("labelIds") or []
+        if "SENT" not in labels or "DRAFT" in labels:
+            return None
+        return datetime.fromtimestamp(int(msg["internalDate"]) / 1000, tz=timezone.utc)
+    except Exception as e:
+        logger.info("[email_tracking] message lookup failed uid=%s: %s", uid, e)
+        return None
+
+
+def _sent_at(uid, data, contact):
+    """When did this tracked email leave the user's account? None = not yet.
 
     While it is still a draft, the only person loading the pixel is the user
     looking at their own draft, so those hits must not count.
     """
-    if data.get("sentAt"):
-        return True
+    stored = _parse_iso(data.get("sentAt"))
+    if stored:
+        return stored
+    message_id = data.get("gmailMessageId")
+    if message_id:
+        sent = _message_sent_time(uid, message_id)
+        if sent:
+            return sent
     draft_id = data.get("gmailDraftId")
     if draft_id:
         exists = _draft_still_exists(uid, draft_id)
         if exists is not None:
-            return not exists
+            # Draft gone means sent, but Gmail didn't say when: treat as
+            # sent long enough ago that the sender's own render is over.
+            return None if exists else _now() - SELF_VIEW_GRACE - timedelta(seconds=1)
     # Couldn't ask Gmail: fall back to the contact's own sent stamp.
     created = _parse_iso(data.get("createdAt"))
     sent = _parse_iso(contact.get("emailSentAt"))
-    return bool(created and sent and sent >= created)
+    if created and sent and sent >= created:
+        return sent
+    return None
 
 
 def record_open(token):
@@ -247,8 +284,17 @@ def record_open(token):
 
         contact_ref, contact = _resolve_contact(db, uid, data)
 
-        if not _is_sent(uid, data, contact):
+        sent_at = _sent_at(uid, data, contact)
+        if sent_at is None:
             ref.update({"preSendHits": Increment(1), "lastHitAt": now_iso})
+            return False
+
+        if not data.get("sentAt"):
+            ref.update({"sentAt": _iso(sent_at)})
+            data["sentAt"] = _iso(sent_at)
+
+        if now - sent_at < SELF_VIEW_GRACE:
+            ref.update({"selfViewHits": Increment(1), "lastHitAt": now_iso})
             return False
 
         last = _parse_iso(data.get("lastOpenedAt"))
@@ -260,8 +306,6 @@ def record_open(token):
             "lastOpenedAt": now_iso,
             "lastHitAt": now_iso,
         }
-        if not data.get("sentAt"):
-            tracking_updates["sentAt"] = now_iso
         if not data.get("firstOpenedAt"):
             tracking_updates["firstOpenedAt"] = now_iso
         if contact_ref is not None and not data.get("contactId"):
