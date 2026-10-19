@@ -431,7 +431,9 @@ def generate_reply_draft(contact_id):
             reply_text = ""
         
         # Create draft reply in Gmail
-        message = MIMEText(reply_text)
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(user_id)
+        message = email_tracking.tracked_text_mime(reply_text, tracking_token)
         message['to'] = contact_data.get('email')
         message['subject'] = f"Re: {contact_data.get('emailSubject', 'Our conversation')}"
         
@@ -445,6 +447,11 @@ def generate_reply_draft(contact_id):
         }
         
         draft = gmail_service.users().drafts().create(userId='me', body=draft_body).execute()
+        email_tracking.register(
+            tracking_token, user_id, 'reply', recipient_email=contact_data.get('email'),
+            contact_id=contact_id, draft_id=draft.get('id'),
+            message_id=draft.get('message', {}).get('id'), thread_id=thread_id,
+        )
         
         # Mark as read
         gmail_service.users().threads().modify(
@@ -845,7 +852,9 @@ def send_reply_draft(contact_id):
         service = _gmail_service(creds)
         import base64
         from email.mime.text import MIMEText
-        msg = MIMEText(body)
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(uid)
+        msg = email_tracking.tracked_text_mime(body, tracking_token)
         msg["to"] = to_email
         msg["subject"] = f"Re: {subject}" if subject and not subject.lower().startswith("re:") else subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -855,6 +864,11 @@ def send_reply_draft(contact_id):
             draft_body["message"]["threadId"] = thread_id
 
         draft = service.users().drafts().create(userId="me", body=draft_body).execute()
+        email_tracking.register(
+            tracking_token, uid, "reply", recipient_email=to_email,
+            contact_id=contact_id, draft_id=draft.get("id"),
+            message_id=draft.get("message", {}).get("id"), thread_id=thread_id,
+        )
 
         # Log reply_response_sent metric
         from app.utils.metrics_events import log_event

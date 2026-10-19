@@ -35,12 +35,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.models.pipeline_stages import AWAITING_REPLY_STAGES
+
 
 # Stage normalization for the outbox read. Mirrors the canonical pipeline
 # stages defined in outbox_service.py; kept local so a Scout read does not
-# import from the outbox service (the read should survive churn there).
+# import from the outbox service (the read should survive churn there). The
+# awaiting-reply set comes from the side-effect-free models/pipeline_stages.
 _REPLIED_STAGES = frozenset({"replied", "meeting_scheduled", "connected"})
-_AWAITING_REPLY_STAGES = frozenset({"email_sent", "waiting_on_reply"})
+_AWAITING_REPLY_STAGES = AWAITING_REPLY_STAGES
 _DRAFTING_STAGES = frozenset({"new", "draft_created", "draft_deleted"})
 
 # A waiting contact past this many days surfaces as "no_reply_Nd" so Scout

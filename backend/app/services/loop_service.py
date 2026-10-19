@@ -31,6 +31,7 @@ from urllib.parse import quote_plus
 
 from app.config import TIER_CONFIGS
 from app.extensions import get_db
+from app.models.pipeline_stages import AWAITING_REPLY_STAGES
 from app.services.agent_service import (
     DEFAULT_AGENT_CONFIG,
     _generate_short_code,
@@ -991,12 +992,12 @@ def _backfill_thread_ids_for_contacts(uid: str, contact_map: dict) -> None:
         if not (cdata.get("email") or "").strip():
             continue
         # Only chase a thread when the email looks like it actually sent.
-        # emailSentAt is the strongest signal; pipelineStage="email_sent"
-        # and inOutbox=True also indicate a send. Without either we don't
+        # emailSentAt is the strongest signal; a sent/awaiting-reply
+        # pipelineStage and inOutbox=True also indicate a send. Without either we don't
         # waste a Gmail call on a contact that never went out.
         if not (
             cdata.get("emailSentAt")
-            or cdata.get("pipelineStage") == "email_sent"
+            or cdata.get("pipelineStage") in AWAITING_REPLY_STAGES
             or cdata.get("inOutbox")
         ):
             continue

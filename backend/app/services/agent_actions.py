@@ -226,6 +226,7 @@ def _try_auto_send(
             to=email,
             subject=email_subject,
             body_html=email_body,
+            tracking_kind="outreach",
         )
     except Exception as e:
         # Gmail flapped (quota / auth / network). Don't refund the daily-cap

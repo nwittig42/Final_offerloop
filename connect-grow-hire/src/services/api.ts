@@ -342,6 +342,7 @@ export type PipelineStage =
   | "draft_deleted"
   | "email_sent"
   | "waiting_on_reply"
+  | "email_opened"
   | "replied"
   | "meeting_scheduled"
   | "connected"
@@ -376,6 +377,10 @@ export interface OutboxThread {
   emailSentAt?: string | null;
   draftCreatedAt?: string | null;
   replyReceivedAt?: string | null;
+  // Open tracking: stamped by the backend when the recipient loads the email.
+  emailOpenedAt?: string | null;
+  emailLastOpenedAt?: string | null;
+  emailOpenCount?: number;
   lastActivityAt: string;
   followUpCount: number;
   nextFollowUpAt?: string | null;
