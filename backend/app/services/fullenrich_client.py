@@ -28,9 +28,22 @@ logger = logging.getLogger(__name__)
 
 BASE = os.getenv("FULLENRICH_BASE", "https://app.fullenrich.com/api/v2").rstrip("/")
 
-#: Spend ceiling in FullEnrich credits (1 per found work email). Starter is
-#: 500/month; leave headroom by default.
-BUDGET = float(os.getenv("FULLENRICH_BUDGET", "450"))
+#: Spend ceiling in FullEnrich credits per CALENDAR MONTH (1 credit per found
+#: work email; misses are free). This is a runaway tripwire, not a budget —
+#: FullEnrich enforces the real limit itself by returning 402 once the balance
+#: is gone.
+#:
+#: Was 450, under a comment claiming "Starter is 500/month". The plan had since
+#: grown and nobody revisited the number, so on 2026-10-18 the account held
+#: 19,788 credits while this line refused to spend more than 2.3% of them — and
+#: it fails silently: enabled() goes False and every caller just reports "no
+#: email found".
+#:
+#: 15000 is far above any plausible month of real use (a search spends at most
+#: _FE_BACKFILL_CAP=6), so it never fires on legitimate traffic. It only trips
+#: on something pathological — a retry storm could otherwise burn ~12k/day at
+#: the current per-user rate limit and clear the whole balance in two days.
+BUDGET = float(os.getenv("FULLENRICH_BUDGET", "15000"))
 #: How long a synchronous reveal will wait on the waterfall before giving
 #: up. Abandoned enrichments may still complete (and bill) server-side;
 #: at 1 credit per find that is an accepted cost, logged when it happens.
@@ -100,9 +113,16 @@ def enabled(db) -> bool:
     return bool(_key()) and _spent(db) < BUDGET
 
 
-def sellable_gate(email: str, status: str) -> bool:
+def sellable_gate(email: str, status: str, *, require_verdict: bool = False) -> bool:
     """Whether a waterfall result may be sold, distinguishing VERDICTS from
     OUTAGES. DELIVERABLE sells as-is (their measured ~2% bounce).
+
+    require_verdict=True flips the no-verdict default from accept to reject.
+    The lenient default is only sound for FullEnrich results, which arrive
+    already verified upstream — "no second opinion" then means our checkers
+    were down, not that the address is bad. A Hunter-found address has no
+    such backstop, so callers caching one into the shared warehouse pass
+    require_verdict=True and take only an affirmative yes.
     HIGH_PROBABILITY wants a second opinion, but only a real verdict may
     reject it: NeverBounce/Hunter saying INVALID is a verdict; a missing
     key, quota wall, timeout, or "unknown" is OUR problem, and rejecting on
@@ -146,6 +166,10 @@ def sellable_gate(email: str, status: str) -> bool:
         except Exception:
             logger.exception("sellable_gate: hunter errored for %s", email)
     if verdict is None:
+        if require_verdict:
+            logger.info("sellable_gate: no verdict for %s and nothing upstream "
+                        "to assume from — not shareable", email)
+            return False
         logger.warning("sellable_gate: NO VERDICT for %s (%s) — accepting on "
                        "FullEnrich's own verification", email, status)
         return True

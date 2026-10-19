@@ -579,6 +579,11 @@ const ContactSearchPage: React.FC<{
   // pretending the original specific query yielded those people.
   const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
   const [searchBroadened, setSearchBroadened] = useState(false);
+  // Filters the provider that actually served these results could not honour.
+  // Hunter's Domain Search only filters by company, so a search for alumni at
+  // a firm with none silently returns colleagues instead — these drive the
+  // notice that says so.
+  const [unsupportedFilters, setUnsupportedFilters] = useState<string[]>([]);
   const [lastSearchStats, setLastSearchStats] = useState<{
     successful_drafts: number;
     total_contacts: number;
@@ -1797,6 +1802,11 @@ const ContactSearchPage: React.FC<{
       setLastResults(result.contacts);
       setAlreadySavedResults(alreadySavedFromServer);
       setResultMessage(backendMessage);
+      setUnsupportedFilters(
+        Array.isArray((result as any)?.unsupported_filters)
+          ? (result as any).unsupported_filters
+          : (result as any)?.adjacency_metadata?.unsupported_filters || [],
+      );
 
       // Tell Scout's panel the search it kicked off finished, so the chat can
       // post its "Found N contacts" follow-up (scoutBridge contract). Names
@@ -3213,6 +3223,30 @@ const ContactSearchPage: React.FC<{
                 or more constraints to find these contacts. Tells the user honestly
                 that the system expanded its search rather than pretending the
                 original specific query yielded these people. */}
+            {unsupportedFilters.length > 0 && lastResults.length > 0 && (
+              <div style={{
+                padding: '10px 14px',
+                background: 'rgba(245,158,11,0.06)',
+                border: '0.5px solid #FDE68A',
+                borderRadius: 6,
+                fontSize: 13,
+                color: '#713F12',
+                lineHeight: 1.5,
+                marginBottom: 12,
+              }}>
+                <strong style={{ fontWeight: 600 }}>
+                  {unsupportedFilters.includes('school')
+                    ? 'These people are not alumni matches.'
+                    : 'These results ignore some of your filters.'}
+                </strong>{' '}
+                We couldn’t find anyone matching your{' '}
+                {unsupportedFilters.join(' and ')} filter
+                {unsupportedFilters.length > 1 ? 's' : ''}, so this is everyone
+                we could find at the company instead. Check each person before
+                you mention a shared school or city.
+              </div>
+            )}
+
             {/* Cross-tab suggestions (e.g. "Find recruiters at X") */}
             {searchSuggestions.length > 0 && lastResults.length === 0 && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>

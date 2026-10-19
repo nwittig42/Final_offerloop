@@ -185,6 +185,22 @@ def prompt_search():
                 print(f"⚠️ Failed to load user profile for {user_id}: {e}")
                 return jsonify({"error": "Could not load user profile. Please try again."}), 500
 
+        # Collect any FullEnrich jobs an earlier search gave up waiting on.
+        # Daemon thread: the addresses go to the shared warehouse, not to this
+        # response, so nobody should wait a millisecond for them. Bounded by
+        # FE_PENDING_SWEEP_LIMIT so a backlog can't snowball.
+        try:
+            import threading as _sweep_threading
+            from app.services import fullenrich_pending as _fe_pending
+
+            _sweep_threading.Thread(
+                target=_fe_pending.sweep,
+                daemon=True,
+                name="fe-pending-sweep",
+            ).start()
+        except Exception:
+            pass
+
         # Credit check outside try/except — always enforced
         if credits_available < 5:
             return jsonify({
@@ -482,82 +498,10 @@ def prompt_search():
         # Trim to the originally requested count (whether or not dedup ran)
         contacts = contacts[:max_contacts]
 
-        # Enrichment — deferred out of preview mode. Perplexity talking points,
-        # Apify LinkedIn posts, and Perplexity company news are consumed only
-        # by batch_generate_emails at draft time. The preview UI renders none
-        # of these fields (grep-verified in connect-grow-hire/src/pages/
-        # ContactSearchPage.tsx), so running them here just makes GET wait
-        # ~10-15s for data no one looks at. When the user hits Draft/Send,
-        # batch_generate_emails runs on freshly-enriched contacts as usual.
-        enrichment_data = {}
-        if outreach_mode != "preview":
-            # Non-LinkedIn web presence (Perplexity, parallelized)
-            try:
-                from app.services.perplexity_client import batch_enrich_contacts
-                enrichment_data = batch_enrich_contacts(contacts)
-                for idx, contact in enumerate(contacts):
-                    enrich = enrichment_data.get(idx, {})
-                    if enrich.get("talking_points"):
-                        contact["enrichment_talking_points"] = enrich["talking_points"]
-                    if enrich.get("recent_activity"):
-                        contact["enrichment_recent_activity"] = enrich["recent_activity"]
-                    if enrich.get("media_appearances"):
-                        contact["perplexity_media_appearances"] = enrich["media_appearances"]
-                    if enrich.get("published_writing"):
-                        contact["perplexity_published_writing"] = enrich["published_writing"]
-                    if enrich.get("news_mentions"):
-                        contact["perplexity_news_mentions"] = enrich["news_mentions"]
-            except Exception:
-                print("⚠️ Contact enrichment failed, continuing without", flush=True)
-
-            # LinkedIn recent posts (Apify, single batched HTTP call)
-            try:
-                from app.services.apify_client import batch_enrich_linkedin_posts_via_apify
-                apify_results = batch_enrich_linkedin_posts_via_apify(contacts) or {}
-                for idx, contact in enumerate(contacts):
-                    payload = apify_results.get(idx, {})
-                    if payload.get("linkedin_recent_posts"):
-                        contact["linkedin_recent_posts"] = payload["linkedin_recent_posts"]
-            except Exception:
-                print("⚠️ Apify LinkedIn enrichment failed, continuing", flush=True)
-
-            # Company news (Perplexity, batched per unique company, parallelized)
-            try:
-                from app.services.perplexity_client import batch_enrich_company_news
-                company_enrichment = batch_enrich_company_news(contacts) or {}
-                for idx, contact in enumerate(contacts):
-                    co = company_enrichment.get(idx, {})
-                    if co.get("company_recent_news"):
-                        contact["company_recent_news"] = co["company_recent_news"]
-                    if co.get("company_description"):
-                        contact["company_description"] = co["company_description"]
-            except Exception:
-                print("⚠️ Perplexity company enrichment failed, continuing", flush=True)
-        else:
-            print(f"[Runs] Preview mode: skipping Perplexity + Apify enrichment for {len(contacts)} contacts")
-
-        # Cost telemetry — single line per search so spend impact is visible.
-        try:
-            _apify_post_count = sum(len(c.get("linkedin_recent_posts") or []) for c in contacts)
-            _pplx_person_hits = sum(
-                1 for c in contacts
-                if c.get("perplexity_media_appearances")
-                or c.get("perplexity_published_writing")
-                or c.get("perplexity_news_mentions")
-                or c.get("enrichment_talking_points")
-            )
-            _unique_companies = len({
-                (c.get("Company") or "").strip().lower()
-                for c in contacts if (c.get("Company") or "").strip()
-            })
-            print(
-                f"[Enrich] uid={user_id} contacts={len(contacts)} "
-                f"apify_posts={_apify_post_count} perplexity_person_hits={_pplx_person_hits} "
-                f"perplexity_company_unique={_unique_companies}",
-                flush=True,
-            )
-        except Exception:
-            pass
+        # Enrichment used to run here. It now runs after the email pass below
+        # (search for "Enrichment — deferred"), because it needs two things
+        # that only exist down there: a known-reachable set, and the final
+        # contact order.
 
         # Same pipeline as free-run: template, emails, drafts, deduct, save
         # A4: Build rich user profile from root doc + professionalInfo subcollection
@@ -698,6 +642,36 @@ def prompt_search():
                       f"{sum(1 for _h in _hunter_hits if _h)}/{len(_missing)} found")
             except Exception:
                 print("[ContactSearch] Hunter fast rung errored; everyone goes to FullEnrich")
+            # Hunter scores deliverability but never SMTP-checks, so until now
+            # its addresses stayed per-user: every one we paid for was shown
+            # once and thrown away, and the next student searching the same
+            # person paid again. Verify them here (parallel, like the lookups
+            # above) and the ones that come back genuinely deliverable join
+            # _gained_email, so the shared warehouse write below keeps them.
+            # require_verdict=True because a Hunter address has no upstream
+            # verification to assume from — silence must read as "no".
+            _hunter_found = [c for c in _missing
+                             if (c.get("EmailSource") or "") == "hunter_finder"
+                             and (c.get("Email") or "").strip()]
+            if _hunter_found:
+                try:
+                    from app.services import fullenrich_client as _fec_gate
+                    from concurrent.futures import ThreadPoolExecutor as _VTPE
+
+                    def _verify_shareable(_c):
+                        return _fec_gate.sellable_gate(
+                            (_c.get("Email") or "").strip(), "", require_verdict=True)
+
+                    with _VTPE(max_workers=max(1, len(_hunter_found))) as _vex:
+                        _verdicts = list(_vex.map(_verify_shareable, _hunter_found))
+                    for _c, _ok in zip(_hunter_found, _verdicts):
+                        if _ok:
+                            _c["EmailVerified"] = True
+                            _gained_email.append(_c)
+                    print(f"[ContactSearch] Hunter verify: "
+                          f"{sum(1 for _v in _verdicts if _v)}/{len(_hunter_found)} shareable")
+                except Exception:
+                    print("[ContactSearch] Hunter verify errored; hits stay per-user")
             _still = [c for c in _missing if not (c.get("Email") or "").strip()]
             if _still:
                 try:
@@ -723,6 +697,21 @@ def prompt_search():
                             _gained_email.append(_c)
                         print(f"[ContactSearch] FullEnrich search pass: "
                               f"{len(_hits or {})}/{len(_still)} found (ready={_ready})")
+                        if not _ready:
+                            # The waterfall outlived our patience, not itself.
+                            # Measured 2026-10-18: a job abandoned at 75s had
+                            # finished with two DELIVERABLE addresses by the
+                            # time anyone looked. Park the id so a later sweep
+                            # can collect them for the warehouse — this search
+                            # is already over, but the next one shouldn't pay
+                            # to rediscover what we already found.
+                            try:
+                                from app.services import fullenrich_pending
+                                fullenrich_pending.record_pending(
+                                    _eid, _people, db=_fe_db)
+                            except Exception:
+                                print("[ContactSearch] could not park unfinished "
+                                      "FullEnrich job; results lost as before")
                 except Exception:
                     print("[ContactSearch] FullEnrich search pass errored; contacts stay email-less")
         # Re-feed the warehouse for anyone who just gained a verified address,
@@ -733,6 +722,106 @@ def prompt_search():
                 _cache_feed(_gained_email, shape="app", async_write=True)
             except Exception:
                 pass
+
+        # Enrichment — deferred out of preview mode, and (2026-10-18) moved
+        # down here from above the search's email pass. Two reasons it belongs
+        # after emails resolve rather than before:
+        #
+        #   1. We now know who is reachable. Researching media mentions and
+        #      LinkedIn posts for someone we have no address for buys nothing
+        #      — the student cannot email them. Roughly a third of a search's
+        #      Perplexity + Apify spend was going on dead ends, and sat on the
+        #      critical path while it did.
+        #
+        #   2. enrichment_data is keyed by list index, and the warmth sort
+        #      above rebinds `contacts` to a reordered list. Built before that
+        #      sort, every index pointed at the wrong person by the time
+        #      reply_generation read it — talking points and the verified_role
+        #      check landed on a different contact than the one they described.
+        #      Built here, the order is final.
+        enrichment_data = {}
+        if outreach_mode != "preview":
+            # Indices are into `contacts`, so enrichment_data stays aligned
+            # with the list reply_generation walks.
+            _reach = [(i, c) for i, c in enumerate(contacts)
+                      if (c.get("Email") or "").strip()]
+            _rc = [c for _i, c in _reach]
+            if not _rc:
+                print("[Runs] No reachable contacts — skipping enrichment entirely")
+            else:
+                if len(_rc) < len(contacts):
+                    print(f"[Runs] Enriching {len(_rc)}/{len(contacts)} reachable contacts")
+                # Non-LinkedIn web presence (Perplexity, parallelized)
+                try:
+                    from app.services.perplexity_client import batch_enrich_contacts
+                    _sub = batch_enrich_contacts(_rc) or {}
+                    for _pos, (_orig, contact) in enumerate(_reach):
+                        enrich = _sub.get(_pos, {}) or {}
+                        if enrich:
+                            enrichment_data[_orig] = enrich
+                        if enrich.get("talking_points"):
+                            contact["enrichment_talking_points"] = enrich["talking_points"]
+                        if enrich.get("recent_activity"):
+                            contact["enrichment_recent_activity"] = enrich["recent_activity"]
+                        if enrich.get("media_appearances"):
+                            contact["perplexity_media_appearances"] = enrich["media_appearances"]
+                        if enrich.get("published_writing"):
+                            contact["perplexity_published_writing"] = enrich["published_writing"]
+                        if enrich.get("news_mentions"):
+                            contact["perplexity_news_mentions"] = enrich["news_mentions"]
+                except Exception:
+                    print("⚠️ Contact enrichment failed, continuing without", flush=True)
+
+                # LinkedIn recent posts (Apify, single batched HTTP call)
+                try:
+                    from app.services.apify_client import batch_enrich_linkedin_posts_via_apify
+                    apify_results = batch_enrich_linkedin_posts_via_apify(_rc) or {}
+                    for _pos, (_orig, contact) in enumerate(_reach):
+                        payload = apify_results.get(_pos, {}) or {}
+                        if payload.get("linkedin_recent_posts"):
+                            contact["linkedin_recent_posts"] = payload["linkedin_recent_posts"]
+                except Exception:
+                    print("⚠️ Apify LinkedIn enrichment failed, continuing", flush=True)
+
+                # Company news (Perplexity, batched per unique company, parallelized)
+                try:
+                    from app.services.perplexity_client import batch_enrich_company_news
+                    company_enrichment = batch_enrich_company_news(_rc) or {}
+                    for _pos, (_orig, contact) in enumerate(_reach):
+                        co = company_enrichment.get(_pos, {}) or {}
+                        if co.get("company_recent_news"):
+                            contact["company_recent_news"] = co["company_recent_news"]
+                        if co.get("company_description"):
+                            contact["company_description"] = co["company_description"]
+                except Exception:
+                    print("⚠️ Perplexity company enrichment failed, continuing", flush=True)
+        else:
+            print(f"[Runs] Preview mode: skipping Perplexity + Apify enrichment for {len(contacts)} contacts")
+
+        # Cost telemetry — single line per search so spend impact is visible.
+        try:
+            _apify_post_count = sum(len(c.get("linkedin_recent_posts") or []) for c in contacts)
+            _pplx_person_hits = sum(
+                1 for c in contacts
+                if c.get("perplexity_media_appearances")
+                or c.get("perplexity_published_writing")
+                or c.get("perplexity_news_mentions")
+                or c.get("enrichment_talking_points")
+            )
+            _unique_companies = len({
+                (c.get("Company") or "").strip().lower()
+                for c in contacts if (c.get("Company") or "").strip()
+            })
+            _reachable_n = sum(1 for c in contacts if (c.get("Email") or "").strip())
+            print(
+                f"[Enrich] uid={user_id} contacts={len(contacts)} "
+                f"reachable={_reachable_n} "
+                f"apify_posts={_apify_post_count} perplexity_person_hits={_pplx_person_hits} "
+                f"perplexity_company_unique={_unique_companies}",
+                flush=True,
+            )
+        except Exception:
+            pass
 
         # Generate emails with resume text. Skipped entirely in preview mode:
         # preview returns contact info only, so no email is written and (because
@@ -1217,8 +1306,25 @@ def prompt_search():
         }
         if search_broadened:
             response_data["broadening_level"] = retry_level_used
-        if adjacency_metadata and adjacency_metadata.get("drop_reasons"):
+        # Tell the client which constraints we could not honour. The Hunter
+        # bridge sets unsupported_filters ("school", "location") because its
+        # Domain Search can only filter by company — ask for USC alumni at a
+        # firm with none and you get six strangers at that firm instead, at
+        # full price, with nothing on screen saying the school filter was
+        # dropped (observed 2026-10-18). hunter_person_search has computed
+        # this list all along "so users see why results are unfiltered"; it
+        # just never left the backend, because the gate below only shipped
+        # adjacency_metadata when it carried drop_reasons.
+        if adjacency_metadata and (
+            adjacency_metadata.get("drop_reasons")
+            or adjacency_metadata.get("unsupported_filters")
+            or adjacency_metadata.get("fallback_used")
+        ):
             response_data["adjacency_metadata"] = adjacency_metadata
+            if adjacency_metadata.get("unsupported_filters"):
+                response_data["unsupported_filters"] = adjacency_metadata["unsupported_filters"]
+            if adjacency_metadata.get("fallback_used"):
+                response_data["fallback_used"] = adjacency_metadata["fallback_used"]
         if credits_remaining is not None:
             response_data["credits_remaining"] = credits_remaining
 
