@@ -159,6 +159,41 @@ export interface Contact {
   EmailSource?: string;
   EmailVerified?: boolean;
   EmailConfidenceScore?: number; // 0-100 from the providing source
+  // Set on contacts from an org alumni directory (OFF-42).
+  OrgId?: string;
+  OrgBadge?: string; // e.g. "USC TKE Alumni"
+  OrgGradYear?: number | null; // the directory's real "Class of" year, else null
+}
+
+// An org alumni directory a student can join (OFF-42).
+export interface Org {
+  id: string;
+  name: string;
+  shortName: string;
+  school: string;
+  type: string;
+  memberCount: number;
+  aliases: string[];
+  // The org's own color ("" = app default), for its space in the app.
+  accentColor: string;
+}
+
+// One alum in an org's browsable directory. No email or phone until a
+// member unlocks them (revealOrgMember).
+export interface DirectoryMember {
+  personKey: string;
+  firstName: string;
+  lastName: string;
+  title: string;
+  company: string;
+  headline: string;
+  year: number | null; // join or class year, for ordering only
+  gradYear: number | null; // real "Class of" year, never estimated
+  badge: string;
+  linkedinUrl: string;
+  photoUrl: string;
+  school: string;
+  hasEmail: boolean;
 }
 
 // Recruiter interface (extends Contact but specific to recruiters)
@@ -1447,6 +1482,46 @@ class ApiService {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+  }
+
+  // Org alumni directories (OFF-42). Joining takes the org's password; the
+  // backend owns membership (clients can't write orgMemberships).
+  async getOrgs(): Promise<{ orgs: Org[]; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ orgs: Org[]; memberships: string[] }>('/orgs', { method: 'GET', headers });
+  }
+
+  // Needs the org's join password. A failure throws with the backend code
+  // as the message: wrong_password, too_many_attempts or join_closed.
+  async joinOrg(orgId: string, password: string): Promise<{ ok: boolean; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/join`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+  }
+
+  async leaveOrg(orgId: string): Promise<{ ok: boolean; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/leave`, { method: 'POST', headers });
+  }
+
+  // The whole directory (members only). `revealed` maps personKey -> email
+  // for alumni this student already unlocked.
+  async getOrgMembers(orgId: string): Promise<{ org: Org; members: DirectoryMember[]; revealed: Record<string, string> }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(`/orgs/${encodeURIComponent(orgId)}/members`, { method: 'GET', headers });
+  }
+
+  // Unlock one alum's email: 10 credits the first time, free after.
+  async revealOrgMember(orgId: string, personKey: string): Promise<{ contact: Contact; credits_used: number; already_revealed: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(`/orgs/${encodeURIComponent(orgId)}/reveal`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personKey }),
     });
   }
 

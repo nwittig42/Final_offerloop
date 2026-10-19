@@ -3,9 +3,9 @@
 // The search bar and LinkedIn-style filter pills on top swap the gallery for
 // search results in the same card layout.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, ArrowLeft } from "lucide-react";
+import { RefreshCw, ArrowLeft, Users, ChevronRight } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
@@ -20,6 +20,9 @@ import { IS_DEV_PREVIEW, DEV_MOCK_USER } from "@/lib/devPreview";
 import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
 import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
+import { useOrgs } from "@/hooks/useOrgs";
+import { OrgsView, ORGS_PAGE_BG } from "@/components/find/orgs/OrgsView";
+import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
 import { GOLD_RING } from "@/components/find/people/PersonAvatar";
@@ -41,12 +44,16 @@ const TOP_COUNT = 4;
 const PENDING_QUERY_KEY = "offerloop_pending_query";
 
 // When only filters are set, build the sentence the prompt parser expects.
-function promptFromFilters(f: PeopleFilters): string {
+// Org pills read as "who are USC TKE alumni"; the backend strips that back
+// out and searches the directory (the ids travel in `filters` too).
+function promptFromFilters(f: PeopleFilters, orgs: Org[]): string {
   const parts = [f.titles.length ? f.titles.join(" or ") : "People"];
   if (f.companies.length) parts.push(`at ${f.companies.join(" or ")}`);
   if (f.industries.length) parts.push(`in ${f.industries.join(" or ")}`);
   if (f.locations.length) parts.push(`in ${f.locations.join(" or ")}`);
   if (f.schools.length) parts.push(`who went to ${f.schools.join(" or ")}`);
+  const orgNames = orgs.filter((o) => f.organizations.includes(o.id)).map((o) => o.shortName);
+  if (orgNames.length) parts.push(`who are ${orgNames.join(" or ")} alumni`);
   return parts.join(" ");
 }
 
@@ -210,18 +217,42 @@ const FindPage: React.FC = () => {
     } catch { return ""; }
   });
   const [filters, setFilters] = useState<PeopleFilters>(EMPTY_PEOPLE_FILTERS);
+  const {
+    joined: joinedOrgs, orgs: allOrgs, memberships, loading: orgsLoading, join: joinOrgMutation,
+  } = useOrgs(!!user?.uid && !IS_DEV_PREVIEW);
+  // Find's Organizations view (OFF-42): ?view=orgs, and ?org=<id> to open
+  // that org's join form (from a search nudge).
+  const orgsView = searchParams.get("view") === "orgs";
+  const focusOrgId = orgsView ? searchParams.get("org") : null;
+  const showOrgs = (orgId?: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("view", "orgs");
+    if (orgId) next.set("org", orgId); else next.delete("org");
+    setSearchParams(next);
+  };
+  const showPeople = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("view");
+    next.delete("org");
+    setSearchParams(next);
+  };
+  // A search that named an org the student hasn't joined ("TKE alumni").
+  const [orgHint, setOrgHint] = useState<{ id: string; name: string; shortName: string } | null>(null);
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<Person[] | null>(null);
   const [resultsLabel, setResultsLabel] = useState("");
   const [resultsNote, setResultsNote] = useState<string | null>(null);
 
-  const runSearch = useCallback(async (q: string, f: PeopleFilters) => {
+  const runSearch = useCallback(async (q: string, rawFilters: PeopleFilters) => {
+    // Drop orgs the student has since left, so a stale pill can't linger.
+    const f = { ...rawFilters, organizations: rawFilters.organizations.filter((id) => joinedOrgs.some((o) => o.id === id)) };
     setFilters(f);
-    const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f) : "");
+    const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f, joinedOrgs) : "");
     if (!prompt) { setResults(null); return; }
     setSearching(true);
     setResultsLabel(prompt);
     setResultsNote(null);
+    setOrgHint(null);
     try {
       const res = await apiService.runPromptSearch({
         prompt, batchSize: SEARCH_BATCH, mode: "preview", emailTemplate,
@@ -229,6 +260,7 @@ const FindPage: React.FC = () => {
       });
       if (isErrorResponse(res)) throw new Error(res.error);
       setResults((res.contacts || []).map(personFromSearch));
+      setOrgHint((res as { parsed_query?: { org_hint?: { id: string; name: string; shortName: string } } }).parsed_query?.org_hint ?? null);
       const saved = res.already_saved_contacts?.length ?? 0;
       setResultsNote(res.message || (saved ? `${saved} more ${saved === 1 ? "match is" : "matches are"} already in your Contacts.` : null));
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
@@ -240,7 +272,7 @@ const FindPage: React.FC = () => {
     } finally {
       setSearching(false);
     }
-  }, [emailTemplate, queryClient]);
+  }, [emailTemplate, queryClient, joinedOrgs]);
 
   // ?q= hands a query in from elsewhere (Loop cards, Getting Started). Run
   // it once, then drop it (and any legacy ?tab=) from the URL.
@@ -340,7 +372,23 @@ const FindPage: React.FC = () => {
         <MainContentWrapper>
           <AppHeader title="" />
           <GoalsPromptBanner />
-          <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#F5F5F7]">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto transition-colors duration-300" style={{ background: orgsView ? ORGS_PAGE_BG : "#F5F5F7" }}>
+            {orgsView ? (
+              <div className="mx-auto max-w-[1320px] px-4 pb-16 pt-8 sm:px-10">
+                <OrgsView
+                  orgs={allOrgs}
+                  memberships={memberships}
+                  loading={orgsLoading}
+                  school={userUniversity}
+                  focusOrgId={focusOrgId}
+                  onJoin={async (id, password) => {
+                    await joinOrgMutation.mutateAsync({ id, password });
+                    toast({ title: `You're in ${allOrgs.find((o) => o.id === id)?.name ?? "the organization"}`, description: "Open the directory to browse every alum." });
+                  }}
+                  onShowPeople={showPeople}
+                />
+              </div>
+            ) : (
             <div className="mx-auto max-w-[1320px] px-6 pb-16 pt-4 sm:px-10">
               <div className="mt-4" data-tour="tour-search-form">
                 <PeopleSearchBar
@@ -349,9 +397,55 @@ const FindPage: React.FC = () => {
                   filters={filters}
                   onSearch={runSearch}
                   userSchool={userUniversity}
+                  orgs={joinedOrgs}
+                  onShowOrgs={() => showOrgs()}
                   searching={searching}
                 />
               </div>
+
+              {/* Not in an org yet: point at Organizations (OFF-42) */}
+              {joinedOrgs.length === 0 && allOrgs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => showOrgs()}
+                  className="group mt-4 flex w-full items-center gap-3 rounded-[18px] bg-white px-4 py-3 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
+                  style={{ fontFamily: APPLE_FONT }}
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
+                    <Users className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">Part of a fraternity, club or org?</span>
+                    <span className="block truncate text-[12.5px] text-[#6E6E73]">Find it and unlock its whole alumni network</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[#0071E3] transition-transform group-hover:translate-x-0.5" />
+                </button>
+              )}
+
+              {/* Org alumni directories the student belongs to (OFF-42) */}
+              {joinedOrgs.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {joinedOrgs.map((o) => (
+                    <Link
+                      key={o.id}
+                      to={`/directory/${o.id}`}
+                      className="group flex min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
+                      style={{ fontFamily: APPLE_FONT }}
+                    >
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
+                        <Users className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">{o.name} alumni directory</span>
+                        <span className="block truncate text-[12.5px] text-[#6E6E73]">See every alum, free to browse</span>
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-medium text-[#0071E3]">
+                        Open <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              )}
 
               {/* Section header */}
               <div className="mb-4 mt-8 flex flex-wrap items-end justify-between gap-3">
@@ -394,7 +488,15 @@ const FindPage: React.FC = () => {
                 )}
               </div>
 
-              {inSearch && resultsNote && !searching && (
+              {inSearch && orgHint && !searching && (
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[18px] px-4 py-3 text-white" style={{ fontFamily: APPLE_FONT, background: "linear-gradient(165deg, #25335A 0%, #0F172A 100%)" }}>
+                  <span className="text-[14px]">{orgHint.shortName} alumni are in a members-only directory. Join with your chapter's password to search them.</span>
+                  <button type="button" onClick={() => showOrgs(orgHint.id)} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-white px-4 text-[14px] font-semibold text-[#0F172A]">
+                    Join {orgHint.shortName} <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+              {inSearch && resultsNote && !searching && !orgHint && (
                 <p className="mb-4 text-[13px] text-ink-3">{resultsNote}</p>
               )}
 
@@ -403,7 +505,7 @@ const FindPage: React.FC = () => {
                 <div className={GRID}>
                   {Array.from({ length: searching ? SEARCH_BATCH : 15 }).map((_, i) => <CardSkeleton key={i} />)}
                 </div>
-              ) : people.length === 0 ? (
+              ) : people.length === 0 && orgHint ? null : people.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-line px-6 py-14 text-center text-[14px] text-ink-3">
                   Nobody new matched that search. Try fewer filters or a broader title.
                 </div>
@@ -475,6 +577,7 @@ const FindPage: React.FC = () => {
                 </>
               )}
             </div>
+            )}
           </div>
         </MainContentWrapper>
       </div>

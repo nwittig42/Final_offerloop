@@ -1,4 +1,5 @@
-import { ArrowLeft, Upload, Trash2, LogOut, CreditCard, FileText, User, GraduationCap, Briefcase, Rocket, Settings, AlertTriangle, Lock, Eye, RefreshCw, X, CheckCircle, Mail, Target, Star, Gift, Copy, Send } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, LogOut, CreditCard, FileText, User, GraduationCap, Briefcase, Rocket, Settings, AlertTriangle, Lock, Eye, RefreshCw, X, CheckCircle, Mail, Target, Star, Gift, Copy, Send, Users } from "lucide-react";
+import OrganizationsSettings from "@/components/settings/OrganizationsSettings";
 import { ApplicationProfileModal } from "@/components/jobs/ApplicationProfileModal";
 import EmailPreferencesPanel from "@/components/settings/EmailPreferencesPanel";
 import { useNavigate } from "react-router-dom";
@@ -102,6 +103,7 @@ const locations = [
 // Section navigation items
 const sections = [
   { id: 'personal', label: 'Personal Information', icon: User },
+  { id: 'organizations', label: 'Organizations', icon: Users },
   { id: 'work_background', label: 'Professional Background', icon: Briefcase },
   { id: 'academic', label: 'Education', icon: GraduationCap },
   { id: 'professional', label: 'Professional Profile', icon: Briefcase },
@@ -1424,6 +1426,16 @@ export default function AccountSettings() {
                         />
                       </div>
                     </div>
+                  </SettingsSection>
+
+                  {/* Organizations (OFF-42): unlocks that org's alumni directory in Find */}
+                  <SettingsSection
+                    id="organizations"
+                    icon={Users}
+                    title="Organizations"
+                    description="Groups you belong to. Members get the full alumni directory in Find."
+                  >
+                    <OrganizationsSettings school={personalInfo.university || null} />
                   </SettingsSection>
 
                   {/* Professional Background Section (working professionals only) */}

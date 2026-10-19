@@ -221,14 +221,55 @@ def prompt_search():
         outreach_mode = requested_mode
         print(f"[Runs] Outreach mode: requested={data.get('mode')!r}, tier={user_tier}, resolved={outreach_mode}")
 
+        # Org alumni directory (OFF-42): a member who picks their org's pill or
+        # names it ("TKE alumni at Goldman") searches that directory instead of
+        # the provider ladder. Non-members never get here (resolve_org_targets
+        # only returns orgs the user is an active member of).
+        org_targets: list[str] = []
+        org_list: list[dict] = []
+        org_prompt = prompt
+        org_hint = None
+        try:
+            from app.services.org_directory import join_hint, list_orgs, resolve_org_targets
+            if db:
+                raw_filters = data.get("filters") if isinstance(data.get("filters"), dict) else {}
+                org_list = list_orgs(db)
+                org_targets, org_prompt = resolve_org_targets(prompt, raw_filters.get("organizations"), user_data, org_list)
+                # Named an org they haven't joined: the UI offers the join.
+                org_hint = join_hint(prompt, user_data, org_list) if not org_targets else None
+        except Exception as e:
+            print(f"[OrgDirectory] org resolve failed, running a normal search: {e}")
+            org_targets = []
+
         # Parse prompt
-        parsed = parse_search_prompt_structured(prompt)
+        if org_targets:
+            # "TKE alumni" alone parses as too vague; in org mode the parse only
+            # narrows the directory, so it never blocks the search.
+            parsed = parse_search_prompt_structured(org_prompt) if len(org_prompt) >= 3 else {}
+            if parsed.get("error"):
+                parsed = {}
+            parsed = {"companies": [], "title_variations": [], "locations": [], "schools": [], "industries": [],
+                      **{k: v for k, v in parsed.items() if v is not None}}
+            print(f"[OrgDirectory] org search {org_targets} with remainder {org_prompt!r}")
+        else:
+            parsed = parse_search_prompt_structured(prompt)
         if parsed.get("error"):
             return jsonify({
                 "error": parsed.get("error", "Failed to parse prompt"),
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
             }), 400
-        if parsed.get("confidence") == "low":
+        if parsed.get("confidence") == "low" and not org_targets and org_hint:
+            # "TKE alumni" from a non-member: point them at joining instead of
+            # calling the search too vague.
+            return jsonify({
+                "contacts": [],
+                "already_saved_contacts": [],
+                "total_contacts": 0,
+                "tier": user_tier,
+                "parsed_query": {"org_hint": org_hint},
+                "message": f"{org_hint['shortName']} alumni are in a members-only directory. Join with your chapter's password to search them.",
+            }), 200
+        if parsed.get("confidence") == "low" and not org_targets:
             return jsonify({
                 "error": "Your search was too vague. Please add more specifics (e.g. job title, company, or location).",
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
@@ -254,10 +295,14 @@ def prompt_search():
         # is called for the remainder and results are deduped.
         cache_hits: list[dict] = []
         cache_hit_metadata: dict | None = None
+        # Defaults for when the provider call raises before assigning them
+        # (it used to surface as a 500 UnboundLocalError).
+        retry_level_used = 0
+        already_saved_contacts: list = []
         try:
             from app.services.firm_cache import search_firm_cache
             from app.services.firm_cache.reader import _flag_enabled as _lookup_enabled
-            if _lookup_enabled():
+            if _lookup_enabled() and not org_targets:
                 cache_hits, _, _, cache_hit_metadata = search_firm_cache(
                     parsed, max_contacts, exclude_keys=seen_contact_set
                 )
@@ -269,7 +314,28 @@ def prompt_search():
             cache_hit_metadata = None
 
         try:
-            if len(cache_hits) >= max_contacts:
+            if org_targets:
+                # Org directory only: no warehouse, no providers. Already-saved
+                # members are skipped before the cut so a repeat search shows
+                # new people.
+                from app.services.org_directory import search_org_directory
+                org_hits = search_org_directory(db, org_targets, parsed, org_list, prompt=org_prompt)
+                already_saved_contacts = []
+                if exclusion_data is not None:
+                    fresh = []
+                    for c in org_hits:
+                        if _contact_already_exists(c, exclusion_data["email_set"], exclusion_data["name_company_set"], exclusion_data["linkedin_set"]):
+                            already_saved_contacts.append(c)
+                        else:
+                            fresh.append(c)
+                    org_hits = fresh
+                contacts = org_hits[:max_contacts]
+                retry_level_used = 0
+                adjacency_metadata = {"provider": "org_directory", "org_ids": org_targets}
+                if not contacts:
+                    names = " / ".join(o["shortName"] for o in org_list if o["id"] in org_targets)
+                    adjacency_metadata["message"] = f"No {names} alumni matched that. Try fewer filters."
+            elif len(cache_hits) >= max_contacts:
                 # Full cache hit — skip PDL entirely (0 credits).
                 contacts = cache_hits[:max_contacts]
                 retry_level_used = 0
@@ -342,7 +408,7 @@ def prompt_search():
             pass
         # Last rung: the Hunter bridge covers company-targeted searches via
         # Domain Search when both providers came back empty.
-        if not contacts and (parsed.get("companies") or []):
+        if not contacts and not org_targets and (parsed.get("companies") or []):
             try:
                 from app.services.hunter_person_search import search_people_via_hunter
                 contacts, retry_level_used, already_saved_contacts, hunter_meta = search_people_via_hunter(
@@ -356,7 +422,10 @@ def prompt_search():
         # (flag-gated by ENABLE_FIRM_CACHE_WRITE, async).
         try:
             from app.services.firm_cache.writer import cache_pdl_contacts
-            cache_pdl_contacts(contacts, shape="app", async_write=True)
+            # Directory rows stay out of the shared warehouse; the vetted subset
+            # is mirrored deliberately by scripts/org_directory_mirror_to_warehouse.py.
+            if not org_targets:
+                cache_pdl_contacts(contacts, shape="app", async_write=True)
         except Exception:
             print("[ContactSearch] warehouse feed failed")
         search_broadened = retry_level_used >= 1
@@ -397,6 +466,10 @@ def prompt_search():
             "locations": parsed.get("locations", []),
             "company_context": parsed.get("company_context", ""),
         }
+        if org_targets:
+            parsed_query_payload["org_ids"] = org_targets
+        if org_hint:
+            parsed_query_payload["org_hint"] = org_hint
 
         if not contacts and not already_saved_contacts:
             response_data = {

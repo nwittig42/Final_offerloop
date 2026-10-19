@@ -20,13 +20,17 @@ const STEP_NUM_IMAGES = [StepNum1, StepNum2, StepNum3];
 // All-white monochrome variant of offerloop_logo2.png (padding trimmed) — the
 // standard dark-surface lockup, legible directly on the navy rail.
 import OfferloopLogo from "@/assets/offerloop_logo2_allwhite.png";
-import { OB } from "./onboardingTheme";
+import { OB, obPrimaryButton } from "./onboardingTheme";
+import { OrgPicker } from "@/components/OrgPicker";
+import { sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
 import { trackFeatureActionCompleted } from "@/lib/analytics";
 
 // Resume-first onboarding: intro slides, then a single resume/LinkedIn page.
 // "builder" (the free resume generator) shares the resume phase on the rail.
-type Step = "slides" | "source" | "builder" | "inbox";
-const STEP_INDEX: Record<Step, number> = { slides: 0, source: 1, builder: 1, inbox: 2 };
+// "orgs" (OFF-42) also sits in the resume phase, and only appears when there
+// are org alumni directories to join.
+type Step = "slides" | "source" | "builder" | "orgs" | "inbox";
+const STEP_INDEX: Record<Step, number> = { slides: 0, source: 1, builder: 1, orgs: 1, inbox: 2 };
 
 const RAIL_STEPS: { label: string; optional?: boolean }[] = [
   { label: "What Offerloop does" },
@@ -55,6 +59,12 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     linkedinUrl: string;
     step: string;
   } | null>(null);
+
+  // Org alumni directories: joining checks the org's password right here
+  // (the user doc already exists from sign-up), and the shared orgs query
+  // updates so Find shows the org as soon as onboarding ends.
+  const { orgs, memberships, join, leave } = useOrgs(!!user);
+  const afterResumeStep: Step = orgs.length > 0 ? "orgs" : "inbox";
 
   // Onboarding analytics: fire-and-forget step events.
   const loggedSteps = useRef<Set<string>>(new Set());
@@ -168,10 +178,14 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   const handleSource = (data: SourceResult) => {
     setSource(data);
     setPendingCompletion({ prefill: data.resolved, linkedinUrl: data.linkedinUrl, step: "source" });
-    setCurrentStep("inbox");
+    setCurrentStep(afterResumeStep);
   };
   const handleBuilderComplete = (prefill: ResumePrefill) => {
     setPendingCompletion({ prefill, linkedinUrl: "", step: "resume_builder" });
+    setCurrentStep(afterResumeStep);
+  };
+  const handleOrgsDone = () => {
+    logOnboardingEvent("completed", "orgs", memberships.length === 0);
     setCurrentStep("inbox");
   };
   const handleInboxDone = (skipped: boolean) => {
@@ -195,8 +209,10 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
       navigate("/?signedOut=true", { replace: true });
     } else if (currentStep === "source") setCurrentStep("slides");
     else if (currentStep === "builder") setCurrentStep("source");
-    else if (currentStep === "inbox")
+    else if (currentStep === "orgs")
       setCurrentStep(pendingCompletion?.step === "resume_builder" ? "builder" : "source");
+    else if (currentStep === "inbox")
+      setCurrentStep(orgs.length > 0 ? "orgs" : pendingCompletion?.step === "resume_builder" ? "builder" : "source");
   };
 
   // Slides bypass the Slate Split shell entirely (full-bleed navy).
@@ -239,6 +255,18 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
       headline: <>Let's build {em("your resume")}</>,
       sub: "Tell us what you've done. We'll turn it into a clean one-page resume, free.",
       footer: { mascot: 150 },
+    },
+    orgs: {
+      headline: <>Are you part of {em("an organization")}?</>,
+      sub: "Members get their organization's full alumni directory in Find. Enter your organization's password to join.",
+      footer: {
+        hint: (
+          <>
+            Your organization's alumni show up in Find with a badge, ready to email. Type its name
+            plus "alumni" in the search, or tap its pill under the search bar.
+          </>
+        ),
+      },
     },
     inbox: {
       headline: <>Where should {em("your drafts")} go?</>,
@@ -458,6 +486,19 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
           )}
           {currentStep === "builder" && (
             <OnboardingBuilder onComplete={handleBuilderComplete} submitting={submitting} />
+          )}
+          {currentStep === "orgs" && (
+            <div>
+              <OrgPicker
+                orgs={sortOrgsForSchool(orgs, pendingCompletion?.prefill.university)}
+                joined={memberships}
+                onJoin={async (id, password) => { await join.mutateAsync({ id, password }); }}
+                onLeave={async (id) => { await leave.mutateAsync(id); }}
+              />
+              <button type="button" onClick={handleOrgsDone} style={{ ...obPrimaryButton, marginTop: 24 }}>
+                {memberships.length > 0 ? "Continue" : "Skip for now"}
+              </button>
+            </div>
           )}
           {currentStep === "inbox" && (
             <OnboardingInbox onDone={handleInboxDone} submitting={submitting} />

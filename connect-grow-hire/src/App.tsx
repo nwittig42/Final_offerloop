@@ -71,6 +71,7 @@ const NotFound = React.lazy(() => import("./pages/NotFound"));
 const PaymentSuccess = React.lazy(() => import("./pages/PaymentSuccess"));
 // Feature Pages - These are the largest, most important to lazy load
 const FindPage = React.lazy(() => import("./pages/FindPage"));
+const OrgDirectoryPage = React.lazy(() => import("./pages/OrgDirectoryPage"));
 const EmailTemplatesPage = React.lazy(() => import("./pages/EmailTemplatesPage"));
 
 // Old My Network / Inbox / Meeting Prep URLs land on Contacts, carrying the
@@ -373,6 +374,7 @@ const AppRoutes: React.FC = () => {
       {/* Protected App Pages - Wrapped in Suspense for lazy loading */}
       <Route path="/dashboard" element={<Navigate to="/find" replace />} />
       <Route path="/find" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><FindPage /></Suspense></ProtectedRoute>} />
+      <Route path="/directory/:orgId" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><OrgDirectoryPage /></Suspense></ProtectedRoute>} />
       <Route path="/contacts" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><ContactsPage /></Suspense></ProtectedRoute>} />
       <Route path="/my-network" element={<ToContacts />} />
       <Route path="/my-network/:tab" element={<ToContacts />} />

@@ -11,13 +11,15 @@ import { companies } from "@/data/companies";
 import { UNIVERSITIES } from "@/data/universities";
 import { industries } from "@/data/industries";
 import offerloopIcon from "@/assets/offerloopiconlogo.png";
+import type { Org } from "@/services/api";
 import { getUniversityShortName } from "@/lib/universityUtils";
 import { APPLE_FONT } from "./PersonCard";
 
 const COMPANY_NAMES = companies.map((c) => c.name);
 const INDUSTRY_NAMES = industries.map((i) => i.name);
 
-type Key = keyof PeopleFilters;
+// Organizations are toggle pills (one per joined org), not free-text groups.
+type Key = Exclude<keyof PeopleFilters, "organizations">;
 
 const GROUPS: { key: Key; label: string; placeholder: string; suggestions: string[] }[] = [
   { key: "locations", label: "Locations", placeholder: "Add a location", suggestions: ["New York, NY", "San Francisco, CA", "Los Angeles, CA", "Chicago, IL", "Boston, MA", "Seattle, WA", "Washington, DC"] },
@@ -172,10 +174,14 @@ interface PeopleSearchBarProps {
   // Applying a filter or submitting runs the search with these values.
   onSearch: (query: string, filters: PeopleFilters) => void;
   userSchool: string | null;
+  // Org alumni directories the student has joined (OFF-42).
+  orgs?: Org[];
+  // Switches Find into its Organizations view.
+  onShowOrgs?: () => void;
   searching: boolean;
 }
 
-export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, searching }: PeopleSearchBarProps) {
+export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], onShowOrgs, searching }: PeopleSearchBarProps) {
   const [allOpen, setAllOpen] = useState(false);
   const [allDraft, setAllDraft] = useState<PeopleFilters>(filters);
   useEffect(() => { if (allOpen) setAllDraft(filters); }, [allOpen, filters]);
@@ -196,6 +202,14 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
         : [...filters.schools, userSchool].slice(0, MAX_VALUES),
     });
   };
+
+  const toggleOrg = (id: string) =>
+    apply({
+      ...filters,
+      organizations: filters.organizations.includes(id)
+        ? filters.organizations.filter((x) => x !== id)
+        : [...filters.organizations, id],
+    });
 
   return (
     <div className="space-y-3">
@@ -255,15 +269,28 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
       )}
 
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        <span className={pillClass(true)} aria-hidden>
+        <span className={pillClass(true)} aria-current="page">
           People
         </span>
+        {onShowOrgs && (
+          <button type="button" onClick={onShowOrgs} className={pillClass(false)}>
+            Organizations
+          </button>
+        )}
         <span className="mx-1 h-7 w-px shrink-0 bg-line" />
         {userSchool && (
           <button type="button" onClick={toggleAlumni} aria-pressed={alumniOn} className={pillClass(alumniOn)}>
             Alumni
           </button>
         )}
+        {orgs.map((o) => {
+          const on = filters.organizations.includes(o.id);
+          return (
+            <button key={o.id} type="button" onClick={() => toggleOrg(o.id)} aria-pressed={on} className={pillClass(on)}>
+              {o.shortName} alumni
+            </button>
+          );
+        })}
         {GROUPS.map((g) => (
           <FilterPill key={g.key} group={g} values={filters[g.key]} onApply={(v) => apply({ ...filters, [g.key]: v })} />
         ))}

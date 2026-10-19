@@ -3,7 +3,7 @@
 // black/grey text scale, grey capsule chips, and capsule buttons (blue for
 // the main action). Same content as the app's People card: who they are,
 // where they work, why we picked them, Info and Contact.
-import { Bookmark, GraduationCap, Loader2, MapPin, User, X } from "lucide-react";
+import { Bookmark, GraduationCap, Loader2, MapPin, User, Users, X } from "lucide-react";
 import { CompanyLogo } from "@/components/CompanyLogo";
 import { linkedInHref } from "@/components/contacts/contactsModel";
 import { relationFor, type Person } from "./peopleModel";
@@ -143,6 +143,17 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             {person.title || " "}
           </div>
         </div>
+        {/* Class year from an org directory (OFF-42): only when it's real. */}
+        {person.gradYear ? (
+          <span
+            className="-mt-1 shrink-0 select-none leading-none"
+            title={`Class of ${person.gradYear}`}
+            aria-label={`Class of ${person.gradYear}`}
+            style={{ fontFamily: '"Instrument Serif", Georgia, serif', fontStyle: "italic", fontSize: 30, color: "#8A6116" }}
+          >
+            ’{String(person.gradYear % 100).padStart(2, "0")}
+          </span>
+        ) : null}
         {onToggleBookmark && !isSample && (
           <button
             type="button"
@@ -182,7 +193,13 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
         ) : (
           <FitBadge score={person.matchScore} sample={isSample} />
         )}
-        {person.school && <SchoolChip school={person.school} sameSchool={sameUniversity(person.school, userSchool)} />}
+        {person.orgBadge && (
+          <span className="inline-flex h-6 max-w-full items-center gap-1 rounded-full px-2.5 text-[12px] font-semibold" style={{ background: "#EEF1FA", color: "#3A4E8C" }}>
+            <Users className="h-3 w-3 shrink-0" />
+            <span className="truncate">{person.orgBadge}</span>
+          </span>
+        )}
+        {person.school && !person.orgBadge && <SchoolChip school={person.school} sameSchool={sameUniversity(person.school, userSchool)} />}
         {person.title && <Chip icon={<User className="h-3 w-3" />}>{relationFor(person.title)}</Chip>}
       </div>
 
@@ -214,7 +231,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             type="button"
             onClick={onContact}
             disabled={isSample || contactState === "working"}
-            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : "Drafts an outreach email"}
+            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : person.source === "directory" && !person.email ? "Unlocks their email (10 credits, once) and drafts an outreach" : "Drafts an outreach email"}
             className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
           >
             {contactState === "working" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

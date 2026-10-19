@@ -56,6 +56,7 @@ from .app.routes.resume_workshop_public import resume_workshop_public_bp
 from .app.routes.meeting_prep_public import meeting_prep_public_bp
 from .app.routes.find_hiring_manager_public import find_hiring_manager_public_bp
 from .app.routes.find_companies_public import find_companies_public_bp
+from .app.routes.orgs import orgs_bp
 from .app.routes.find_jobs_public import find_jobs_public_bp
 from .app.routes.find_people_public import find_people_public_bp
 from .app.routes.shares import shares_bp
@@ -304,6 +305,7 @@ def create_app() -> Flask:
     app.register_blueprint(meeting_prep_public_bp)
     app.register_blueprint(find_hiring_manager_public_bp)
     app.register_blueprint(find_companies_public_bp)
+    app.register_blueprint(orgs_bp)  # Org alumni directories (OFF-42)
     app.register_blueprint(find_jobs_public_bp)
     app.register_blueprint(find_people_public_bp)
     app.register_blueprint(lifecycle_bp)         # /api/lifecycle/tick + unsubscribe
