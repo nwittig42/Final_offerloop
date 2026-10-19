@@ -9971,6 +9971,12 @@ def save_job():
         "match_score": payload.get("match_score"),
         "saved_at": firestore.SERVER_TIMESTAMP,
     })
+    # A saved job's company becomes a People deck target (OFF-41).
+    try:
+        from app.services.people_deck_cache import mark_stale
+        mark_stale(uid, db, reason="saved_job")
+    except Exception:
+        pass
     return jsonify({"success": True, "job_id": str(job_id)})
 
 

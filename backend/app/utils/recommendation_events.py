@@ -23,6 +23,16 @@ VALID_REC_EVENT_TYPES = {
     "email_replied",            # reply detected (via gmail webhook)
     "meeting_scheduled",        # meeting booked with contact
     "offer_received",           # offer from contact's company
+    "connection_made",          # contact reached the connected stage
+    # People deck (person_ranker). Each carries a deterministic doc_id.
+    "deck_served",              # one row per deck: every person shown, rank, features
+    "person_swipe_right",       # user swiped right on a ranker candidate
+    "person_swipe_left",        # user swiped left on a ranker candidate
+    "person_swipe_skip",        # user skipped a ranker candidate (pass)
+    "person_swipe_restore",     # user put a passed person back in the pool
+    "email_revealed",           # metered email reveal, credit-worthy result
+    "outreach_sent",            # deck outreach sent straight from the card
+    "outreach_drafted",         # deck outreach saved as a Gmail draft
 }
 
 
@@ -41,8 +51,14 @@ def log_recommendation_event(
     features_snapshot: dict | None = None,
     attribution_source: str = "",
     extra: dict | None = None,
+    doc_id: str | None = None,
 ) -> None:
-    """Write a recommendation event to Firestore. Swallows all errors."""
+    """Write a recommendation event to Firestore. Swallows all errors.
+
+    When doc_id is provided, uses .document(doc_id).set() — deterministic,
+    so client retries and Pub/Sub redelivery can't double-count. When
+    omitted, falls back to .add() (auto-ID) for legacy call sites.
+    """
     try:
         if event_type not in VALID_REC_EVENT_TYPES:
             logger.warning("recommendation log called with unknown event_type=%s", event_type)
@@ -90,7 +106,10 @@ def log_recommendation_event(
             **(extra or {}),
         }
 
-        db.collection("recommendation_events").add(doc)
+        if doc_id:
+            db.collection("recommendation_events").document(doc_id).set(doc)
+        else:
+            db.collection("recommendation_events").add(doc)
 
         logger.debug(
             "recommendation event logged: type=%s uid=%s contact=%s",

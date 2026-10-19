@@ -25,9 +25,12 @@ from app.services.person_ranker import (
     DEFAULT_RANKED_LIMIT,
     MAX_RANKED_LIMIT,
     _load_user_context,
+    model_version_for,
     rank_people_for_user,
+    ranker_variant,
     suggest_chips,
 )
+from app.services import people_deck_cache
 from app.utils.recommendation_events import log_recommendation_event
 
 # ── Spend guardrails for the deck (2026-09-08) ──────────────────────────
@@ -130,6 +133,76 @@ def _try_refund(uid: str, amount: int, reason: str) -> None:
 # ── Routes ────────────────────────────────────────────────────────────
 
 
+def _ready_first_within_tier_runs(candidates: list, ready_ids: set) -> list:
+    """Email-ready people first inside each consecutive run of one tier,
+    ranker order otherwise."""
+    out: list = []
+    run: list = []
+    for c in candidates:
+        if run and c.get("tier") != run[-1].get("tier"):
+            out += sorted(run, key=lambda x: 0 if (x.get("person") or {}).get("id") in ready_ids else 1)
+            run = []
+        run.append(c)
+    out += sorted(run, key=lambda x: 0 if (x.get("person") or {}).get("id") in ready_ids else 1)
+    return out
+
+
+def _run_in_background(fn, *args, **kwargs) -> None:
+    """Fire-and-forget on a daemon thread (tests patch this to run inline)."""
+    import threading
+    threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
+
+
+def _log_deck_served(uid, deck_id, surface, candidates, features, *, company=None, role=None, focus=None) -> None:
+    """One deck_served row: who was shown, where, and why."""
+    try:
+        items = []
+        for rank, c in enumerate(candidates):
+            pid = ((c.get("person") or {}).get("id") or "").strip()
+            if not pid:
+                continue
+            items.append({
+                "id":       pid,
+                "rank":     rank,
+                "company":  (c.get("person") or {}).get("company") or "",
+                "title":    (c.get("person") or {}).get("title") or "",
+                "score":    c.get("score"),
+                "tier":     c.get("tier"),
+                "features": features.get(pid) or {},
+            })
+        log_recommendation_event(
+            event_type="deck_served",
+            uid=uid,
+            model_version=model_version_for(uid),
+            variant=ranker_variant(uid),
+            surface=surface,
+            search_query={"company": company or "", "role": role or "", "focus": focus or ""},
+            attribution_source="ranker_deck",
+            extra={"deck_id": deck_id, "items": items, "count": len(items)},
+            doc_id=f"deck_{uid}_{deck_id}",
+        )
+    except Exception:
+        logger.exception("ranker: deck_served log failed uid=%s", uid)
+
+
+def _swiped_person_fields(db, candidate_id: str) -> dict:
+    """{"company": slug, "title": str} from the warehouse row, or {}."""
+    try:
+        from app.services.firm_cache.schema import FIRM_EMPLOYEES_COLLECTION
+        snap = db.collection(FIRM_EMPLOYEES_COLLECTION).document(candidate_id).get()
+        if not getattr(snap, "exists", False):
+            return {}
+        d = snap.to_dict() or {}
+        out = {}
+        if d.get("company"):
+            out["company"] = d["company"]
+        if d.get("title"):
+            out["title"] = d["title"]
+        return out
+    except Exception:
+        return {}
+
+
 @ranker_bp.route("/candidates", methods=["GET"])
 @require_firebase_auth
 def get_ranked_candidates():
@@ -204,10 +277,21 @@ def get_ranked_candidates():
 
     dig_state = "not_needed"   # not_needed | ran | not_asked | capped
 
-    candidates = rank_people_for_user(
-        uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-        company=company, role=role, focus=focus,
-    )
+    deck_features: dict = {}
+    candidates = None
+    # The general deck (no company / role / focus) is served from the
+    # student's saved list, built in the background after onboarding, so
+    # the page fills instantly (people_deck_cache). Narrow decks stay live.
+    general_deck = not (company or role or focus)
+    if general_deck:
+        served = people_deck_cache.serve(uid, db, limit, exclude_ids)
+        if served:
+            candidates, deck_features = served
+    if candidates is None:
+        candidates = rank_people_for_user(
+            uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
+            company=company, role=role, focus=focus, features_out=deck_features,
+        )
 
     # Dry well? DIG (2026-08-30). "Show more from your targets" rank-orders the
     # warehouse, so a target firm nobody has searched yet (Rylan's well was
@@ -228,8 +312,13 @@ def get_ranked_candidates():
             from app.services.firm_cache.writer import cache_pdl_contacts
             from app.services.person_ranker import _load_user_context
             _ctx = _load_user_context(uid, db) or {}
-            # A company deck digs that company and nothing else.
+            # A company deck digs that company and nothing else. On v1 the
+            # targets also come from Loops and saved jobs.
             _firms = [slugify_company(company)] if company else (_ctx.get("dream_company_slugs") or [])
+            if not company and ranker_variant(uid) == "v1":
+                from app.services.ranking_profile import load_ranking_profile
+                _targets = load_ranking_profile(uid, db, _ctx.get("profile") or {})["targets"]
+                _firms = list(_targets) or _firms
             _firms = [f for f in _firms if f]
             _dig_firm = None
             for _f in _firms:
@@ -243,7 +332,7 @@ def get_ranked_candidates():
             if _dig_firm is None and _firms:
                 _dig_firm = _firms[0]
             if _dig_firm and getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
-                _dig_name = company if company else _dig_firm.replace("-", " ")
+                _dig_name = company if company else _dig_firm.replace("_", " ").replace("-", " ")
                 # Alumni lead the dig (2026-09-08). The school filter is free
                 # at search time; only the collects cost, so the six people we
                 # pull are the six a student most wants to meet. LinkedIn shows
@@ -290,9 +379,10 @@ def get_ranked_candidates():
                             log_provider_spend("coresignal", "member_collect", _collected, returned=_collected)
                         except Exception:
                             pass
+                    deck_features.clear()
                     candidates = rank_people_for_user(
                         uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-                        company=company, role=role, focus=focus,
+                        company=company, role=role, focus=focus, features_out=deck_features,
                     )
                     logger.info("ranker dig: %s -> %d collected, %d ranked",
                                 _dig_firm, len(_dug), len(candidates))
@@ -327,17 +417,11 @@ def get_ranked_candidates():
                 ):
                     ready_ids.add(snap.id)
             if ready_ids:
-                # Tier order as the RANKER emitted it, then readiness, then
-                # the ranker's own order as the final stable tiebreak.
-                tier_rank: dict = {}
-                for c in candidates:
-                    tier_rank.setdefault(c.get("tier"), len(tier_rank))
-                original_index = {id(c): i for i, c in enumerate(candidates)}
-                candidates.sort(key=lambda c: (
-                    tier_rank.get(c.get("tier"), 99),
-                    0 if ((c.get("person") or {}).get("id") in ready_ids) else 1,
-                    original_index[id(c)],
-                ))
+                # Runs of one tier in the RANKER's order, then readiness
+                # inside the run, then the ranker's order as the stable
+                # tiebreak. A run ends when the tier changes, so a person
+                # the ranker placed lower never jumps above a different tier.
+                candidates[:] = _ready_first_within_tier_runs(candidates, ready_ids)
         except Exception:
             logger.exception("ranked warm-first ordering failed uid=%s", uid)
 
@@ -345,6 +429,17 @@ def get_ranked_candidates():
     # reveal-email calls so the training row can be joined back to the
     # deck context (features_snapshot, rank).
     deck_id = uuid.uuid4().hex[:16]
+
+    # Server-side impression (OFF-41): one row per deck with every person
+    # shown, their rank, and the features the ranker scored them on. Swipe,
+    # reveal, outreach, reply and meeting rows join back by deck_id and
+    # candidate id, so outcomes can be traced to what the ranker saw.
+    # Written off the request thread so logging never slows the deck.
+    if candidates:
+        _run_in_background(
+            _log_deck_served, uid, deck_id, surface, list(candidates), dict(deck_features),
+            company=company, role=role, focus=focus,
+        )
 
     # FullEnrich prefetch (2026-08-25), same trick the prompt deck ships:
     # one bulk waterfall for the top of the deck, fired while the student
@@ -506,6 +601,7 @@ def post_ranker_feedback():
         try:
             (db.collection("users").document(uid)
                .collection("peoplePreferences").document(candidate_id).delete())
+            people_deck_cache.restore(uid, db, candidate_id)
         except Exception as exc:
             logger.warning("feedback: restore delete failed uid=%s cid=%s: %s", uid, candidate_id, exc)
         try:
@@ -557,7 +653,9 @@ def post_ranker_feedback():
                "last_rank":    rank_int,
                "updated_at":   now.isoformat(),
                "updated_ts":   firestore.SERVER_TIMESTAMP,
+               **_swiped_person_fields(db, candidate_id),
            }))
+        people_deck_cache.remove(uid, db, candidate_id)
     except Exception as exc:
         logger.warning(
             "feedback: peoplePreferences write failed uid=%s cid=%s: %s",
@@ -573,7 +671,8 @@ def post_ranker_feedback():
         contact_id=candidate_id,
         rank=rank_int,
         score=float(score) if isinstance(score, (int, float)) else None,
-        model_version="person_ranker_v0",
+        model_version=model_version_for(uid),
+        variant=ranker_variant(uid),
         surface="ios_swipe_deck",
         features_snapshot={
             "tier":           tier,
@@ -872,7 +971,8 @@ def reveal_candidate_email(candidate_id):
         uid=uid,
         contact_id=candidate_id,
         contact_email=email or "",
-        model_version="person_ranker_v0",
+        model_version=model_version_for(uid),
+        variant=ranker_variant(uid),
         surface=surface,
         features_snapshot={
             "deck_id":    deck_id,
@@ -1202,6 +1302,7 @@ def candidate_outreach(candidate_id):
             contact_doc["gmailThreadId"] = gmail_thread_id
     try:
         contact_ref.set(contact_doc)
+        people_deck_cache.remove(uid, db, candidate_id)
     except Exception as exc:
         logger.warning(
             "outreach: contact doc write failed uid=%s cid=%s: %s "
@@ -1215,7 +1316,8 @@ def candidate_outreach(candidate_id):
         uid=uid,
         contact_id=candidate_id,
         contact_email=to_email,
-        model_version="person_ranker_v0",
+        model_version=model_version_for(uid),
+        variant=ranker_variant(uid),
         surface="ios_swipe_deck",
         features_snapshot={"deck_id": deck_id, "action": action},
         attribution_source="ranker_deck",

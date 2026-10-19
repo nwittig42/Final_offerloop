@@ -63,7 +63,9 @@ public shared module in a follow-up — do not fork the logic here.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Optional
@@ -75,6 +77,7 @@ from app.services.firm_cache.schema import (
     slugify_school,
 )
 from app.services.firm_cache.reader import firm_employee_doc_to_app_contact
+from app.services.ranking_profile import load_ranking_profile
 from app.services.student_job_ranker import _title_role_families
 from app.utils.personalization import (
     _LEAD_TYPE_RANK,
@@ -84,6 +87,7 @@ from app.utils.personalization import (
     build_contact_profile,
     build_user_profile,
 )
+from app.utils.users import get_user_school
 from app.utils.warmth_scoring import (
     _build_user_comparison_data,
     build_briefing_line,
@@ -107,6 +111,23 @@ MAX_RANKED_LIMIT           = 100   # HTTP-level ceiling
 LAMBDA_COMPANY     = 3.0           # squared penalty per repeat company
 LAMBDA_ROLE_FAMILY = 0.5           # squared penalty per repeat role family
 
+# Personalized ranking (OFF-41). v1 adds points from the student's ranking
+# profile (ranking_profile.py) on top of warmth; v0 is warmth alone. The
+# split is by uid hash so a student always sees the same ranker and the
+# deck's events carry which one made the deck. PERSON_RANKER_V1_PERCENT=0
+# turns v1 off, 100 turns it on for everyone.
+V1_PERCENT_ENV = "PERSON_RANKER_V1_PERCENT"
+V1_PERCENT_DEFAULT = 50
+
+TARGET_FIRM_POINTS   = 12   # × source strength; firms from loops/saved jobs
+TARGET_ROLE_POINTS   = 10   # title matches a role the student is hunting
+STAGE_FIT_POINTS     = 6    # the right kind of person for their year
+COMPANY_AFFINITY_CAP = 12   # firms that already turned into replies/meetings
+FAMILY_AFFINITY_CAP  = 8    # role families that did
+NEGATIVE_FIRM_POINTS = 15   # firms they keep passing on
+
+_JUNIOR_RE = re.compile(r"\b(analyst|associate|consultant|engineer|intern|developer|specialist)\b", re.I)
+
 
 # ── Public entry point ────────────────────────────────────────────────
 
@@ -119,8 +140,15 @@ def rank_people_for_user(
     company: str | None = None,
     role: str | None = None,
     focus: str | None = None,
+    features_out: dict | None = None,
+    max_limit: int = MAX_RANKED_LIMIT,
 ) -> list[dict]:
     """Return a diversified, ranked feed of people uid should reach out to.
+
+    features_out, when given, is filled with {candidate_id: features} for
+    every person returned, so the route can log what the ranker saw.
+    max_limit raises the HTTP ceiling for the background deck build
+    (people_deck_cache), which saves a longer list than one response holds.
 
     Response element shape:
       {
@@ -144,7 +172,7 @@ def rank_people_for_user(
       * unexpected Firestore / scorer errors (never raises — the deck
         contract requires an empty deck rather than a 500)
     """
-    limit = max(1, min(int(limit or DEFAULT_RANKED_LIMIT), MAX_RANKED_LIMIT))
+    limit = max(1, min(int(limit or DEFAULT_RANKED_LIMIT), max(MAX_RANKED_LIMIT, int(max_limit))))
 
     user_ctx = _load_user_context(uid, db)
     if user_ctx is None:
@@ -185,6 +213,17 @@ def rank_people_for_user(
         focus = ""
     user_ctx["focus"] = focus
 
+    variant = ranker_variant(uid)
+    user_ctx["variant"] = variant
+    if variant == "v1":
+        rprofile = load_ranking_profile(uid, db, user_ctx["profile"])
+        user_ctx["ranking_profile"] = rprofile
+        if not company and rprofile["targets"]:
+            # Loop briefs and saved jobs name firms too, and most students
+            # never fill dreamCompanies in Settings. Source from all of them.
+            user_ctx["dream_company_names"] = [t["name"] for t in rprofile["targets"].values()]
+            user_ctx["dream_company_slugs"] = list(rprofile["targets"])
+
     if not user_ctx["dream_company_slugs"] and not user_ctx["school_slugs"]:
         # Brand-new accounts have neither (onboarding does not ask for target
         # companies yet), and every one of them opened an empty deck on day
@@ -194,9 +233,15 @@ def rank_people_for_user(
         try:
             from app.services.warehouse_warm import _demand_ranked_firms
             seeds = [disp for disp, _slug, _score in _demand_ranked_firms(db)[:12]]
+        except ImportError:
+            # warehouse_warm (the nightly demand ranking) only exists on the
+            # mobile backend. Without it every brand-new student opened an
+            # empty deck; fall back to the firms students in their lane
+            # most often network into.
+            seeds = default_seed_firms(user_ctx["profile"])
         except Exception:
             logger.exception("person_ranker: seed-firm fallback failed uid=%s", uid)
-            seeds = []
+            seeds = default_seed_firms(user_ctx["profile"])
         if not seeds:
             logger.info("person_ranker: sparse profile uid=%s and no seeds, returning empty deck", uid)
             return []
@@ -251,6 +296,15 @@ def rank_people_for_user(
         item = _score_one(user_ctx, cand)
         if item is None:
             continue
+        # "score" stays the warmth score every client already draws (the
+        # app turns it into a 1-10 badge). v1's personal points only decide
+        # the ORDER, through rank_score, so cards look the same in both arms.
+        item["rank_score"] = item["score"]
+        item["features"] = {"warmth": item["score"]}
+        if variant == "v1":
+            pts, feats = _personal_points(user_ctx, cand, item)
+            item["rank_score"] += pts
+            item["features"].update(feats)
         item["id"] = _id
         item["candidate"] = cand
         scored.append(item)
@@ -274,10 +328,10 @@ def rank_people_for_user(
         scored.sort(key=lambda x: (
             0 if x.get("_role_hit") else 1,
             0 if (focus == "recent" and x.get("_recent")) or (focus == "managers" and x.get("_manager")) else 1,
-            -x["score"],
+            -x["rank_score"],
         ))
     else:
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        scored.sort(key=lambda x: x["rank_score"], reverse=True)
 
     if user_ctx.get("company_filter"):
         picked = scored[:limit]
@@ -285,6 +339,8 @@ def rank_people_for_user(
         picked = _diversify_people(scored, k=limit)
     out = []
     for x in picked:
+        if features_out is not None:
+            features_out[x["id"]] = dict(x.get("features") or {}, rank_score=x["rank_score"], tier=x["tier"])
         d = _to_response_dict(x)
         if role_filter:
             d["role_match"] = bool(x.get("_role_hit"))
@@ -446,7 +502,10 @@ def _load_user_context(uid: str, db) -> Optional[dict]:
         if slug and slug not in dream_company_slugs:
             dream_company_slugs.append(slug)
 
-    school = (profile.get("academics") or {}).get("school") or profile.get("school")
+    # Web onboarding writes academics.university; the app writes
+    # academics.school. Reading only the app's field left every web student
+    # without an alumni candidate pool.
+    school = get_user_school(profile)
     school_slugs: list[str] = []
     if school:
         slug = slugify_school(str(school))
@@ -556,6 +615,9 @@ def _fetch_candidates(
             logger.debug("person_ranker: firm_employees query failed: %s", exc)
 
     col = db.collection(FIRM_EMPLOYEES_COLLECTION)
+    # Each firm gets a fair share of the pool. One firm at the full cap
+    # used to fill the pool before the student's other targets were read.
+    per_firm = max(60, cap // max(1, len(companies))) if companies else cap
     if companies and schools:
         for co in companies:
             for sch in schools:
@@ -578,13 +640,24 @@ def _fetch_candidates(
         # warmth scorer still floats any alumni to the top.
         if len(docs) < cap:
             for co in companies:
+                _stream(col.where("company", "==", co).limit(per_firm))
+        if len(docs) < cap and per_firm < cap:
+            for co in companies:
+                if len(docs) >= cap:
+                    break
                 _stream(col.where("company", "==", co).limit(cap))
         if len(docs) < cap:
             for sch in schools:
                 _stream(col.where("schools", "array_contains", sch).limit(cap))
     elif companies:
         for co in companies:
-            _stream(col.where("company", "==", co).limit(cap))
+            _stream(col.where("company", "==", co).limit(per_firm))
+        if len(docs) < cap and per_firm < cap:
+            # Some targets were thin: let the deep ones fill the rest.
+            for co in companies:
+                if len(docs) >= cap:
+                    break
+                _stream(col.where("company", "==", co).limit(cap))
     else:
         for sch in schools:
             _stream(col.where("schools", "array_contains", sch).limit(cap))
@@ -648,6 +721,7 @@ def _score_one(user_ctx: dict, candidate: dict) -> dict:
             "tier":     tier,
             "reasons":  lead_signals,
             "briefing": briefing,
+            "warmth_signals": [s.get("signal") for s in warmth_signals if isinstance(s, dict)],
         }
     except Exception as exc:
         logger.warning(
@@ -656,6 +730,139 @@ def _score_one(user_ctx: dict, candidate: dict) -> dict:
             exc,
         )
         return {"score": 0, "tier": "cold", "reasons": [], "briefing": ""}
+
+
+# ── Starter firms for a profile with no targets ───────────────────────
+
+# Keyword → the firms students in that lane most often network into. Same
+# lanes as the website feed (connect-grow-hire find/people/feedSeeds.ts).
+_SEED_LANES = [
+    (re.compile(r"invest(ment)? bank|\bib\b|banking|private equity|\bpe\b|hedge fund|asset management|sales (and|&) trading|capital markets|finance", re.I),
+     ["Goldman Sachs", "JPMorgan Chase", "Morgan Stanley", "Evercore", "Blackstone", "Bank of America"]),
+    (re.compile(r"consult|strategy|management consulting", re.I),
+     ["McKinsey & Company", "Boston Consulting Group", "Bain & Company", "Deloitte", "Accenture"]),
+    (re.compile(r"account|audit|\btax\b|\bcpa\b|assurance", re.I),
+     ["Deloitte", "PwC", "EY", "KPMG"]),
+    (re.compile(r"software|engineer|computer science|\bcs\b|tech|product manag|data scien|machine learning|\bai\b", re.I),
+     ["Google", "Meta", "Apple", "Amazon", "Microsoft"]),
+    (re.compile(r"market|brand|advertis|media|entertainment|consumer", re.I),
+     ["Procter & Gamble", "Nike", "The Walt Disney Company", "Netflix", "L'Oréal"]),
+    (re.compile(r"real estate", re.I),
+     ["CBRE", "JLL", "Blackstone"]),
+]
+_SEED_DEFAULT_MIX = ["Goldman Sachs", "McKinsey & Company", "Google", "Deloitte",
+                     "JPMorgan Chase", "Amazon", "Morgan Stanley", "Boston Consulting Group"]
+
+
+def default_seed_firms(profile: Optional[dict], max_firms: int = 12) -> list[str]:
+    """Firms to start a deck from when the student named none: their lane
+    (track, industries, roles, major, resume titles) first, then a broad mix."""
+    profile = profile or {}
+    goals = profile.get("goals") or {}
+    academics = profile.get("academics") or {}
+    resume = profile.get("resumeParsed") or {}
+    parts: list[str] = []
+    for v in (goals.get("careerTrack"), profile.get("careerTrack"), profile.get("preferredJobRole"),
+              academics.get("major"), profile.get("major")):
+        if v:
+            parts.append(str(v))
+    for key in ("targetIndustries", "industriesOfInterest", "careerInterests", "preferredJobRolesOrTitles"):
+        raw = goals.get(key) or profile.get(key) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        parts += [str(x.get("name") if isinstance(x, dict) else x) for x in raw if x]
+    for exp in (resume.get("experience") or [])[:4]:
+        if isinstance(exp, dict) and exp.get("title"):
+            parts.append(str(exp["title"]))
+    text = " | ".join(parts)
+
+    out: list[str] = []
+    def _add(name: str) -> None:
+        if name.lower() not in {x.lower() for x in out}:
+            out.append(name)
+    if text:
+        for pat, firms in _SEED_LANES:
+            if pat.search(text):
+                for f in firms:
+                    _add(f)
+    for f in _SEED_DEFAULT_MIX:
+        _add(f)
+    return out[:max_firms]
+
+
+# ── Personalization (v1) ──────────────────────────────────────────────
+
+
+def ranker_variant(uid: str) -> str:
+    """"v1" or "v0" for this student, stable across calls. The bucket is a
+    hash of the uid, so the routes can recompute it for event logging
+    without a lookup."""
+    try:
+        pct = int(os.getenv(V1_PERCENT_ENV, V1_PERCENT_DEFAULT))
+    except (TypeError, ValueError):
+        pct = V1_PERCENT_DEFAULT
+    bucket = int(hashlib.sha1(f"person_ranker:{uid}".encode()).hexdigest(), 16) % 100
+    return "v1" if bucket < pct else "v0"
+
+
+def model_version_for(uid: str) -> str:
+    return f"person_ranker_{ranker_variant(uid)}"
+
+
+def _personal_points(user_ctx: dict, cand: dict, item: dict) -> tuple[int, dict]:
+    """Points from the ranking profile on top of warmth, plus the features
+    that earned them (logged with the deck so outcomes can be traced back
+    to what the ranker saw)."""
+    prof = user_ctx.get("ranking_profile") or {}
+    title = cand.get("Title") or ""
+    slug = slugify_company(cand.get("Company") or "")
+    feats: dict = {}
+
+    target = (prof.get("targets") or {}).get(slug)
+    if target:
+        pts = round(TARGET_FIRM_POINTS * float(target.get("strength") or 0))
+        if "dream_company" in (item.get("warmth_signals") or []):
+            # Warmth already paid +10 for a declared dream firm.
+            pts = max(0, pts - 10)
+        feats["target_firm"] = pts
+
+    if not user_ctx.get("role_filter"):
+        roles = prof.get("target_roles") or []
+        if title and any(_role_hit(title, r) for r in roles):
+            feats["target_role"] = TARGET_ROLE_POINTS
+
+    joined = cand.get("JoinedYear")
+    try:
+        joined = int(joined) if joined else None
+    except (TypeError, ValueError):
+        joined = None
+    recent = bool(joined and joined >= datetime.now(timezone.utc).year - 1)
+    manager = bool(_MANAGER_RE.search(title))
+    stage = prof.get("stage") or ""
+    if stage == "recruit":
+        # Inside a year of graduating: the people who hire and the people
+        # who just went through the process.
+        fit = _role_hit(title, "recruiter") or manager or recent
+    elif stage == "explore":
+        # Freshmen and sophomores: near-peers who will take a coffee chat.
+        fit = recent or (bool(_JUNIOR_RE.search(title)) and not manager)
+    else:
+        fit = False
+    if fit:
+        feats["stage_fit"] = STAGE_FIT_POINTS
+
+    co_w = (prof.get("company_affinity") or {}).get(slug, 0.0)
+    if co_w:
+        feats["company_affinity"] = min(COMPANY_AFFINITY_CAP, round(3 * co_w))
+    fam_aff = prof.get("family_affinity") or {}
+    fam_w = max((fam_aff.get(f, 0.0) for f in _title_role_families(title)), default=0.0)
+    if fam_w:
+        feats["family_affinity"] = min(FAMILY_AFFINITY_CAP, round(2 * fam_w))
+
+    if slug and slug in (prof.get("negative_companies") or ()):
+        feats["negative_firm"] = -NEGATIVE_FIRM_POINTS
+
+    return sum(feats.values()), feats
 
 
 # ── Diversify ─────────────────────────────────────────────────────────
@@ -683,20 +890,25 @@ def _diversify_people(scored: list[dict], k: int) -> list[dict]:
     picked: list[dict] = []
     company_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
+    keys: dict[int, tuple] = {}
+    for item in remaining:
+        cand = item["candidate"]
+        keys[id(item)] = (
+            _normalize_company(cand.get("Company") or "") or "_unknown",
+            _title_role_families(cand.get("Title") or ""),
+        )
 
     while remaining and len(picked) < k:
         best_i = 0
         best_adj = float("-inf")
         for i, item in enumerate(remaining):
-            cand = item["candidate"]
-            co = _normalize_company(cand.get("Company") or "") or "_unknown"
-            fams = _title_role_families(cand.get("Title") or "")
+            co, fams = keys[id(item)]
             co_ct = company_counts.get(co, 0)
             fam_penalty = (
                 sum(family_counts.get(f, 0) ** 2 for f in fams) if fams else 0
             )
             adj = (
-                item["score"]
+                item.get("rank_score", item["score"])
                 - LAMBDA_COMPANY * (co_ct ** 2)
                 - LAMBDA_ROLE_FAMILY * fam_penalty
             )
@@ -705,9 +917,7 @@ def _diversify_people(scored: list[dict], k: int) -> list[dict]:
                 best_i = i
 
         chosen = remaining.pop(best_i)
-        cand = chosen["candidate"]
-        co = _normalize_company(cand.get("Company") or "") or "_unknown"
-        fams = _title_role_families(cand.get("Title") or "")
+        co, fams = keys[id(chosen)]
         company_counts[co] = company_counts.get(co, 0) + 1
         for f in fams:
             family_counts[f] = family_counts.get(f, 0) + 1
