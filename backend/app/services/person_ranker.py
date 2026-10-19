@@ -287,10 +287,14 @@ def rank_people_for_user(
         item = _score_one(user_ctx, cand)
         if item is None:
             continue
+        # "score" stays the warmth score every client already draws (the
+        # app turns it into a 1-10 badge). v1's personal points only decide
+        # the ORDER, through rank_score, so cards look the same in both arms.
+        item["rank_score"] = item["score"]
         item["features"] = {"warmth": item["score"]}
         if variant == "v1":
             pts, feats = _personal_points(user_ctx, cand, item)
-            item["score"] += pts
+            item["rank_score"] += pts
             item["features"].update(feats)
         item["id"] = _id
         item["candidate"] = cand
@@ -315,10 +319,10 @@ def rank_people_for_user(
         scored.sort(key=lambda x: (
             0 if x.get("_role_hit") else 1,
             0 if (focus == "recent" and x.get("_recent")) or (focus == "managers" and x.get("_manager")) else 1,
-            -x["score"],
+            -x["rank_score"],
         ))
     else:
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        scored.sort(key=lambda x: x["rank_score"], reverse=True)
 
     if user_ctx.get("company_filter"):
         picked = scored[:limit]
@@ -327,7 +331,7 @@ def rank_people_for_user(
     out = []
     for x in picked:
         if features_out is not None:
-            features_out[x["id"]] = dict(x.get("features") or {}, score=x["score"], tier=x["tier"])
+            features_out[x["id"]] = dict(x.get("features") or {}, rank_score=x["rank_score"], tier=x["tier"])
         d = _to_response_dict(x)
         if role_filter:
             d["role_match"] = bool(x.get("_role_hit"))
@@ -628,12 +632,23 @@ def _fetch_candidates(
         if len(docs) < cap:
             for co in companies:
                 _stream(col.where("company", "==", co).limit(per_firm))
+        if len(docs) < cap and per_firm < cap:
+            for co in companies:
+                if len(docs) >= cap:
+                    break
+                _stream(col.where("company", "==", co).limit(cap))
         if len(docs) < cap:
             for sch in schools:
                 _stream(col.where("schools", "array_contains", sch).limit(cap))
     elif companies:
         for co in companies:
             _stream(col.where("company", "==", co).limit(per_firm))
+        if len(docs) < cap and per_firm < cap:
+            # Some targets were thin: let the deep ones fill the rest.
+            for co in companies:
+                if len(docs) >= cap:
+                    break
+                _stream(col.where("company", "==", co).limit(cap))
     else:
         for sch in schools:
             _stream(col.where("schools", "array_contains", sch).limit(cap))
@@ -821,7 +836,7 @@ def _diversify_people(scored: list[dict], k: int) -> list[dict]:
                 sum(family_counts.get(f, 0) ** 2 for f in fams) if fams else 0
             )
             adj = (
-                item["score"]
+                item.get("rank_score", item["score"])
                 - LAMBDA_COMPANY * (co_ct ** 2)
                 - LAMBDA_ROLE_FAMILY * fam_penalty
             )

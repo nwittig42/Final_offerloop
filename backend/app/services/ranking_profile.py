@@ -128,8 +128,14 @@ def collect_targets(
         if name:
             _add(str(name).strip(), "saved_job")
 
+    # Every firm the student declared stays; the cap only trims the
+    # inferred ones (Loops, saved jobs) so the deck never loses a target
+    # it used to read.
     ordered = sorted(targets.items(), key=lambda kv: -kv[1]["strength"])
-    return dict(ordered[:MAX_TARGET_FIRMS])
+    declared = [kv for kv in ordered if "declared" in kv[1]["sources"]]
+    inferred = [kv for kv in ordered if "declared" not in kv[1]["sources"]]
+    room = max(0, MAX_TARGET_FIRMS - len(declared))
+    return dict(declared + inferred[:room])
 
 
 def collect_target_roles(profile: dict, loops: Iterable[dict] = ()) -> list[str]:
@@ -272,12 +278,21 @@ def load_ranking_profile(uid: str, db, profile: dict, contacts: Optional[list] =
     """Read the student's loops, saved jobs, swipes (and contacts unless
     the caller already streamed them) and build the profile. Never raises."""
     try:
+        from concurrent.futures import ThreadPoolExecutor
         user_ref = db.collection("users").document(uid)
-        loops = _stream(user_ref.collection("loops"), MAX_LOOPS)
-        saved_jobs = _stream(user_ref.collection("savedJobs"), MAX_SAVED_JOBS)
-        prefs = _stream(user_ref.collection("peoplePreferences"), MAX_PREFS)
+        reads = {
+            "loops":  (user_ref.collection("loops"), MAX_LOOPS),
+            "saved":  (user_ref.collection("savedJobs"), MAX_SAVED_JOBS),
+            "prefs":  (user_ref.collection("peoplePreferences"), MAX_PREFS),
+        }
         if contacts is None:
-            contacts = _stream(user_ref.collection("contacts"), 2000)
+            reads["contacts"] = (user_ref.collection("contacts"), 2000)
+        # Parallel so the deck pays one round trip, not four.
+        with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+            futures = {k: pool.submit(_stream, q, n) for k, (q, n) in reads.items()}
+            got = {k: f.result() for k, f in futures.items()}
+        loops, saved_jobs, prefs = got["loops"], got["saved"], got["prefs"]
+        contacts = got.get("contacts", contacts)
     except Exception as exc:
         logger.warning("ranking_profile: load failed uid=%s: %s", uid, exc)
         return empty_ranking_profile(profile)

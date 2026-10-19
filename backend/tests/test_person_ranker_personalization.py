@@ -69,7 +69,9 @@ def test_v1_floats_a_loop_target_firm(flow, monkeypatch):
     out = pr.rank_people_for_user("u1", db=object(), limit=10, features_out=feats)
     assert [o["person"]["company"] for o in out] == ["Evercore", "Google"]
     assert feats["bob-evercore"]["target_firm"] == pr.TARGET_FIRM_POINTS
-    assert out[0]["score"] == 20 + pr.TARGET_FIRM_POINTS
+    assert feats["bob-evercore"]["rank_score"] == 20 + pr.TARGET_FIRM_POINTS
+    # The score cards draw is untouched; only the order changed.
+    assert [o["score"] for o in out] == [20, 20]
 
 
 def test_v1_sources_from_loop_targets(flow, monkeypatch):
@@ -130,7 +132,7 @@ def test_v0_ignores_the_profile(flow, monkeypatch):
     feats: dict = {}
     out = pr.rank_people_for_user("u1", db=object(), limit=10, features_out=feats)
     assert all(o["score"] == 20 for o in out)
-    assert feats["bob-evercore"] == {"warmth": 20, "score": 20, "tier": "neutral"}
+    assert feats["bob-evercore"] == {"warmth": 20, "rank_score": 20, "tier": "neutral"}
 
 
 def test_response_never_leaks_features_or_signals(flow, monkeypatch):
@@ -162,7 +164,39 @@ def test_each_target_firm_gets_a_share_of_the_pool():
     db.collection.return_value = query
     ctx = _ctx(slugs=[f"firm_{i}" for i in range(5)])
     pr._fetch_candidates(ctx, db, cap=400)
-    assert limits == [80] * 5
+    # Equal shares first; every firm here is empty, so each is then asked
+    # for the full cap to fill the pool (never smaller than before).
+    assert limits == [80] * 5 + [400] * 5
+
+
+def test_a_deep_firm_still_fills_the_pool_when_others_are_thin():
+    db = MagicMock()
+    query = MagicMock()
+    query.where.return_value = query
+    limit_seen = []
+    def _limit(n):
+        limit_seen.append(n)
+        q = MagicMock()
+        firm = query.where.call_args[0][2]
+        size = 1000 if firm == "deep" else 0
+        q.stream.return_value = [
+            MagicMock(id=f"{firm}-{i}", **{"to_dict.return_value": {"first_name": f"p{i}", "last_name": "x"}})
+            for i in range(min(n, size))
+        ]
+        return q
+    query.limit.side_effect = _limit
+    db.collection.return_value = query
+    ctx = _ctx(slugs=["thin_a", "thin_b", "thin_c", "deep"])
+    with patch.object(pr, "firm_employee_doc_to_app_contact", side_effect=lambda d: d):
+        out = pr._fetch_candidates(ctx, db, cap=400)
+    assert len(out) == 400
+
+
+def test_declared_firms_survive_the_target_cap():
+    profile = {"dreamCompanies": [f"Firm {i}" for i in range(14)]}
+    loops = [{"status": "running", "briefParsed": {"companies": ["Loop Co"]}}]
+    t = rp.collect_targets(profile, loops)
+    assert len(t) == 14 and "loop_co" not in t
 
 
 # ── deck route helper ────────────────────────────────────────────────
@@ -244,6 +278,7 @@ def test_candidates_logs_one_deck_served_row(http_client, authed):
     db.get_all.return_value = []
     with patch("backend.app.routes.ranker.get_db", return_value=db), \
          patch("backend.app.routes.ranker.rank_people_for_user", side_effect=fake_rank), \
+         patch("backend.app.routes.ranker._run_in_background", side_effect=lambda fn, *a, **k: fn(*a, **k)), \
          patch("backend.app.routes.ranker.log_recommendation_event") as log:
         r = http_client.get("/api/ranker/candidates?limit=10&prefetch=0",
                             headers={"Authorization": "Bearer fake"})

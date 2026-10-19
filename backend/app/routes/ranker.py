@@ -146,6 +146,12 @@ def _ready_first_within_tier_runs(candidates: list, ready_ids: set) -> list:
     return out
 
 
+def _run_in_background(fn, *args, **kwargs) -> None:
+    """Fire-and-forget on a daemon thread (tests patch this to run inline)."""
+    import threading
+    threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
+
+
 def _log_deck_served(uid, deck_id, surface, candidates, features, *, company=None, role=None, focus=None) -> None:
     """One deck_served row: who was shown, where, and why."""
     try:
@@ -417,9 +423,12 @@ def get_ranked_candidates():
     # shown, their rank, and the features the ranker scored them on. Swipe,
     # reveal, outreach, reply and meeting rows join back by deck_id and
     # candidate id, so outcomes can be traced to what the ranker saw.
+    # Written off the request thread so logging never slows the deck.
     if candidates:
-        _log_deck_served(uid, deck_id, surface, candidates, deck_features,
-                         company=company, role=role, focus=focus)
+        _run_in_background(
+            _log_deck_served, uid, deck_id, surface, list(candidates), dict(deck_features),
+            company=company, role=role, focus=focus,
+        )
 
     # FullEnrich prefetch (2026-08-25), same trick the prompt deck ships:
     # one bulk waterfall for the top of the deck, fired while the student

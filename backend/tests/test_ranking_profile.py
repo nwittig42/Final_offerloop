@@ -30,9 +30,9 @@ def test_targets_read_goals_dicts_and_skip_finished_loops():
     assert list(t) == ["mckinsey"]
 
 
-def test_targets_are_capped():
-    profile = {"dreamCompanies": [f"Firm {i}" for i in range(30)]}
-    assert len(rp.collect_targets(profile)) == rp.MAX_TARGET_FIRMS
+def test_inferred_targets_are_capped():
+    loops = [{"status": "running", "briefParsed": {"companies": [f"Firm {i}" for i in range(30)]}}]
+    assert len(rp.collect_targets({}, loops)) == rp.MAX_TARGET_FIRMS
 
 
 def test_saved_job_never_outranks_a_declared_firm():
