@@ -219,14 +219,27 @@ def _names(items) -> list[str]:
 _NON_ROLE = {"people", "person", "folks", "anyone", "someone", "everyone", "contacts", "guys"}
 
 
+_ROLE_ABBREVIATIONS = {"vp", "svp", "evp", "avp", "md", "ed", "ceo", "cfo", "coo", "cto", "pm", "swe", "sde", "ib", "pe", "vc"}
+
+
 def _role_requested(parsed: dict, prompt: str) -> bool:
     """The parser invents titles for any company ("People at Google" gets a
-    full title list), so only filter by title when the user typed a role."""
-    rest = (prompt or "").lower()
-    for n in _names(parsed.get("companies")) + _names(parsed.get("locations")):
-        rest = rest.replace(n, " ")
-    words = [w for w in _tidy(re.sub(r"[^\w\s]", " ", rest)).split() if w not in _NON_ROLE and w not in _DANGLING]
-    return bool(words)
+    full title list), so only filter by title when the user typed a role:
+    a typed word that shows up in the parser's titles, or a role abbreviation.
+    Company words like "goldman" or "gs" never count. When unsure this says
+    no, which only means a broader list."""
+    title_text = " ".join(
+        _names(parsed.get("title_variations"))
+        + [t for c in parsed.get("companies") or [] if isinstance(c, dict) for t in _names(c.get("matched_titles"))]
+    )
+    company_words = {w for n in _names(parsed.get("companies")) for w in re.findall(r"\w+", n)}
+    for w in re.findall(r"\w+", (prompt or "").lower()):
+        if w in company_words or w in _NON_ROLE or w in _DANGLING:
+            continue
+        stem = w[:-1] if w.endswith("s") and len(w) > 2 else w
+        if stem in _ROLE_ABBREVIATIONS or (len(stem) > 2 and stem in title_text):
+            return True
+    return False
 
 
 def filter_by_query(contacts: list[dict], parsed: dict | None, prompt: str | None = None) -> list[dict]:

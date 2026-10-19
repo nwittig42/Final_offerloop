@@ -61,6 +61,13 @@ def test_join_unknown_org_404(client):
     user_ref.set.assert_not_called()
 
 
+def test_digit_leading_org_id_is_rejected_not_500(client):
+    db, user_ref = _db(_snap({"joinable": True}), [_snap({"orgMemberships": {}})])
+    assert _call(client, db, "post", "/api/orgs/2025club/leave").status_code == 404
+    assert _call(client, db, "post", "/api/orgs/2025club/join").status_code == 404
+    user_ref.update.assert_not_called()
+
+
 def test_join_rejects_non_joinable_org(client):
     db, user_ref = _db(_snap({"name": "x"}), [])
     assert _call(client, db, "post", "/api/orgs/usc_tke/join").status_code == 404

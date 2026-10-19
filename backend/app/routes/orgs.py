@@ -16,7 +16,9 @@ from app.services.org_directory import MEMBERSHIPS_FIELD, active_org_ids, list_o
 
 orgs_bp = Blueprint("orgs", __name__, url_prefix="/api/orgs")
 
-_ORG_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+# Must start with a letter or "_": Firestore field paths reject a segment
+# that starts with a digit ("orgMemberships.2025club" raises on leave).
+_ORG_ID_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 
 
 def _user_ref(db):

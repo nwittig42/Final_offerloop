@@ -306,14 +306,17 @@ def prompt_search():
                 # new people.
                 from app.services.org_directory import search_org_directory
                 org_hits = search_org_directory(db, org_targets, parsed, org_list, prompt=org_prompt)
+                already_saved_contacts = []
                 if exclusion_data is not None:
-                    org_hits = [
-                        c for c in org_hits
-                        if not _contact_already_exists(c, exclusion_data["email_set"], exclusion_data["name_company_set"], exclusion_data["linkedin_set"])
-                    ]
+                    fresh = []
+                    for c in org_hits:
+                        if _contact_already_exists(c, exclusion_data["email_set"], exclusion_data["name_company_set"], exclusion_data["linkedin_set"]):
+                            already_saved_contacts.append(c)
+                        else:
+                            fresh.append(c)
+                    org_hits = fresh
                 contacts = org_hits[:max_contacts]
                 retry_level_used = 0
-                already_saved_contacts = []
                 adjacency_metadata = {"provider": "org_directory", "org_ids": org_targets}
                 if not contacts:
                     names = " / ".join(o["shortName"] for o in org_list if o["id"] in org_targets)

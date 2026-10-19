@@ -222,7 +222,9 @@ const FindPage: React.FC = () => {
   const [resultsLabel, setResultsLabel] = useState("");
   const [resultsNote, setResultsNote] = useState<string | null>(null);
 
-  const runSearch = useCallback(async (q: string, f: PeopleFilters) => {
+  const runSearch = useCallback(async (q: string, rawFilters: PeopleFilters) => {
+    // Drop orgs the student has since left, so a stale pill can't linger.
+    const f = { ...rawFilters, organizations: rawFilters.organizations.filter((id) => joinedOrgs.some((o) => o.id === id)) };
     setFilters(f);
     const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f, joinedOrgs) : "");
     if (!prompt) { setResults(null); return; }

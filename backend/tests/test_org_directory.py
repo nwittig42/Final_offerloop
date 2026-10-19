@@ -121,8 +121,12 @@ def test_titles_only_apply_when_a_role_was_typed():
     # "Goldman Sachs" alone: the parser's invented titles must not narrow it.
     assert od.filter_by_query([gs_vp, gs_md], parsed, "Goldman Sachs") == [gs_vp, gs_md]
     assert od.filter_by_query([gs_vp, gs_md], parsed, "people at Goldman Sachs") == [gs_vp, gs_md]
+    # The parser expands "Goldman" / "GS"; those stay company words, not roles.
+    assert od.filter_by_query([gs_vp, gs_md], parsed, "Goldman") == [gs_vp, gs_md]
+    assert od.filter_by_query([gs_vp, gs_md], parsed, "GS") == [gs_vp, gs_md]
     # A typed role does narrow, and the generic tail ("President") counts.
     assert od.filter_by_query([gs_vp, gs_md], parsed, "VPs at Goldman Sachs") == [gs_vp]
+    assert od.filter_by_query([gs_vp, gs_md], parsed, "vice presidents at Goldman") == [gs_vp]
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +199,13 @@ def test_prompt_search_skips_already_saved_members(search_client):
     r, _, _ = _search(search_client, "anything", ACTIVE, members, filters={"organizations": ["usc_tke"]},
                       parsed={"confidence": "low"}, saved_emails=("saved@x.com",))
     assert [c["Email"] for c in r.get_json()["contacts"]] == ["new@x.com"]
+
+
+def test_prompt_search_all_members_saved_says_so(search_client):
+    r, _, _ = _search(search_client, "TKE alumni", ACTIVE, [_member(email="saved@x.com")], saved_emails=("saved@x.com",))
+    body = r.get_json()
+    assert body["contacts"] == []
+    assert "already in your tracker" in body["message"]
 
 
 def test_prompt_search_non_member_gets_normal_search(search_client):

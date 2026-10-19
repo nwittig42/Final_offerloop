@@ -22,7 +22,8 @@ const STEP_NUM_IMAGES = [StepNum1, StepNum2, StepNum3];
 import OfferloopLogo from "@/assets/offerloop_logo2_allwhite.png";
 import { OB, obPrimaryButton } from "./onboardingTheme";
 import { OrgPicker } from "@/components/OrgPicker";
-import { sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
+import { ORGS_KEY, sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
+import { useQueryClient } from "@tanstack/react-query";
 import { apiService } from "@/services/api";
 import { trackFeatureActionCompleted } from "@/lib/analytics";
 
@@ -63,6 +64,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
 
   // Org alumni directories: picks are joined once the profile is saved.
   const { orgs } = useOrgs(!!user);
+  const queryClient = useQueryClient();
   const [orgPicks, setOrgPicks] = useState<string[]>([]);
   const afterResumeStep: Step = orgs.length > 0 ? "orgs" : "inbox";
 
@@ -157,6 +159,8 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
       // Best-effort: a failed join is fixable from Account Settings and
       // must not block finishing onboarding.
       await Promise.allSettled(orgPicks.map((id) => apiService.joinOrg(id)));
+      // So Find shows the org pill right away instead of the cached pre-join list.
+      if (orgPicks.length) await queryClient.invalidateQueries({ queryKey: ORGS_KEY });
       await new Promise((r) => setTimeout(r, 300));
       await refreshUser();
       trackFeatureActionCompleted("onboarding", "complete", true);
