@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toRow, threadStage, stageToBackend, STAGES, STAGE_LABELS } from "./contactsModel";
+import { toRow, threadStage, stageToBackend, stageStyle, STAGES, STAGE_LABELS, STAGE_STYLES } from "./contactsModel";
 import type { OutboxThread } from "@/services/api";
 
 const thread = (over: Partial<OutboxThread>): OutboxThread => ({ id: "c1", ...over } as OutboxThread);
@@ -29,5 +29,18 @@ describe("contactsModel Opened stage", () => {
   });
   it("stageToBackend(opened) === email_opened", () => {
     expect(stageToBackend("opened")).toBe("email_opened");
+  });
+});
+
+describe("contactsModel stage colors", () => {
+  it("gives all seven stages distinct dot and pill colors", () => {
+    expect(STAGES).toHaveLength(7);
+    const dots = STAGES.map((s) => STAGE_STYLES[s].dot.toUpperCase());
+    const pills = STAGES.map((s) => STAGE_STYLES[s].pill);
+    expect(new Set(dots).size).toBe(7);
+    expect(new Set(pills).size).toBe(7);
+  });
+  it("Opened is teal, matching the old tracker", () => {
+    expect(stageStyle("opened")).toEqual({ dot: "#14B8A6", pill: "bg-teal-50 text-teal-700" });
   });
 });

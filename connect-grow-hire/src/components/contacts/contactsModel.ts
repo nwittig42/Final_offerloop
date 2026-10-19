@@ -34,7 +34,7 @@ export const STAGE_STYLES: Record<Stage, StageStyle> = {
   saved:        { dot: "#94A3B8", pill: "bg-slate-100 text-slate-600" },
   drafted:      { dot: "#F59E0B", pill: "bg-amber-50 text-amber-700" },
   contacted:    { dot: "#3B82F6", pill: "bg-blue-50 text-blue-700" },
-  opened:       { dot: "#6366F1", pill: "bg-indigo-50 text-indigo-700" },
+  opened:       { dot: "#14B8A6", pill: "bg-teal-50 text-teal-700" },
   connected:    { dot: "#8B5CF6", pill: "bg-violet-50 text-violet-700" },
   interviewing: { dot: "#6366F1", pill: "bg-indigo-50 text-indigo-700" },
   offer:        { dot: "#10B981", pill: "bg-emerald-50 text-emerald-700" },
