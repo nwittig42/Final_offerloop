@@ -196,9 +196,110 @@ def grad_year(member: dict) -> int | None:
     return y if isinstance(y, int) and 1900 < y < 2100 else None
 
 
-def member_contact(member: dict, org: dict) -> dict | None:
+# First words that start a job title, used to find where a directory's
+# smashed "CompanyTitle" headline splits ("Houlihan LokeyAssociate").
+_TITLE_WORDS = {
+    "senior", "sr", "junior", "jr", "associate", "analyst", "director", "manager", "vice", "vp", "svp",
+    "evp", "avp", "president", "partner", "principal", "founder", "co-founder", "cofounder", "ceo",
+    "cfo", "coo", "cto", "cmo", "cio", "owner", "lead", "head", "chief", "consultant", "engineer",
+    "software", "product", "sales", "account", "executive", "managing", "general", "attorney",
+    "counsel", "intern", "specialist", "coordinator", "advisor", "adviser", "broker", "agent",
+    "representative", "officer", "retired", "student", "teacher", "professor", "doctor", "physician",
+    "dentist", "accountant", "cpa", "controller", "treasurer", "trader", "portfolio", "investment",
+    "regional", "national", "global", "business", "marketing", "operations", "project", "program",
+    "development", "research", "data", "design", "designer", "architect", "developer",
+    "administrator", "assistant", "supervisor", "superintendent", "captain", "deputy", "member",
+    "board", "chairman", "chair", "staff", "technician", "strategist", "editor", "writer", "producer",
+    "recruiter", "md", "substitute", "real", "financial", "finance", "acquisitions", "logistics",
+    "property", "commercial", "district", "area", "branch", "store", "office", "team", "creative",
+    "art", "content", "communications", "relationship", "client", "customer", "field", "technical",
+    "pilot", "realtor", "secretary",
+}
+
+
+def _first_word(s: str) -> str:
+    return (re.match(r"[A-Za-z][A-Za-z-]*,?", s) or re.match(r"", "")).group(0).lower()
+
+
+def split_headline(headline: str) -> tuple[str, str]:
+    """("Company", "Title") from a directory headline that glued them
+    together with no separator, e.g. "GoogleMarketing Strategy Lead" ->
+    ("Google", "Marketing Strategy Lead"). A headline with no visible seam
+    is a company on its own, unless it reads like a title ("Retired")."""
+    h = (headline or "").strip()
+    if not h or h.startswith("#") or len(h) < 2:
+        return "", ""
+    seams = []
+    for i in range(1, len(h)):
+        a, b = h[i - 1], h[i]
+        if not b.isupper():
+            continue
+        nxt = h[i + 1] if i + 1 < len(h) else ""
+        # "LokeyAssociate", "N.A.Senior", "(BCG)Talent": lower/punct then upper.
+        # Not after "&": that's "M&A" / "M&T", not a seam.
+        if a.islower() or a.isdigit() or a in ".),'":
+            seams.append(i)
+        # "MECADeputy": an acronym running into a capitalized word.
+        elif a.isupper() and nxt.islower() and i >= 2 and h[i - 2].isupper():
+            seams.append(i)
+        # "ZHUCEO of ...": an acronym running into an acronym title.
+        elif a.isupper() and re.match(r"(CEO|CFO|COO|CTO|CMO|CIO|SVP|EVP|AVP|VP|MD)(?![A-Za-z])", h[i:]):
+            seams.append(i)
+    titled = [i for i in seams if _first_word(h[i:]).rstrip(",") in _TITLE_WORDS]
+    cut = titled[0] if titled else (seams[-1] if seams else None)
+    if cut is None:
+        return ("", h) if _first_word(h).rstrip(",") in _TITLE_WORDS else (h, "")
+    return h[:cut].strip(" ,-"), h[cut:].strip(" ,-")
+
+
+def _nice_title(t: str) -> str:
+    """Warehouse titles arrive lowercased ("investment banking associate")."""
+    if not t or t != t.lower():
+        return t
+    small = {"of", "and", "the", "at", "in", "for", "to", "&"}
+    words = t.split()
+    return " ".join(w if (i and w in small) else (w.upper() if w in {"vp", "md", "ceo", "cfo", "coo", "cto", "tmt", "ib"} else w[:1].upper() + w[1:])
+                    for i, w in enumerate(words))
+
+
+def warehouse_by_name(db, school: str) -> dict[tuple[str, str], dict]:
+    """People already in our firm_employees warehouse from this school, keyed
+    by (first, last) lowercased. Only names that appear once, so a match is
+    never a guess between two "Michael Smith"s. Cached like the members."""
+    key = f"wh::{school}"
+    now = time.time()
+    with _cache_lock:
+        hit = _members_cache.get(key)
+        if hit and now - hit[0] < MEMBERS_TTL_SEC:
+            return hit[1]  # type: ignore[return-value]
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    from app.services.firm_cache.schema import FIRM_EMPLOYEES_COLLECTION, slugify_school
+
+    by_name: dict[tuple[str, str], dict] = {}
+    dupes: set[tuple[str, str]] = set()
+    slug = slugify_school(school)
+    if slug:
+        q = db.collection(FIRM_EMPLOYEES_COLLECTION).where(filter=FieldFilter("schools", "array_contains", slug))
+        for snap in q.stream():
+            d = snap.to_dict() or {}
+            k = ((d.get("first_name") or "").strip().lower(), (d.get("last_name") or "").strip().lower())
+            if not all(k):
+                continue
+            if k in by_name:
+                dupes.add(k)
+            by_name[k] = d
+    for k in dupes:
+        by_name.pop(k, None)
+    with _cache_lock:
+        _members_cache[key] = (now, by_name)  # type: ignore[assignment]
+    return by_name
+
+
+def member_contact(member: dict, org: dict, wh: dict | None = None) -> dict | None:
     """App-shape contact for one directory member, or None when they shouldn't
-    be offered (deceased, still an undergrad, or no way to reach them)."""
+    be offered (deceased, still an undergrad, or no way to reach them).
+    `wh` is this person's warehouse doc when one matches by name and school:
+    a fresher job, a LinkedIn URL and a photo."""
     if member.get("link_membershipStatus") == "deceased":
         return None
     if member.get("link_membershipType") != "alumni":
@@ -207,13 +308,23 @@ def member_contact(member: dict, org: dict) -> dict | None:
     # A "lost" member's directory email is the address TKE itself flagged as stale.
     dir_email = "" if member.get("link_membershipStatus") == "lost" else (member.get("email") or "").strip()
     email = work_email or dir_email
-    linkedin = (member.get("linkedinUrl") or "").strip()
+    wh = wh or {}
+    linkedin = (member.get("linkedinUrl") or "").strip() or (wh.get("linkedin_url") or "").strip()
     if not email and not linkedin:
         return None
 
+    headline = (member.get("directoryHeadline") or member.get("link_headlineRaw") or "").strip()
+    if headline.startswith("#"):  # spreadsheet junk like "#ERROR!"
+        headline = ""
+    # Job, best source first: Coresignal's current role, then our warehouse
+    # (same person by name + school), then the directory's own headline.
     company = (member.get("coresignalCompany") or "").strip()
     title = (member.get("coresignalTitle") or "").strip()
-    headline = (member.get("directoryHeadline") or member.get("link_headlineRaw") or "").strip()
+    if not (company or title) and wh:
+        company = (wh.get("company_display") or "").strip()
+        title = _nice_title((wh.get("title") or wh.get("headline") or "").strip())
+    if not (company or title) and headline:
+        company, title = split_headline(headline)
     year = member.get("link_chapterYear") or member.get("link_classOfYear")
     return {
         "FirstName": member.get("firstName") or "",
@@ -231,7 +342,7 @@ def member_contact(member: dict, org: dict) -> dict | None:
         "WorkSummary": " at ".join(p for p in (title, company) if p) or headline,
         # Directory phone numbers are never surfaced (Nick, 2026-10-18).
         "Phone": "",
-        "PhotoUrl": member.get("photoUrl") or "",
+        "PhotoUrl": member.get("photoUrl") or wh.get("photo_url") or "",
         "JoinedYear": None,
         "EmailSource": "fullenrich" if work_email else ("org_directory" if dir_email else ""),
         "EmailVerified": bool(work_email and member.get("workEmailStatus") == "DELIVERABLE"),
@@ -327,8 +438,14 @@ def directory_contacts(db, org: dict) -> list[dict]:
     """Every reachable alum in one org's directory, ranked."""
     seen: set[str] = set()
     out: list[dict] = []
+    try:
+        wh_index = warehouse_by_name(db, org.get("school") or "")
+    except Exception as e:  # enrichment only; the directory works without it
+        print(f"[OrgDirectory] warehouse match skipped: {e}")
+        wh_index = {}
     for m in load_org_members(db, org["id"]):
-        c = member_contact(m, org)
+        name_key = ((m.get("firstName") or "").strip().lower(), (m.get("lastName") or "").strip().lower())
+        c = member_contact(m, org, wh_index.get(name_key))
         if c is None:
             continue
         key = (c["Email"] or c["LinkedIn"]).lower()

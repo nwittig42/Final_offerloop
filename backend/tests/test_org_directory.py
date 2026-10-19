@@ -238,3 +238,45 @@ def test_join_hint_only_for_orgs_you_are_not_in():
     assert od.join_hint("TKE alumni", ACTIVE, [TKE]) is None
     assert od.join_hint("Goldman analysts", {}, [TKE]) is None
     assert od.join_hint("tke brothers at Bain", {}, [TKE])["id"] == "usc_tke"
+
+
+def test_split_headline_real_directory_shapes():
+    cases = {
+        "Houlihan LokeyAssociate": ("Houlihan Lokey", "Associate"),
+        "GoogleMarketing Strategy Lead": ("Google", "Marketing Strategy Lead"),
+        "MicrosoftPrincipal Program Manager": ("Microsoft", "Principal Program Manager"),
+        "JPMorgan Chase Bank, N.A.Senior Home Lending Advisor": ("JPMorgan Chase Bank, N.A.", "Senior Home Lending Advisor"),
+        "Optima Insurance Services LLCPrincipal/Managing Director": ("Optima Insurance Services LLC", "Principal/Managing Director"),
+        "MECADeputy Director": ("MECA", "Deputy Director"),
+        "ZHUCEO of ZHUMUSIC LLC": ("ZHU", "CEO of ZHUMUSIC LLC"),
+        "Brown & Brown InsuranceRetired": ("Brown & Brown Insurance", "Retired"),
+        "McKinsey & CompanyConsultant": ("McKinsey & Company", "Consultant"),
+        "EDP RenewablesInvestments and M&A Associate": ("EDP Renewables", "Investments and M&A Associate"),
+        "M&T BankAVP, Portfolio Manager": ("M&T Bank", "AVP, Portfolio Manager"),
+        "WME (William Morris Endeavor)Talent Assistant": ("WME (William Morris Endeavor)", "Talent Assistant"),
+        "Etco Homes IncAssocioate": ("Etco Homes Inc", "Associoate"),  # typo'd title, single seam
+        "Yellowstone Landscape": ("Yellowstone Landscape", ""),      # no seam: a company
+        "Retired": ("", "Retired"),                                  # no seam, reads as a title
+        "#ERROR!": ("", ""),
+        "": ("", ""),
+    }
+    for raw, want in cases.items():
+        assert od.split_headline(raw) == want, raw
+
+
+def test_job_source_order_and_warehouse_photo():
+    wh = {"company_display": "Goldman Sachs", "title": "investment banking associate",
+          "photo_url": "https://img/x.jpg", "linkedin_url": "https://linkedin.com/in/jr"}
+    m = _member(directoryHeadline="Marble CapitalFinancial Analyst")
+    # Warehouse (fresher) beats the directory headline; title gets cased.
+    c = od.member_contact(m, TKE, wh)
+    assert (c["Company"], c["Title"]) == ("Goldman Sachs", "Investment Banking Associate")
+    assert c["PhotoUrl"] == "https://img/x.jpg" and c["LinkedIn"] == "https://linkedin.com/in/jr"
+    # No warehouse: the split headline.
+    c = od.member_contact(m, TKE)
+    assert (c["Company"], c["Title"]) == ("Marble Capital", "Financial Analyst")
+    # Coresignal beats both.
+    c = od.member_contact(_member(coresignalCompany="Bain", coresignalTitle="Consultant"), TKE, wh)
+    assert (c["Company"], c["Title"]) == ("Bain", "Consultant")
+    # A warehouse LinkedIn makes an emailless member reachable.
+    assert od.member_contact(_member(email="", link_membershipStatus="lost"), TKE, wh) is not None

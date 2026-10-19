@@ -11,7 +11,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { MainContentWrapper } from "@/components/MainContentWrapper";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
-import { apiService, type EmailTemplate } from "@/services/api";
+import { apiService, type DirectoryMember, type EmailTemplate } from "@/services/api";
 import { toast } from "@/hooks/use-toast";
 import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
@@ -23,7 +23,10 @@ import { orgLogo } from "@/lib/orgLogos";
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
 const PAGE = 48;
 
-type Sort = "recent" | "oldest" | "name";
+type Sort = "complete" | "recent" | "oldest" | "name";
+
+// How much of a profile we can show: photo, then a job, then nothing.
+const completeness = (m: DirectoryMember) => (m.photoUrl ? 2 : 0) + (m.company || m.title ? 1 : 0);
 
 export default function OrgDirectoryPage() {
   const { orgId = "" } = useParams();
@@ -48,7 +51,9 @@ export default function OrgDirectoryPage() {
   }, [user?.uid]);
 
   const [text, setText] = useState("");
-  const [sort, setSort] = useState<Sort>("recent");
+  // Fullest profiles first, so the directory opens on real cards rather
+  // than this year's grads, whom the directory has no job for yet.
+  const [sort, setSort] = useState<Sort>("complete");
   const [shown, setShown] = useState(PAGE);
   // Emails unlocked during this visit, on top of the ones the server knows.
   const [unlocked, setUnlocked] = useState<Record<string, string>>({});
@@ -66,6 +71,7 @@ export default function OrgDirectoryPage() {
     const sorted = [...rows].sort((a, b) =>
       sort === "name"
         ? `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
+        : sort === "complete" ? completeness(b) - completeness(a) || (b.year ?? 0) - (a.year ?? 0)
         : sort === "recent" ? (b.year ?? 0) - (a.year ?? 0) : (a.year ?? 9999) - (b.year ?? 9999),
     );
     return sorted.map((m, i) => ({ person: personFromDirectory(m, i, revealed[m.personKey] || "", orgId), hasEmail: m.hasEmail }));
@@ -193,6 +199,7 @@ export default function OrgDirectoryPage() {
                       aria-label="Sort"
                       className="h-10 rounded-full bg-white px-4 text-[14px] text-[#1D1D1F] shadow-[0_1px_2px_rgba(0,0,0,0.04)] outline-none"
                     >
+                      <option value="complete">Most complete first</option>
                       <option value="recent">Newest first</option>
                       <option value="oldest">Oldest first</option>
                       <option value="name">Last name A–Z</option>
