@@ -14,7 +14,8 @@ Storage:
         emailLastOpenedAt   most recent counted open
         emailOpenCount      number of counted opens
         pipelineStage       email_sent / waiting_on_reply -> email_opened
-                            on a counted open (see models/pipeline_stages.py)
+                            on a counted open while tracking_enabled(uid)
+                            (see models/pipeline_stages.py)
 
 Known limits (inherent to pixel tracking, not bugs):
     - Apple Mail Privacy Protection preloads images, so an "open" can be a
@@ -26,6 +27,8 @@ Known limits (inherent to pixel tracking, not bugs):
     - The sender re-reading their own sent email in Gmail later loads the pixel too
       and cannot be told apart from the recipient. Loads that happen while the
       email is still an unsent draft ARE filtered out (see _sent_at); so are loads within SELF_VIEW_GRACE of the send time.
+    - A reply that quotes the original email can load the pixel again for the
+      sender, inflating emailOpenCount.
 
 Tracking must never block or break a send: every public function here
 swallows its own errors.
@@ -52,8 +55,13 @@ PIXEL_GIF = (
 )
 
 # A single open often produces a burst of image requests (proxy retries,
-# preview pane then full view). Hits this close together count once.
+# preview pane then full view). Hits this close together count once. The
+# window is checked against the last hit of any kind before Gmail is asked,
+# so a burst on the public pixel route costs at most one Gmail lookup.
 DEDUPE_WINDOW = timedelta(seconds=30)
+
+# _gmail_sent_time result: Gmail says the stored message is still a draft.
+STILL_DRAFT = "still_draft"
 
 # Gmail renders a just-sent message to its sender, which loads the pixel. Hits
 # this soon after the send time are the sender's own view, not the recipient's.
@@ -128,7 +136,9 @@ def add_pixel(html_body, token):
 
 def text_to_html(text):
     escaped = html.escape(text or "").replace("\r\n", "\n").replace("\n", "<br>")
-    return f'<div style="font-family: Arial, Helvetica, sans-serif; font-size: 14px;">{escaped}</div>'
+    # pre-wrap keeps runs of spaces and indentation the plain text had.
+    return ('<div style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; '
+            f'white-space: pre-wrap;">{escaped}</div>')
 
 
 def tracked_text_mime(text, token):
@@ -222,12 +232,13 @@ def _ms_to_dt(value):
 
 
 def _gmail_sent_time(uid, message_id, thread_id, created):
-    """Send time (datetime) when Gmail says this email was sent, else None.
+    """Send time (datetime) when Gmail says this email was sent.
 
     Tries the stored message id first. Gmail issues a new message id when a
     draft is edited, so when that lookup fails the thread is searched for a
-    SENT message newer than the token. None covers every "can't tell" case:
-    no credentials, Gmail errors, or the message still being a draft.
+    SENT message newer than the token. Returns STILL_DRAFT when the stored
+    message is labeled DRAFT (Gmail has answered "unsent"), and None for every
+    "can't tell" case: no credentials or Gmail errors.
     """
     try:
         from app.services.gmail_client import _load_user_gmail_creds, _gmail_service
@@ -245,7 +256,7 @@ def _gmail_sent_time(uid, message_id, thread_id, created):
                 userId="me", id=message_id, format="minimal").execute()
             labels = msg.get("labelIds") or []
             if "DRAFT" in labels:
-                return None
+                return STILL_DRAFT
             if "SENT" in labels:
                 return _ms_to_dt(msg["internalDate"])
         except Exception as e:
@@ -287,6 +298,9 @@ def _sent_at(uid, data, contact):
     if data.get("gmailMessageId") or data.get("gmailThreadId"):
         sent = _gmail_sent_time(uid, data.get("gmailMessageId"),
                                 data.get("gmailThreadId"), created)
+        if sent == STILL_DRAFT:
+            # Already an answer; drafts().get would only repeat it.
+            return None, None
         if sent:
             return sent, "gmail"
     draft_id = data.get("gmailDraftId")
@@ -324,6 +338,14 @@ def record_open(token):
 
         now = _now()
         now_iso = _iso(now)
+
+        # Any hit (counted or not) within the window of the previous one is
+        # part of the same burst. Stop before the contact lookup and the
+        # Gmail calls in _sent_at, and write nothing, so a flood of requests
+        # for one token costs one Gmail lookup per window.
+        last_hit = _parse_iso(data.get("lastHitAt"))
+        if last_hit and now - last_hit < DEDUPE_WINDOW:
+            return False
 
         contact_ref, contact = _resolve_contact(db, uid, data)
 
@@ -370,7 +392,11 @@ def record_open(token):
             contact_updates["emailOpenedAt"] = now_iso
         # Only a sent, unanswered contact moves to "Opened"; replied, done and
         # draft stages keep their stage (the open is still counted above).
-        if contact.get("pipelineStage") in OPEN_PROMOTABLE_STAGES:
+        # The kill switch gates only this promotion: opens on emails already
+        # sent with a pixel keep being counted after tracking is turned off,
+        # but no contact reaches email_opened.
+        if (contact.get("pipelineStage") in OPEN_PROMOTABLE_STAGES
+                and tracking_enabled(uid)):
             contact_updates["pipelineStage"] = EMAIL_OPENED
         contact_ref.update(contact_updates)
         return True

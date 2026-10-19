@@ -3,7 +3,7 @@ import ast
 from email import message_from_bytes
 from datetime import timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -162,6 +162,12 @@ def test_tracked_text_mime_keeps_text_and_adds_escaped_html():
     assert "/api/t/o/tok.gif" in html_body
 
 
+def test_text_to_html_keeps_spacing_and_indentation():
+    out = email_tracking.text_to_html("a  b\n    indented")
+    assert out == ('<div style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; '
+                   'white-space: pre-wrap;">a  b<br>    indented</div>')
+
+
 def test_outreach_builder_embeds_pixel():
     from app.services.gmail_client import _build_outreach_mime
     msg = _build_outreach_mime("a@b.com", "me@usc.edu", "Hi", "Body text",
@@ -208,6 +214,7 @@ def test_later_open_increments_but_keeps_first_open(db):
     email_tracking.record_open("tok")
     first = db.contacts("u1")["c1"]["emailOpenedAt"]
     db.tracking()["tok"]["lastOpenedAt"] = "2020-01-01T00:00:00Z"
+    db.tracking()["tok"]["lastHitAt"] = "2020-01-01T00:00:00Z"
 
     assert email_tracking.record_open("tok") is True
     contact = db.contacts("u1")["c1"]
@@ -244,6 +251,7 @@ def test_falls_back_to_contact_sent_stamp_when_gmail_unreachable(db):
     with patch.object(email_tracking, "_draft_still_exists", return_value=None):
         assert email_tracking.record_open("tok") is False
         db.tracking()["tok"]["createdAt"] = _ago(hours=1)
+        db.tracking()["tok"]["lastHitAt"] = _ago(minutes=5)
         db.contacts("u1")["c1"]["emailSentAt"] = _ago(minutes=5)
         assert email_tracking.record_open("tok") is True
 
@@ -283,6 +291,7 @@ class _FakeGmail:
                     else {"labelIds": label_ids, "internalDate": str(internal_ms)})
         self.thread = thread
         self._kind = None
+        self.calls = []  # one entry per execute(): "msg" / "thread"
 
     def users(self):
         return self
@@ -299,6 +308,7 @@ class _FakeGmail:
         return self
 
     def execute(self):
+        self.calls.append(self._kind)
         data = self.msg if self._kind == "msg" else self.thread
         if data is None:
             raise RuntimeError("404")
@@ -385,6 +395,50 @@ def test_message_still_labeled_draft_is_not_sent(db):
         assert email_tracking.record_open("tok") is False
     assert db.tracking()["tok"]["preSendHits"] == 1
     assert not db.tracking()["tok"]["sentAt"]
+
+
+def test_message_labeled_draft_skips_the_draft_lookup(db):
+    """A stored message still labeled DRAFT already answers "unsent"; asking
+    drafts().get as well would spend a second Gmail call per hit."""
+    gmail = _FakeGmail(["DRAFT"], _ms_ago(minutes=10))
+    creds, svc = _draft_with_message(db, gmail)
+    with creds, svc, patch.object(email_tracking, "_draft_still_exists") as draft_lookup:
+        assert email_tracking.record_open("tok") is False
+    assert draft_lookup.call_count == 0
+    assert gmail.calls == ["msg"]
+    assert db.tracking()["tok"]["preSendHits"] == 1
+
+
+def test_burst_of_hits_costs_one_gmail_lookup(db):
+    """The public pixel route must not turn a burst of hits into a burst of
+    Gmail API calls: hits within DEDUPE_WINDOW of the last hit stop early."""
+    gmail = _FakeGmail(["DRAFT"], _ms_ago(minutes=10))
+    creds, svc = _draft_with_message(db, gmail)
+    with creds, svc, patch.object(email_tracking, "_draft_still_exists", return_value=True):
+        for _ in range(5):
+            assert email_tracking.record_open("tok") is False
+    assert gmail.calls == ["msg"]
+    assert db.tracking()["tok"]["preSendHits"] == 1
+
+    # Once the window has passed, the next hit asks Gmail again.
+    db.tracking()["tok"]["lastHitAt"] = _ago(seconds=31)
+    with creds, svc, patch.object(email_tracking, "_draft_still_exists", return_value=True):
+        assert email_tracking.record_open("tok") is False
+    assert gmail.calls == ["msg", "msg"]
+    assert db.tracking()["tok"]["preSendHits"] == 2
+
+
+def test_burst_after_send_counts_once_with_one_gmail_lookup(db):
+    gmail = _FakeGmail(["SENT"], _ms_ago(minutes=10))
+    creds, svc = _draft_with_message(db, gmail)
+    with creds, svc:
+        assert email_tracking.record_open("tok") is True
+        for _ in range(3):
+            assert email_tracking.record_open("tok") is False
+    # The first hit learned and stored the send time; later hits never ask.
+    assert gmail.calls == ["msg"]
+    assert db.contacts("u1")["c1"]["emailOpenCount"] == 1
+    assert db.tracking()["tok"]["openCount"] == 1
 
 
 def test_open_with_no_matching_contact_still_recorded_on_token(db):
@@ -478,6 +532,81 @@ def test_every_gmail_send_site_is_tracked():
         "Gmail draft/send sites without open tracking (use email_tracking, or add "
         "to UNTRACKED_OK with a reason):\n  " + "\n  ".join(offenders)
     )
+
+
+# "file:function" -> reason a send_email_for_user call deliberately has no
+# tracking_kind (the email goes to the user, not a contact).
+SEND_EMAIL_UNTRACKED_OK = {
+    "agent_service.py:send_daily_digests": "daily digest sent to the user's own address",
+}
+
+
+def _passes_tracking_kind(call):
+    """tracking_kind=<anything but a literal None>."""
+    for k in call.keywords:
+        if k.arg == "tracking_kind":
+            return not (isinstance(k.value, ast.Constant) and k.value.value is None)
+    return False
+
+
+def test_every_send_email_for_user_call_passes_tracking_kind():
+    """send_email_for_user adds the pixel only when tracking_kind is set, and
+    the send-site guard above can't see that from a caller, so check callers."""
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    offenders = []
+    for path in sorted(app_dir.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "send_email_for_user(" not in source:
+            continue
+        tree = ast.parse(source)
+        funcs = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+            if name != "send_email_for_user":
+                continue
+            if _passes_tracking_kind(node):
+                continue
+            enclosing = [fn for fn in funcs if fn.lineno <= node.lineno <= fn.end_lineno]
+            fn_name = max(enclosing, key=lambda fn: fn.lineno).name if enclosing else "<module>"
+            if f"{path.name}:{fn_name}" in SEND_EMAIL_UNTRACKED_OK:
+                continue
+            offenders.append(f"{path.relative_to(app_dir.parent)}:{node.lineno} in {fn_name}()")
+    assert not offenders, (
+        "send_email_for_user() without tracking_kind (pass it for emails to a "
+        "contact, or add to SEND_EMAIL_UNTRACKED_OK with a reason):\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_tracking_kind_guard_rejects_literal_none():
+    def call(src):
+        return ast.parse(src).body[0].value
+
+    assert _passes_tracking_kind(call("send_email_for_user(u, t, s, b, tracking_kind='outreach')"))
+    assert _passes_tracking_kind(call("send_email_for_user(u, t, s, b, tracking_kind=kind)"))
+    assert not _passes_tracking_kind(call("send_email_for_user(u, t, s, b, tracking_kind=None)"))
+    assert not _passes_tracking_kind(call("send_email_for_user(u, t, s, b)"))
+
+
+def test_send_email_for_user_registers_contact_id(db, monkeypatch):
+    from app.services import gmail_client
+
+    monkeypatch.setenv("EMAIL_OPEN_TRACKING", "1")
+    service = MagicMock()
+    service.users().messages().send().execute.return_value = {"id": "m1", "threadId": "t1"}
+    with patch.object(gmail_client, "_load_user_gmail_creds", return_value=object()), \
+         patch.object(gmail_client, "_gmail_service", return_value=service):
+        gmail_client.send_email_for_user("u1", "a@b.com", "Hi", "<p>Body</p>",
+                                         tracking_kind="outreach", contact_id="c9")
+        gmail_client.send_email_for_user("u1", "a@b.com", "Hi", "<p>Body</p>",
+                                         tracking_kind="outreach")
+    docs = sorted(db.tracking().values(), key=lambda d: d["contactId"])
+    assert [d["contactId"] for d in docs] == ["", "c9"]
+    assert all(d["sentAt"] and d["gmailMessageId"] == "m1" for d in docs)
 
 
 def test_register_for_draft_stores_message_id(db):

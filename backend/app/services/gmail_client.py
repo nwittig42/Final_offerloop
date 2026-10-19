@@ -178,7 +178,8 @@ def _gmail_service(creds):
     return build("gmail", "v1", credentials=creds)
 
 
-def send_email_for_user(uid: str, to: str, subject: str, body_html: str, tracking_kind: str = None) -> dict:
+def send_email_for_user(uid: str, to: str, subject: str, body_html: str, tracking_kind: str = None,
+                        contact_id: str = None) -> dict:
     """Send an email via user's Gmail OAuth credentials (from the student's
     own address).
 
@@ -191,7 +192,8 @@ def send_email_for_user(uid: str, to: str, subject: str, body_html: str, trackin
 
     Pass tracking_kind (e.g. "outreach") for emails that go to a contact, so
     the open-tracking pixel is added. Leave it unset for emails the user sends
-    to themselves (digests).
+    to themselves (digests). contact_id, when known, ties the tracking token
+    to users/{uid}/contacts/{contact_id} instead of matching by address.
 
     Phase 9 callers (Loop auto-send) MUST stamp `id` and `threadId` onto the
     contact doc immediately so the Pub/Sub webhook can join replies via the
@@ -222,7 +224,7 @@ def send_email_for_user(uid: str, to: str, subject: str, body_html: str, trackin
         userId="me", body={"raw": raw}
     ).execute() or {}
     email_tracking.register(
-        tracking_token, uid, tracking_kind, recipient_email=to,
+        tracking_token, uid, tracking_kind, recipient_email=to, contact_id=contact_id,
         message_id=resp.get("id"), thread_id=resp.get("threadId"), sent=True,
     )
 
