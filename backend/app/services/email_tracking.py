@@ -13,6 +13,8 @@ Storage:
         emailOpenedAt       first counted open (ISO string)
         emailLastOpenedAt   most recent counted open
         emailOpenCount      number of counted opens
+        pipelineStage       email_sent / waiting_on_reply -> email_opened
+                            on a counted open (see models/pipeline_stages.py)
 
 Known limits (inherent to pixel tracking, not bugs):
     - Apple Mail Privacy Protection preloads images, so an "open" can be a
@@ -37,6 +39,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from app.extensions import get_db
+from app.models.pipeline_stages import EMAIL_OPENED, OPEN_PROMOTABLE_STAGES
 
 logger = logging.getLogger(__name__)
 
@@ -365,6 +368,10 @@ def record_open(token):
         }
         if not contact.get("emailOpenedAt"):
             contact_updates["emailOpenedAt"] = now_iso
+        # Only a sent, unanswered contact moves to "Opened"; replied, done and
+        # draft stages keep their stage (the open is still counted above).
+        if contact.get("pipelineStage") in OPEN_PROMOTABLE_STAGES:
+            contact_updates["pipelineStage"] = EMAIL_OPENED
         contact_ref.update(contact_updates)
         return True
     except Exception as e:

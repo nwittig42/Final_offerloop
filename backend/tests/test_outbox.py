@@ -93,7 +93,7 @@ class TestConstants:
         from app.services.outbox_service import ALLOWED_PIPELINE_STAGES
         expected = {
             "new", "draft_created", "draft_deleted", "email_sent",
-            "waiting_on_reply", "replied", "meeting_scheduled",
+            "waiting_on_reply", "email_opened", "replied", "meeting_scheduled",
             "connected", "no_response", "bounced", "closed",
         }
         assert ALLOWED_PIPELINE_STAGES == expected
@@ -1362,10 +1362,12 @@ class TestWebhookMatchingStrategies:
         assert "STRATEGY_3_CAP" in source
 
     def test_sent_message_transitions_to_waiting(self):
-        """A matched sent message should move stage to waiting_on_reply."""
+        """A matched sent message should move stage to waiting_on_reply
+        (email_opened when an open was already counted). Behavior is covered
+        end-to-end in test_email_opened_stage.py."""
         from app.routes.gmail_webhook import _process_gmail_notification
         source = inspect.getsource(_process_gmail_notification)
-        assert '"pipelineStage": "waiting_on_reply"' in source
+        assert '"pipelineStage": stage_after_send_confirmed(contact_data)' in source
 
     def test_sent_message_only_updates_presend_stages(self):
         """Must not overwrite replied/connected etc. with waiting_on_reply."""
