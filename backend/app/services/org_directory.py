@@ -1,0 +1,271 @@
+"""
+Org alumni directories (OFF-42). Turns the ingested org directories
+(orgs / people / person_org_links, built by backend/scripts/org_directory_*)
+into App-shape contacts for members of that org.
+
+Membership lives on users/{uid}.orgMemberships as
+  {orgId: {status: "active" | "pending", joinedAt, source}}
+and is written only by the backend (routes/orgs.py). v1 joins are instant
+("active"); the "pending" status is reserved for org-admin approval later
+and is treated as not-a-member everywhere here.
+
+The pilot directory is ~2K people, so members are joined once and cached
+in-process instead of being queried per search.
+"""
+from __future__ import annotations
+
+import re
+import threading
+import time
+
+MEMBERSHIPS_FIELD = "orgMemberships"
+ORGS_COLLECTION = "orgs"
+PEOPLE_COLLECTION = "people"
+LINKS_COLLECTION = "person_org_links"
+
+MEMBERS_TTL_SEC = 15 * 60
+_members_cache: dict[str, tuple[float, list[dict]]] = {}
+_cache_lock = threading.Lock()
+
+# Words that only say "from this org" once the org name is matched.
+_FILLER = r"(?:alumni|alumnus|alums?|brothers?|members?)"
+_DANGLING = {"at", "in", "from", "who", "with", "of", "and", "or", "the", "a", "for", "work", "working", "are", "is"}
+
+
+def _org_public(doc_id: str, d: dict) -> dict:
+    return {
+        "id": doc_id,
+        "name": d.get("name") or doc_id,
+        "shortName": d.get("shortName") or d.get("name") or doc_id,
+        "school": d.get("school") or "",
+        "type": d.get("type") or "",
+        "memberCount": d.get("memberCount") or 0,
+        "aliases": [a for a in (d.get("aliases") or []) if isinstance(a, str) and a.strip()],
+    }
+
+
+def list_orgs(db) -> list[dict]:
+    """Joinable orgs. An org only shows up once it's been seeded with joinable: true."""
+    if db is None:
+        return []
+    out = []
+    for snap in db.collection(ORGS_COLLECTION).stream():
+        d = snap.to_dict() or {}
+        if d.get("joinable") is True:
+            out.append(_org_public(snap.id, d))
+    out.sort(key=lambda o: o["name"].lower())
+    return out
+
+
+def active_org_ids(user_data: dict | None) -> list[str]:
+    memberships = (user_data or {}).get(MEMBERSHIPS_FIELD) or {}
+    if not isinstance(memberships, dict):
+        return []
+    return sorted(
+        org_id for org_id, m in memberships.items()
+        if isinstance(m, dict) and m.get("status") == "active"
+    )
+
+
+def _org_terms(org: dict) -> list[str]:
+    terms = {org.get("shortName") or "", org.get("name") or ""}
+    terms.update(org.get("aliases") or [])
+    # Longest first so "usc tke" wins over "tke" and gets stripped whole.
+    return sorted((t.strip().lower() for t in terms if t and t.strip()), key=len, reverse=True)
+
+
+def _tidy(text: str) -> str:
+    words = text.split()
+    while words and words[0].lower() in _DANGLING:
+        words.pop(0)
+    while words and words[-1].lower() in _DANGLING:
+        words.pop()
+    return " ".join(words)
+
+
+def match_orgs_in_prompt(prompt: str, orgs: list[dict]) -> tuple[list[str], str]:
+    """Org ids named in the prompt, and the prompt with the org mention removed.
+
+    "TKE alumni at Goldman Sachs" -> (["usc_tke"], "at Goldman Sachs")
+    """
+    matched: list[str] = []
+    cleaned = prompt or ""
+    for org in orgs:
+        for term in _org_terms(org):
+            pattern = re.compile(rf"(?<![\w]){re.escape(term)}(?:['’]s)?(?:\s+{_FILLER})?(?![\w])", re.IGNORECASE)
+            if pattern.search(cleaned):
+                cleaned = pattern.sub(" ", cleaned)
+                if org["id"] not in matched:
+                    matched.append(org["id"])
+    if not matched:
+        return [], prompt
+    cleaned = re.sub(rf"(?<![\w]){_FILLER}(?![\w])", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[,.;:!?]+", " ", cleaned)
+    return matched, _tidy(cleaned)
+
+
+def resolve_org_targets(prompt: str, filter_org_ids, user_data: dict | None, orgs: list[dict]) -> tuple[list[str], str]:
+    """Which org directories this search should read, limited to the user's
+    active memberships. Returns ([], prompt) when the search isn't an org search."""
+    mine = set(active_org_ids(user_data))
+    if not mine:
+        return [], prompt
+    known = {o["id"] for o in orgs}
+    from_filter = [i for i in (filter_org_ids or []) if isinstance(i, str) and i in known and i in mine]
+    named, cleaned = match_orgs_in_prompt(prompt, [o for o in orgs if o["id"] in mine])
+    targets = list(dict.fromkeys(from_filter + named))
+    if not targets:
+        return [], prompt
+    return targets, (cleaned if named else prompt)
+
+
+def load_org_members(db, org_id: str) -> list[dict]:
+    """Every link for the org merged with its person doc. Cached per process."""
+    now = time.time()
+    with _cache_lock:
+        hit = _members_cache.get(org_id)
+        if hit and now - hit[0] < MEMBERS_TTL_SEC:
+            return hit[1]
+
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    links = [
+        s.to_dict() or {}
+        for s in db.collection(LINKS_COLLECTION).where(filter=FieldFilter("orgId", "==", org_id)).stream()
+    ]
+    keys = [l["personKey"] for l in links if l.get("personKey")]
+    people: dict[str, dict] = {}
+    people_col = db.collection(PEOPLE_COLLECTION)
+    for i in range(0, len(keys), 300):
+        refs = [people_col.document(k) for k in keys[i:i + 300]]
+        for snap in db.get_all(refs):
+            if snap.exists:
+                people[snap.id] = snap.to_dict() or {}
+
+    members = []
+    for link in links:
+        person = people.get(link.get("personKey") or "")
+        if person is None:
+            continue
+        members.append({**person, **{f"link_{k}": v for k, v in link.items()}, "personKey": link["personKey"]})
+
+    with _cache_lock:
+        _members_cache[org_id] = (now, members)
+    return members
+
+
+def org_badge(org: dict, member: dict) -> str:
+    year = member.get("link_chapterYear") or member.get("link_classOfYear")
+    base = f"{org.get('shortName') or org.get('name')} Alumni"
+    return f"{base} '{int(year) % 100:02d}" if isinstance(year, int) else base
+
+
+def member_contact(member: dict, org: dict) -> dict | None:
+    """App-shape contact for one directory member, or None when they shouldn't
+    be offered (deceased, still an undergrad, or no way to reach them)."""
+    if member.get("link_membershipStatus") == "deceased":
+        return None
+    if member.get("link_membershipType") != "alumni":
+        return None
+    work_email = (member.get("workEmail") or "").strip()
+    # A "lost" member's directory email is the address TKE itself flagged as stale.
+    dir_email = "" if member.get("link_membershipStatus") == "lost" else (member.get("email") or "").strip()
+    email = work_email or dir_email
+    linkedin = (member.get("linkedinUrl") or "").strip()
+    if not email and not linkedin:
+        return None
+
+    company = (member.get("coresignalCompany") or "").strip()
+    title = (member.get("coresignalTitle") or "").strip()
+    headline = (member.get("directoryHeadline") or member.get("link_headlineRaw") or "").strip()
+    year = member.get("link_chapterYear") or member.get("link_classOfYear")
+    return {
+        "FirstName": member.get("firstName") or "",
+        "LastName": member.get("lastName") or "",
+        "LinkedIn": linkedin,
+        "Email": email,
+        "WorkEmail": work_email,
+        "PersonalEmail": dir_email if dir_email != work_email else "",
+        "Title": title,
+        "Company": company,
+        "City": "",
+        "State": "",
+        "College": org.get("school") or "",
+        "EducationTop": org.get("school") or "Not available",
+        "WorkSummary": " at ".join(p for p in (title, company) if p) or headline,
+        "Phone": member.get("phone") or "",
+        "PhotoUrl": member.get("photoUrl") or "",
+        "JoinedYear": None,
+        "EmailSource": "fullenrich" if work_email else ("org_directory" if dir_email else ""),
+        "EmailVerified": bool(work_email and member.get("workEmailStatus") == "DELIVERABLE"),
+        "DataVersion": "org_directory",
+        "source": "org_directory",
+        "OrgId": org["id"],
+        "OrgBadge": org_badge(org, member),
+        "OrgHeadline": headline,
+        "OrgYear": year if isinstance(year, int) else None,
+    }
+
+
+def _names(items) -> list[str]:
+    out = []
+    for it in items or []:
+        v = it.get("name") if isinstance(it, dict) else it
+        if isinstance(v, str) and v.strip():
+            out.append(v.strip().lower())
+    return out
+
+
+def filter_by_query(contacts: list[dict], parsed: dict | None) -> list[dict]:
+    """Narrow by company and title. Locations, schools and industries are
+    ignored: directories carry no such data, and every member shares the school."""
+    parsed = parsed or {}
+    companies = _names(parsed.get("companies"))
+    titles = _names(parsed.get("title_variations"))
+    for c in parsed.get("companies") or []:
+        if isinstance(c, dict):
+            titles.extend(_names(c.get("matched_titles")))
+
+    def haystack(c: dict) -> str:
+        return " ".join([c.get("Company") or "", c.get("Title") or "", c.get("OrgHeadline") or ""]).lower()
+
+    out = []
+    for c in contacts:
+        h = haystack(c)
+        if companies and not any(n in h for n in companies):
+            continue
+        if titles and not any(n in h for n in titles):
+            continue
+        out.append(c)
+    return out
+
+
+def rank(contacts: list[dict]) -> list[dict]:
+    """Verified email first, then any email, then most recent alumni first."""
+    return sorted(
+        contacts,
+        key=lambda c: (
+            0 if c.get("EmailVerified") else 1 if c.get("Email") else 2,
+            -(c.get("OrgYear") or 0),
+        ),
+    )
+
+
+def search_org_directory(db, org_ids: list[str], parsed: dict | None, orgs: list[dict], cap: int = 200) -> list[dict]:
+    by_id = {o["id"]: o for o in orgs}
+    seen: set[str] = set()
+    out: list[dict] = []
+    for org_id in org_ids:
+        org = by_id.get(org_id)
+        if not org:
+            continue
+        for m in load_org_members(db, org_id):
+            c = member_contact(m, org)
+            if c is None:
+                continue
+            key = (c["Email"] or c["LinkedIn"]).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(c)
+    return rank(filter_by_query(out, parsed))[:cap]
