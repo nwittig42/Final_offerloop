@@ -18,7 +18,6 @@ import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/peo
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
 import { personFromDirectory, type Person } from "@/components/find/people/peopleModel";
 import { orgAccent, orgMonogram } from "@/hooks/useOrgs";
-import { ORGS_PAGE_BG } from "@/components/find/orgs/OrgsView";
 
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
 const PAGE = 48;
@@ -132,10 +131,10 @@ export default function OrgDirectoryPage() {
         <AppSidebar />
         <MainContentWrapper>
           <AppHeader title="" />
-          <div className="flex-1 overflow-y-auto" style={{ background: ORGS_PAGE_BG }}>
+          <div className="flex-1 overflow-y-auto" style={{ background: "#ECEFF6" }}>
             <div className="mx-auto max-w-[1320px] px-4 pb-16 pt-4 sm:px-10" style={{ fontFamily: APPLE_FONT }}>
-              <Link to="/find?view=orgs" className="mt-4 inline-flex items-center gap-1 text-[13px] text-[#3A4E8C] hover:underline">
-                <ArrowLeft className="h-3.5 w-3.5" /> Organizations
+              <Link to="/find" className="mt-4 inline-flex items-center gap-1 text-[13px] text-[#3A4E8C] hover:underline">
+                <ArrowLeft className="h-3.5 w-3.5" /> Back to Find
               </Link>
 
               {error ? (
@@ -162,7 +161,7 @@ export default function OrgDirectoryPage() {
                       </span>
                     )}
                     <div className="min-w-0">
-                      <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]">
+                      <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]" style={{ fontFamily: APPLE_FONT, color: "#FFFFFF" }}>
                         {org ? `${org.name} alumni` : "Alumni directory"}
                       </h1>
                       <p className="mt-1 text-[14px] text-white/75">

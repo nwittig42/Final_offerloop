@@ -21,8 +21,8 @@ const STEP_NUM_IMAGES = [StepNum1, StepNum2, StepNum3];
 // standard dark-surface lockup, legible directly on the navy rail.
 import OfferloopLogo from "@/assets/offerloop_logo2_allwhite.png";
 import { OB, obPrimaryButton } from "./onboardingTheme";
-import { OrgPicker } from "@/components/OrgPicker";
-import { sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
+import { OrgMembershipEditor } from "@/components/orgs/OrgMembershipEditor";
+import { useOrgs } from "@/hooks/useOrgs";
 import { trackFeatureActionCompleted } from "@/lib/analytics";
 
 // Resume-first onboarding: intro slides, then a single resume/LinkedIn page.
@@ -63,7 +63,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   // Org alumni directories: joining checks the org's password right here
   // (the user doc already exists from sign-up), and the shared orgs query
   // updates so Find shows the org as soon as onboarding ends.
-  const { orgs, memberships, join, leave } = useOrgs(!!user);
+  const { orgs, memberships } = useOrgs(!!user);
   const afterResumeStep: Step = orgs.length > 0 ? "orgs" : "inbox";
 
   // Onboarding analytics: fire-and-forget step events.
@@ -489,12 +489,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
           )}
           {currentStep === "orgs" && (
             <div>
-              <OrgPicker
-                orgs={sortOrgsForSchool(orgs, pendingCompletion?.prefill.university)}
-                joined={memberships}
-                onJoin={async (id, password) => { await join.mutateAsync({ id, password }); }}
-                onLeave={async (id) => { await leave.mutateAsync(id); }}
-              />
+              <OrgMembershipEditor school={pendingCompletion?.prefill.university || null} />
               <button type="button" onClick={handleOrgsDone} style={{ ...obPrimaryButton, marginTop: 24 }}>
                 {memberships.length > 0 ? "Continue" : "Skip for now"}
               </button>

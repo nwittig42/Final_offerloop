@@ -176,12 +176,10 @@ interface PeopleSearchBarProps {
   userSchool: string | null;
   // Org alumni directories the student has joined (OFF-42).
   orgs?: Org[];
-  // Switches Find into its Organizations view.
-  onShowOrgs?: () => void;
   searching: boolean;
 }
 
-export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], onShowOrgs, searching }: PeopleSearchBarProps) {
+export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], searching }: PeopleSearchBarProps) {
   const [allOpen, setAllOpen] = useState(false);
   const [allDraft, setAllDraft] = useState<PeopleFilters>(filters);
   useEffect(() => { if (allOpen) setAllDraft(filters); }, [allOpen, filters]);
@@ -269,14 +267,9 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
       )}
 
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        <span className={pillClass(true)} aria-current="page">
+        <span className={pillClass(true)} aria-hidden>
           People
         </span>
-        {onShowOrgs && (
-          <button type="button" onClick={onShowOrgs} className={pillClass(false)}>
-            Organizations
-          </button>
-        )}
         <span className="mx-1 h-7 w-px shrink-0 bg-line" />
         {userSchool && (
           <button type="button" onClick={toggleAlumni} aria-pressed={alumniOn} className={pillClass(alumniOn)}>

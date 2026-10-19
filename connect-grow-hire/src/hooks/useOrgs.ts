@@ -13,6 +13,10 @@ export function useOrgs(enabled = true) {
     queryKey: ORGS_KEY,
     queryFn: () => apiService.getOrgs(),
     enabled,
+    // Membership changes what Find shows, so don't trust a cached (or cached
+    // failed) answer when a page that needs it mounts.
+    refetchOnMount: "always",
+    retry: 2,
   });
   const onSuccess = (res: { memberships: string[] }) =>
     queryClient.setQueryData(ORGS_KEY, (prev: { orgs: Org[]; memberships: string[] } | undefined) =>
@@ -31,6 +35,8 @@ export function useOrgs(enabled = true) {
     memberships,
     joined: orgs.filter((o) => memberships.includes(o.id)),
     loading: query.isLoading,
+    isError: query.isError,
+    refetch: query.refetch,
     join,
     leave,
   };

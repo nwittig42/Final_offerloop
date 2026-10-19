@@ -1,36 +1,31 @@
-// Account Settings → Organizations (OFF-42). Joining (with the org's
-// password) or leaving saves right away; it isn't part of the Save button.
-import { useNavigate } from "react-router-dom";
-import { OrgPicker } from "@/components/OrgPicker";
-import { sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
+// Account Settings → Organizations (OFF-42): add the orgs you're in (search,
+// pick, enter its password). Joining or removing saves right away; it isn't
+// part of the profile Save button. Find picks the membership up from here.
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { OrgMembershipEditor } from "@/components/orgs/OrgMembershipEditor";
 import { toast } from "@/hooks/use-toast";
 
 export default function OrganizationsSettings({ school }: { school: string | null }) {
-  const { orgs, memberships, loading, join, leave } = useOrgs();
   const navigate = useNavigate();
-  const nameOf = (id: string) => orgs.find((o) => o.id === id)?.name ?? "the organization";
+  const location = useLocation();
 
-  const onJoin = async (id: string, password: string) => {
-    await join.mutateAsync({ id, password });
-    toast({ title: `You're in ${nameOf(id)}`, description: "Open the directory here or from Find to browse every alum." });
-  };
-  const onLeave = async (id: string) => {
-    try {
-      await leave.mutateAsync(id);
-      toast({ title: `Left ${nameOf(id)}`, description: "You'll need the password to rejoin." });
-    } catch {
-      toast({ title: "Couldn't leave right now", description: "Try again in a moment.", variant: "destructive" });
+  // Links from Find land on /account-settings#organizations.
+  useEffect(() => {
+    if (location.hash === "#organizations") {
+      document.getElementById("organizations")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  };
+  }, [location.hash]);
 
-  if (loading) return <p className="text-[14px] text-[#64748B]">Loading organizations…</p>;
   return (
-    <OrgPicker
-      orgs={sortOrgsForSchool(orgs, school)}
-      joined={memberships}
-      onJoin={onJoin}
-      onLeave={onLeave}
-      onOpen={(id) => navigate(`/directory/${id}`)}
+    <OrgMembershipEditor
+      school={school}
+      onOpenDirectory={(id) => navigate(`/directory/${id}`)}
+      onJoined={(org) => toast({
+        title: `You're in ${org.name}`,
+        description: `Find now shows ${org.shortName} alumni: use the pill under the search bar or open the directory.`,
+      })}
+      onLeft={(org) => toast({ title: `Removed ${org.name}`, description: "You'll need the password to add it again." })}
     />
   );
 }

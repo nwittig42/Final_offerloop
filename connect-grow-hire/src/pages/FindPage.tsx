@@ -21,7 +21,6 @@ import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@
 import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
 import { useOrgs } from "@/hooks/useOrgs";
-import { OrgsView, ORGS_PAGE_BG } from "@/components/find/orgs/OrgsView";
 import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
@@ -217,25 +216,8 @@ const FindPage: React.FC = () => {
     } catch { return ""; }
   });
   const [filters, setFilters] = useState<PeopleFilters>(EMPTY_PEOPLE_FILTERS);
-  const {
-    joined: joinedOrgs, orgs: allOrgs, memberships, loading: orgsLoading, join: joinOrgMutation,
-  } = useOrgs(!!user?.uid && !IS_DEV_PREVIEW);
-  // Find's Organizations view (OFF-42): ?view=orgs, and ?org=<id> to open
-  // that org's join form (from a search nudge).
-  const orgsView = searchParams.get("view") === "orgs";
-  const focusOrgId = orgsView ? searchParams.get("org") : null;
-  const showOrgs = (orgId?: string) => {
-    const next = new URLSearchParams(searchParams);
-    next.set("view", "orgs");
-    if (orgId) next.set("org", orgId); else next.delete("org");
-    setSearchParams(next);
-  };
-  const showPeople = () => {
-    const next = new URLSearchParams(searchParams);
-    next.delete("view");
-    next.delete("org");
-    setSearchParams(next);
-  };
+  // Orgs are added in Account Settings (OFF-42); Find just reflects them.
+  const { joined: joinedOrgs, orgs: allOrgs } = useOrgs(!!user?.uid && !IS_DEV_PREVIEW);
   // A search that named an org the student hasn't joined ("TKE alumni").
   const [orgHint, setOrgHint] = useState<{ id: string; name: string; shortName: string } | null>(null);
   const [searching, setSearching] = useState(false);
@@ -372,23 +354,7 @@ const FindPage: React.FC = () => {
         <MainContentWrapper>
           <AppHeader title="" />
           <GoalsPromptBanner />
-          <div ref={scrollRef} className="flex-1 overflow-y-auto transition-colors duration-300" style={{ background: orgsView ? ORGS_PAGE_BG : "#F5F5F7" }}>
-            {orgsView ? (
-              <div className="mx-auto max-w-[1320px] px-4 pb-16 pt-8 sm:px-10">
-                <OrgsView
-                  orgs={allOrgs}
-                  memberships={memberships}
-                  loading={orgsLoading}
-                  school={userUniversity}
-                  focusOrgId={focusOrgId}
-                  onJoin={async (id, password) => {
-                    await joinOrgMutation.mutateAsync({ id, password });
-                    toast({ title: `You're in ${allOrgs.find((o) => o.id === id)?.name ?? "the organization"}`, description: "Open the directory to browse every alum." });
-                  }}
-                  onShowPeople={showPeople}
-                />
-              </div>
-            ) : (
+          <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#F5F5F7]">
             <div className="mx-auto max-w-[1320px] px-6 pb-16 pt-4 sm:px-10">
               <div className="mt-4" data-tour="tour-search-form">
                 <PeopleSearchBar
@@ -398,16 +364,14 @@ const FindPage: React.FC = () => {
                   onSearch={runSearch}
                   userSchool={userUniversity}
                   orgs={joinedOrgs}
-                  onShowOrgs={() => showOrgs()}
                   searching={searching}
                 />
               </div>
 
-              {/* Not in an org yet: point at Organizations (OFF-42) */}
+              {/* Not in an org yet: point at Account Settings (OFF-42) */}
               {joinedOrgs.length === 0 && allOrgs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => showOrgs()}
+                <Link
+                  to="/account-settings#organizations"
                   className="group mt-4 flex w-full items-center gap-3 rounded-[18px] bg-white px-4 py-3 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
                   style={{ fontFamily: APPLE_FONT }}
                 >
@@ -416,10 +380,10 @@ const FindPage: React.FC = () => {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">Part of a fraternity, club or org?</span>
-                    <span className="block truncate text-[12.5px] text-[#6E6E73]">Find it and unlock its whole alumni network</span>
+                    <span className="block truncate text-[12.5px] text-[#6E6E73]">Add it in Account Settings to unlock its whole alumni network</span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-[#0071E3] transition-transform group-hover:translate-x-0.5" />
-                </button>
+                </Link>
               )}
 
               {/* Org alumni directories the student belongs to (OFF-42) */}
@@ -491,9 +455,9 @@ const FindPage: React.FC = () => {
               {inSearch && orgHint && !searching && (
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[18px] px-4 py-3 text-white" style={{ fontFamily: APPLE_FONT, background: "linear-gradient(165deg, #25335A 0%, #0F172A 100%)" }}>
                   <span className="text-[14px]">{orgHint.shortName} alumni are in a members-only directory. Join with your chapter's password to search them.</span>
-                  <button type="button" onClick={() => showOrgs(orgHint.id)} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-white px-4 text-[14px] font-semibold text-[#0F172A]">
-                    Join {orgHint.shortName} <ChevronRight className="h-4 w-4" />
-                  </button>
+                  <Link to="/account-settings#organizations" className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-white px-4 text-[14px] font-semibold text-[#0F172A]">
+                    Add {orgHint.shortName} in Settings <ChevronRight className="h-4 w-4" />
+                  </Link>
                 </div>
               )}
               {inSearch && resultsNote && !searching && !orgHint && (
@@ -577,7 +541,6 @@ const FindPage: React.FC = () => {
                 </>
               )}
             </div>
-            )}
           </div>
         </MainContentWrapper>
       </div>
