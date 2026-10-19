@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { OutboxThread } from "@/services/api";
-import { outboxThreadToProto, protoStageToBackend, PROTO_STAGES, PROTO_STAGE_LABELS } from "./trackerAdapter";
+import { openedSummary, outboxThreadToProto, protoStageToBackend, PROTO_STAGES, PROTO_STAGE_LABELS } from "./trackerAdapter";
 
 function thread(over: Partial<OutboxThread>): OutboxThread {
   return { id: "t1", email: "a@b.com", name: "A B", ...over } as OutboxThread;
@@ -30,5 +30,22 @@ describe("trackerAdapter opened step", () => {
   });
   it("protoStageToBackend(opened) is email_opened", () => {
     expect(protoStageToBackend("opened")).toBe("email_opened");
+  });
+});
+
+describe("openedSummary", () => {
+  const opens = { emailOpenedAt: "2026-10-01T00:00:00Z", emailLastOpenedAt: "2026-10-02T00:00:00Z", emailOpenCount: 3 };
+  it("shows the open line while the stage is email_opened", () => {
+    const p = outboxThreadToProto(thread({ pipelineStage: "email_opened", ...opens }));
+    expect(openedSummary(p)).toMatch(/^Opened 3 times, last /);
+  });
+  it("hides it once a follow-up reset the stage to waiting_on_reply", () => {
+    const p = outboxThreadToProto(thread({ pipelineStage: "waiting_on_reply", ...opens }));
+    expect(openedSummary(p)).toBe("");
+  });
+  it("hides it for other stages that carry old opens", () => {
+    for (const pipelineStage of ["replied", "meeting_scheduled", "draft_created"] as const) {
+      expect(openedSummary(outboxThreadToProto(thread({ pipelineStage, ...opens })))).toBe("");
+    }
   });
 });

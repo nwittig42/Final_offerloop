@@ -217,8 +217,12 @@ export function outboxThreadToProto(t: OutboxThread): ProtoContact {
 
 // "Opened 2h ago" / "Opened 3 times, last 2h ago". Empty string when the
 // email has not been opened, so callers can render it conditionally.
-export function openedSummary(c: Pick<ProtoContact, "lastOpenedAt" | "openCount">): string {
-  if (!c.lastOpenedAt) return "";
+// Only while the contact sits in the Opened stage: a follow-up resets it to
+// waiting_on_reply (the new email hasn't been opened), and the open stamps
+// stay on the contact, so showing them elsewhere would claim an open of the
+// latest email that never happened. Matches ConversationPanel.
+export function openedSummary(c: Pick<ProtoContact, "stage" | "lastOpenedAt" | "openCount">): string {
+  if (c.stage !== "opened" || !c.lastOpenedAt) return "";
   const ago = formatTimeAgo(c.lastOpenedAt);
   if (c.openCount > 1) return `Opened ${c.openCount} times, last ${ago}`;
   return `Opened ${ago}`;
