@@ -129,8 +129,8 @@ export function personFromSearch(c: Contact, index: number): Person {
   };
 }
 
-// Org directory row (OFF-42). `email` stays "" until the student unlocks it.
-export function personFromDirectory(m: DirectoryMember, index: number, revealedEmail = "", orgId = ""): Person {
+// Org directory row (OFF-42). `email` is "" when we don't have one yet.
+export function personFromDirectory(m: DirectoryMember, index: number, orgId = ""): Person {
   const name = `${m.firstName} ${m.lastName}`.trim() || "Unknown";
   return {
     id: m.personKey,
@@ -144,7 +144,7 @@ export function personFromDirectory(m: DirectoryMember, index: number, revealedE
     school: m.school,
     linkedinUrl: m.linkedinUrl,
     photoUrl: m.photoUrl,
-    email: revealedEmail,
+    email: m.email,
     // The raw directory headline is the best "where they are now" we have
     // when there's no clean company/title.
     reasons: !m.company && !m.title && m.headline ? [m.headline] : [],

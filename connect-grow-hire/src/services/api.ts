@@ -178,8 +178,8 @@ export interface Org {
   accentColor: string;
 }
 
-// One alum in an org's browsable directory. No email or phone until a
-// member unlocks them (revealOrgMember).
+// One alum in an org's browsable directory (members only). Email when we
+// have one; never a phone.
 export interface DirectoryMember {
   personKey: string;
   firstName: string;
@@ -193,6 +193,7 @@ export interface DirectoryMember {
   linkedinUrl: string;
   photoUrl: string;
   school: string;
+  email: string;
   hasEmail: boolean;
 }
 
@@ -1508,21 +1509,10 @@ class ApiService {
     return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/leave`, { method: 'POST', headers });
   }
 
-  // The whole directory (members only). `revealed` maps personKey -> email
-  // for alumni this student already unlocked.
-  async getOrgMembers(orgId: string): Promise<{ org: Org; members: DirectoryMember[]; revealed: Record<string, string> }> {
+  // The whole directory (members only): every living alum.
+  async getOrgMembers(orgId: string): Promise<{ org: Org; members: DirectoryMember[] }> {
     const headers = await this.getAuthHeaders();
     return this.makeRequest(`/orgs/${encodeURIComponent(orgId)}/members`, { method: 'GET', headers });
-  }
-
-  // Unlock one alum's email: 10 credits the first time, free after.
-  async revealOrgMember(orgId: string, personKey: string): Promise<{ contact: Contact; credits_used: number; already_revealed: boolean }> {
-    const headers = await this.getAuthHeaders();
-    return this.makeRequest(`/orgs/${encodeURIComponent(orgId)}/reveal`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ personKey }),
-    });
   }
 
   /**

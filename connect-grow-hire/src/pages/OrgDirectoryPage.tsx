@@ -1,7 +1,8 @@
 // The whole alumni directory of an org the student belongs to (OFF-42).
-// Browsing is free: name, class year, where they work, LinkedIn. Contact
-// unlocks the email (10 credits, once per person) and drafts an intro the
-// same way Find does, which also saves them to Contacts.
+// Every living alum, free to browse: name, class year, job, LinkedIn, and
+// their email when we have it. Contact drafts an intro the same way Find
+// does (which also saves them to Contacts). For alumni with no email yet,
+// Contact is where finding their info will hook in.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -55,14 +56,11 @@ export default function OrgDirectoryPage() {
   // than this year's grads, whom the directory has no job for yet.
   const [sort, setSort] = useState<Sort>("complete");
   const [shown, setShown] = useState(PAGE);
-  // Emails unlocked during this visit, on top of the ones the server knows.
-  const [unlocked, setUnlocked] = useState<Record<string, string>>({});
   const [contactStates, setContactStates] = useState<Record<string, ContactState>>({});
   const [infoPerson, setInfoPerson] = useState<Person | null>(null);
 
   const people = useMemo(() => {
     if (!data) return [];
-    const revealed = { ...data.revealed, ...unlocked };
     const q = text.trim().toLowerCase();
     const rows = data.members.filter((m) =>
       !q || [m.firstName, m.lastName, m.company, m.title, m.headline, m.year ? String(m.year) : ""]
@@ -74,8 +72,8 @@ export default function OrgDirectoryPage() {
         : sort === "complete" ? completeness(b) - completeness(a) || (b.year ?? 0) - (a.year ?? 0)
         : sort === "recent" ? (b.year ?? 0) - (a.year ?? 0) : (a.year ?? 9999) - (b.year ?? 9999),
     );
-    return sorted.map((m, i) => ({ person: personFromDirectory(m, i, revealed[m.personKey] || "", orgId), hasEmail: m.hasEmail }));
-  }, [data, unlocked, text, sort]);
+    return sorted.map((m, i) => personFromDirectory(m, i, orgId));
+  }, [data, text, sort, orgId]);
 
   useEffect(() => setShown(PAGE), [text, sort]);
 
@@ -91,19 +89,19 @@ export default function OrgDirectoryPage() {
     return () => io.disconnect();
   }, [people.length, shown]);
 
-  const stateFor = (p: Person, hasEmail: boolean): ContactState =>
-    contactStates[p.id] ?? (hasEmail ? "idle" : "no_email");
+  const stateFor = (p: Person): ContactState => contactStates[p.id] ?? "idle";
 
   const contact = useCallback(async (person: Person) => {
     const setState = (s: ContactState) => setContactStates((m) => ({ ...m, [person.id]: s }));
+    const email = person.email;
+    if (!email) {
+      // TODO(OFF-42): kick off the find-their-info pipeline here once it's
+      // merged. Until then there's nothing to draft to.
+      toast({ title: `We don't have ${person.firstName}'s contact info yet`, description: "Looking it up from here is coming soon." });
+      return;
+    }
     setState("working");
     try {
-      let email = person.email;
-      if (!email) {
-        const res = await apiService.revealOrgMember(orgId, person.id);
-        email = res.contact.Email;
-        setUnlocked((u) => ({ ...u, [person.id]: email }));
-      }
       const res = await apiService.generateAndDraftEmails({
         contacts: [{
           FirstName: person.firstName, LastName: person.lastName, name: person.name,
@@ -118,16 +116,10 @@ export default function OrgDirectoryPage() {
       queryClient.invalidateQueries({ queryKey: THREADS_KEY });
       toast({ title: `Drafted an email to ${person.firstName}`, description: "It's in your Gmail drafts and in Contacts." });
     } catch (e: any) {
-      // makeRequest only sets .status on 401/402/502; other errors carry the
-      // backend's error code as the message.
-      const noEmail = e?.message === "no_email";
-      setState(noEmail ? "no_email" : "idle");
-      const msg = e?.status === 402
-        ? "You need more credits. Unlocking an alum's email costs 10 credits."
-        : noEmail ? "We don't have an email for them. No credits were charged." : e?.message || "Try again.";
-      toast({ title: "Couldn't contact them", description: msg, variant: "destructive" });
+      setState("idle");
+      toast({ title: "Couldn't contact them", description: e?.message || "Try again.", variant: "destructive" });
     }
-  }, [orgId, emailTemplate, queryClient]);
+  }, [emailTemplate, queryClient]);
 
   const org = data?.org;
   const notMember = (error as Error | null)?.message === "not_a_member";
@@ -176,8 +168,8 @@ export default function OrgDirectoryPage() {
                         {org ? `${org.name} alumni` : "Alumni directory"}
                       </h1>
                       <p className="mt-1 text-[14px] text-white/75">
-                        {data ? `${data.members.length.toLocaleString()} alumni you can reach` : "Loading…"}
-                        {org?.school ? ` · ${org.school}` : ""}. Browsing is free. Contact unlocks their email for 10 credits and drafts an intro.
+                        {data ? `${data.members.length.toLocaleString()} alumni` : "Loading…"}
+                        {org?.school ? ` · ${org.school}` : ""}. Free for members. Contact drafts an intro in your voice.
                       </p>
                     </div>
                   </div>
@@ -213,11 +205,11 @@ export default function OrgDirectoryPage() {
                     {isLoading && Array.from({ length: 8 }).map((_, i) => (
                       <div key={i} className="h-[244px] animate-pulse rounded-[22px] bg-white" />
                     ))}
-                    {people.slice(0, shown).map(({ person, hasEmail }) => (
+                    {people.slice(0, shown).map((person) => (
                       <PersonCard
                         key={person.id}
                         person={person}
-                        contactState={stateFor(person, hasEmail)}
+                        contactState={stateFor(person)}
                         onContact={() => contact(person)}
                         onInfo={() => setInfoPerson(person)}
                       />
@@ -235,7 +227,7 @@ export default function OrgDirectoryPage() {
       </div>
       <PersonInfoDialog
         person={infoPerson}
-        contactState={infoPerson ? stateFor(infoPerson, !!data?.members.find((m) => m.personKey === infoPerson.id)?.hasEmail) : "idle"}
+        contactState={infoPerson ? stateFor(infoPerson) : "idle"}
         onContact={() => infoPerson && contact(infoPerson)}
         onClose={() => setInfoPerson(null)}
       />

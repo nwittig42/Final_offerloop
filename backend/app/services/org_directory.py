@@ -295,9 +295,10 @@ def warehouse_by_name(db, school: str) -> dict[tuple[str, str], dict]:
     return by_name
 
 
-def member_contact(member: dict, org: dict, wh: dict | None = None) -> dict | None:
+def member_contact(member: dict, org: dict, wh: dict | None = None, include_unreachable: bool = False) -> dict | None:
     """App-shape contact for one directory member, or None when they shouldn't
-    be offered (deceased, still an undergrad, or no way to reach them).
+    be offered: deceased, still an undergrad, or (unless include_unreachable,
+    which the browsable directory uses) no email or LinkedIn to reach them.
     `wh` is this person's warehouse doc when one matches by name and school:
     a fresher job, a LinkedIn URL and a photo."""
     if member.get("link_membershipStatus") == "deceased":
@@ -310,7 +311,7 @@ def member_contact(member: dict, org: dict, wh: dict | None = None) -> dict | No
     email = work_email or dir_email
     wh = wh or {}
     linkedin = (member.get("linkedinUrl") or "").strip() or (wh.get("linkedin_url") or "").strip()
-    if not email and not linkedin:
+    if not email and not linkedin and not include_unreachable:
         return None
 
     headline = (member.get("directoryHeadline") or member.get("link_headlineRaw") or "").strip()
@@ -434,8 +435,10 @@ def rank(contacts: list[dict]) -> list[dict]:
     )
 
 
-def directory_contacts(db, org: dict) -> list[dict]:
-    """Every reachable alum in one org's directory, ranked."""
+def directory_contacts(db, org: dict, include_unreachable: bool = False) -> list[dict]:
+    """Every living alum in one org's directory, ranked. Search (which bills
+    per contact) only gets the reachable ones; the browsable directory passes
+    include_unreachable so everyone shows, contact info or not."""
     seen: set[str] = set()
     out: list[dict] = []
     try:
@@ -445,10 +448,10 @@ def directory_contacts(db, org: dict) -> list[dict]:
         wh_index = {}
     for m in load_org_members(db, org["id"]):
         name_key = ((m.get("firstName") or "").strip().lower(), (m.get("lastName") or "").strip().lower())
-        c = member_contact(m, org, wh_index.get(name_key))
+        c = member_contact(m, org, wh_index.get(name_key), include_unreachable)
         if c is None:
             continue
-        key = (c["Email"] or c["LinkedIn"]).lower()
+        key = (c["Email"] or c["LinkedIn"] or c["PersonKey"]).lower()
         if key in seen:
             continue
         seen.add(key)
@@ -457,8 +460,9 @@ def directory_contacts(db, org: dict) -> list[dict]:
 
 
 def directory_row(contact: dict) -> dict:
-    """What the browsable directory shows before a member is unlocked: who
-    they are and where they work, never their email or phone."""
+    """One card in the browsable directory, for members only: who they are,
+    where they work, and the email when we have one (Nick, 2026-10-18).
+    Never the phone."""
     return {
         "personKey": contact["PersonKey"],
         "firstName": contact["FirstName"],
@@ -472,6 +476,7 @@ def directory_row(contact: dict) -> dict:
         "linkedinUrl": contact["LinkedIn"],
         "photoUrl": contact["PhotoUrl"],
         "school": contact["College"],
+        "email": contact["Email"],
         "hasEmail": bool(contact["Email"]),
     }
 

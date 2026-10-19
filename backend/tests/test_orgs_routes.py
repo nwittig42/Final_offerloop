@@ -165,7 +165,6 @@ def test_list_returns_joinable_orgs_and_memberships(client):
 # ---------------------------------------------------------------------------
 # Browsable directory + unlock
 # ---------------------------------------------------------------------------
-from google.api_core.exceptions import AlreadyExists  # noqa: E402
 
 TKE = {"id": "usc_tke", "name": "USC Tau Kappa Epsilon", "shortName": "USC TKE", "school": "USC",
        "type": "fraternity", "memberCount": 2127, "aliases": ["tke"]}
@@ -200,61 +199,15 @@ def test_members_requires_membership(client):
     assert r.status_code == 403
 
 
-def test_members_rows_never_carry_email_or_phone(client):
-    r, _, _ = _dir_call(client, "get", "/api/orgs/usc_tke/members", contacts=[_contact()])
+def test_members_rows_carry_email_never_phone(client):
+    r, _, _ = _dir_call(client, "get", "/api/orgs/usc_tke/members", contacts=[_contact(), _contact(key="p2", email="")])
     body = r.get_json()
     assert r.status_code == 200
-    row = body["members"][0]
-    assert row["hasEmail"] is True and row["badge"] == "USC TKE Alumni" and row["gradYear"] == 2020
-    assert "jamie@gmail.com" not in json_dumps(body["members"])
-    assert not any(k.lower().endswith(("email", "phone")) and k != "hasEmail" for k in row)
-
-
-def json_dumps(v):
-    import json
-    return json.dumps(v)
-
-
-def test_reveal_charges_find_contact_once(client):
-    r, reveal_ref, deduct = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", contacts=[_contact()], body={"personKey": "p1"})
-    assert r.status_code == 200
-    assert r.get_json()["contact"]["Email"] == "jamie@gmail.com"
-    deduct.assert_called_once_with("test-user-id", 10, "org_directory_reveal")
-    reveal_ref.create.assert_called_once()
-
-
-def test_reveal_already_unlocked_is_free(client):
-    db_reveal_exists = AlreadyExists("exists")
-    db = MagicMock()
-    reveal_ref = db.collection.return_value.document.return_value.collection.return_value.document.return_value
-    reveal_ref.create.side_effect = db_reveal_exists
-    deduct = MagicMock()
-    with patch("app.routes.orgs.get_db", return_value=db), \
-         patch("app.routes.orgs._member_org", return_value=TKE), \
-         patch("app.routes.orgs.directory_contacts", return_value=[_contact()]), \
-         patch("app.services.auth.deduct_credits_atomic", deduct):
-        r = client.post("/api/orgs/usc_tke/reveal", json={"personKey": "p1"}, headers={"Authorization": "Bearer t"})
-    assert r.get_json()["already_revealed"] is True
-    deduct.assert_not_called()
-
-
-def test_reveal_no_email_is_not_charged(client):
-    r, _, deduct = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", contacts=[_contact(email="")], body={"personKey": "p1"})
-    assert r.status_code == 404 and r.get_json()["error"] == "no_email"
-    deduct.assert_not_called()
-
-
-def test_reveal_out_of_credits_releases_the_claim(client):
-    r, reveal_ref, _ = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", contacts=[_contact()],
-                                 body={"personKey": "p1"}, deduct=(False, 3))
-    assert r.status_code == 402
-    reveal_ref.delete.assert_called_once()
-
-
-def test_reveal_requires_membership(client):
-    r, _, deduct = _dir_call(client, "post", "/api/orgs/usc_tke/reveal", member=False, body={"personKey": "p1"})
-    assert r.status_code == 403
-    deduct.assert_not_called()
+    with_email, without = body["members"]
+    assert with_email["email"] == "jamie@gmail.com" and with_email["hasEmail"] is True
+    assert without["email"] == "" and without["hasEmail"] is False
+    assert with_email["badge"] == "USC TKE Alumni" and with_email["gradYear"] == 2020
+    assert not any("phone" in k.lower() for k in with_email)
 
 
 def test_member_org_gate():

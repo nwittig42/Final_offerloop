@@ -280,3 +280,13 @@ def test_job_source_order_and_warehouse_photo():
     assert (c["Company"], c["Title"]) == ("Bain", "Consultant")
     # A warehouse LinkedIn makes an emailless member reachable.
     assert od.member_contact(_member(email="", link_membershipStatus="lost"), TKE, wh) is not None
+
+
+def test_unreachable_alumni_only_in_the_browsable_directory():
+    lost = _member(email="", link_membershipStatus="lost", directoryHeadline="Houlihan LokeyAssociate")
+    assert od.member_contact(lost, TKE) is None  # search: never bills someone unreachable
+    c = od.member_contact(lost, TKE, include_unreachable=True)
+    assert c["Email"] == "" and c["LinkedIn"] == "" and c["Company"] == "Houlihan Lokey"
+    # Deceased and undergrads stay out either way.
+    assert od.member_contact(_member(link_membershipStatus="deceased"), TKE, include_unreachable=True) is None
+    assert od.member_contact(_member(link_membershipType="undergrad"), TKE, include_unreachable=True) is None

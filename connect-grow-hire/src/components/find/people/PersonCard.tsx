@@ -3,7 +3,7 @@
 // black/grey text scale, grey capsule chips, and capsule buttons (blue for
 // the main action). Same content as the app's People card: who they are,
 // where they work, why we picked them, Info and Contact.
-import { Bookmark, GraduationCap, Loader2, MapPin, User, Users, X } from "lucide-react";
+import { Bookmark, GraduationCap, Loader2, Mail, MapPin, User, Users, X } from "lucide-react";
 import { CompanyLogo } from "@/components/CompanyLogo";
 import { linkedInHref } from "@/components/contacts/contactsModel";
 import { relationFor, type Person } from "./peopleModel";
@@ -185,6 +185,19 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
         </div>
       )}
 
+      {/* Email, for org directory alumni we already have one for (OFF-42) */}
+      {person.email && (person.source === "directory" || person.orgBadge) && (
+        <a
+          href={`mailto:${person.email}`}
+          className="mt-2.5 flex min-w-0 items-center gap-1.5 text-[12.5px] hover:underline"
+          style={{ color: INK_2 }}
+          title={person.email}
+        >
+          <Mail className="h-3.5 w-3.5 shrink-0" style={{ color: INK_3 }} />
+          <span className="truncate">{person.email}</span>
+        </a>
+      )}
+
       {/* Chips */}
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         {featured ? (
@@ -234,7 +247,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             type="button"
             onClick={onContact}
             disabled={isSample || contactState === "working"}
-            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : person.source === "directory" && !person.email ? "Unlocks their email (10 credits, once) and drafts an outreach" : "Drafts an outreach email"}
+            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : "Drafts an outreach email"}
             className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
           >
             {contactState === "working" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
