@@ -14,10 +14,8 @@ import { ScoutChatProvider } from "./contexts/ScoutChatContext";
 import { TourProvider } from "./contexts/TourContext";
 import { HelmetProvider } from "react-helmet-async";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { LoginNotification } from "./components/LoginNotification";
 import { LoadingContainer } from "./components/ui/LoadingBar";
 import { IS_DEV_PREVIEW } from "./lib/devPreview";
-import { useAgentGlobalNotifier } from "./hooks/useAgent";
 
 // Keep critical auth pages non-lazy for faster initial load
 import SignIn from "./pages/SignIn";
@@ -43,7 +41,6 @@ const ConnectorSetup = React.lazy(() => import("./pages/ConnectorSetup"));
 const ForStudentsPage = React.lazy(() => import("./pages/ForStudentsPage"));
 const HowItWorks = React.lazy(() => import("./pages/HowItWorks"));
 const PromoPage = React.lazy(() => import("./pages/PromoPage"));
-const CoffeeChatLibrary = React.lazy(() => import("./pages/CoffeeChatLibrary"));
 const ContactUs = React.lazy(() => import("./pages/ContactUs"));
 const PrivacyPolicy = React.lazy(() => import("./pages/PrivacyPolicy"));
 const ExtensionPrivacyPolicy = React.lazy(() => import("./pages/ExtensionPrivacyPolicy"));
@@ -67,17 +64,21 @@ const JobBoardRedesign = React.lazy(() => import("./pages/JobBoardPage.redesign"
 // /job-board now hosts BOTH views (List = personalized board, Gallery =
 // browse-everything cards) behind a toggle. The container owns the choice.
 const JobBoardContainer = React.lazy(() => import("./pages/JobBoardContainer"));
-// /outbox renders the redesign. /tracker is preserved as a redirect for
-// internal call sites until a sweep updates them. The old NetworkTracker
-// page file is unrouted pending deletion.
-const NetworkTrackerRedesign = React.lazy(() => import("./pages/NetworkTrackerRedesign"));
-const MyNetworkPage = React.lazy(() => import("./pages/MyNetworkPage"));
+// Contacts replaced My Network, Inbox and Meeting Prep. Their old URLs
+// redirect here via ToContacts, keeping ?contact= and route state.
+const ContactsPage = React.lazy(() => import("./pages/ContactsPage"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 const PaymentSuccess = React.lazy(() => import("./pages/PaymentSuccess"));
 // Feature Pages - These are the largest, most important to lazy load
-const CoffeeChatPrepPage = React.lazy(() => import("./pages/CoffeeChatPrepPage"));
 const FindPage = React.lazy(() => import("./pages/FindPage"));
 const EmailTemplatesPage = React.lazy(() => import("./pages/EmailTemplatesPage"));
+
+// Old My Network / Inbox / Meeting Prep URLs land on Contacts, carrying the
+// query string (?contact=<id>) and route state ({ focusEmail }) along.
+function ToContacts() {
+  const loc = useLocation();
+  return <Navigate to={`/contacts${loc.search}`} state={loc.state} replace />;
+}
 const RecruitingTimelinePage = React.lazy(() => import("./pages/RecruitingTimelinePage"));
 // New Lovable Onboarding Flow
 const OnboardingFlow = React.lazy(() => import("./pages/OnboardingFlow").then(m => ({ default: m.OnboardingFlow })));
@@ -372,15 +373,16 @@ const AppRoutes: React.FC = () => {
       {/* Protected App Pages - Wrapped in Suspense for lazy loading */}
       <Route path="/dashboard" element={<Navigate to="/find" replace />} />
       <Route path="/find" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><FindPage /></Suspense></ProtectedRoute>} />
-      <Route path="/my-network" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><MyNetworkPage /></Suspense></ProtectedRoute>} />
-      <Route path="/my-network/:tab" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><MyNetworkPage /></Suspense></ProtectedRoute>} />
+      <Route path="/contacts" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><ContactsPage /></Suspense></ProtectedRoute>} />
+      <Route path="/my-network" element={<ToContacts />} />
+      <Route path="/my-network/:tab" element={<ToContacts />} />
       <Route path="/contact-search" element={<Navigate to="/find" replace />} />
-      <Route path="/outbox" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><NetworkTrackerRedesign /></Suspense></ProtectedRoute>} />
-      <Route path="/tracker" element={<Navigate to="/outbox" replace />} />
+      <Route path="/outbox" element={<ToContacts />} />
+      <Route path="/tracker" element={<ToContacts />} />
       {/* Legacy /home redirect to contact search */}
       <Route path="/home" element={<Navigate to="/find" replace />} />
-      <Route path="/contact-directory" element={<Navigate to="/my-network/people" replace />} />
-      <Route path="/coffee-chat-library" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><CoffeeChatLibrary /></Suspense></ProtectedRoute>} />
+      <Route path="/contact-directory" element={<ToContacts />} />
+      <Route path="/coffee-chat-library" element={<ToContacts />} />
       <Route path="/account-settings" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><AccountSettings /></Suspense></ProtectedRoute>} />
       <Route path="/integrations" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><IntegrationsPage /></Suspense></ProtectedRoute>} />
       <Route path="/mcp-server" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><McpServerPage /></Suspense></ProtectedRoute>} />
@@ -396,16 +398,16 @@ const AppRoutes: React.FC = () => {
       <Route path="/payment-success" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><PaymentSuccess /></Suspense></ProtectedRoute>} />
       
       {/* Feature Pages - Largest pages, most important to lazy load */}
-      <Route path="/coffee-chat-prep" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><CoffeeChatPrepPage /></Suspense></ProtectedRoute>} />
+      <Route path="/coffee-chat-prep" element={<ToContacts />} />
       <Route path="/contact-search/templates" element={<Navigate to="/find/templates" replace />} />
       <Route path="/find/templates" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><EmailTemplatesPage /></Suspense></ProtectedRoute>} />
-      <Route path="/firm-search" element={<Navigate to="/find?tab=companies" replace />} />
+      <Route path="/firm-search" element={<Navigate to="/find" replace />} />
       {/* Old standalone gallery URL now deep-links into the Job Board's gallery view. */}
       <Route path="/jobs" element={<Navigate to="/job-board?view=gallery" replace />} />
       <Route path="/job-board" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><JobBoardContainer /></Suspense></ProtectedRoute>} />
-      <Route path="/recruiter-spreadsheet" element={<Navigate to="/find?tab=hiring-managers" replace />} />
-      <Route path="/hiring-manager-tracker" element={<Navigate to="/find?tab=hiring-managers" replace />} />
-      <Route path="/company-tracker" element={<Navigate to="/find?tab=companies" replace />} />
+      <Route path="/recruiter-spreadsheet" element={<Navigate to="/find" replace />} />
+      <Route path="/hiring-manager-tracker" element={<Navigate to="/find" replace />} />
+      <Route path="/company-tracker" element={<Navigate to="/find" replace />} />
       {/* Scout is no longer on the website; old /scout links land on Search. */}
       <Route path="/scout" element={<Navigate to="/find" replace />} />
       <Route path="/recruiting-timeline" element={<ProtectedRoute><Suspense fallback={<PageLoader />}><RecruitingTimelinePage /></Suspense></ProtectedRoute>} />
@@ -548,18 +550,6 @@ const PageviewTracker: React.FC = () => {
 };
 
 /* ---------------- Agent Global Notifier ---------------- */
-function AgentNotifierMount() {
-  const { user } = useFirebaseAuth();
-  const isElite = (user as { tier?: string } | null)?.tier === "elite";
-  if (!isElite) return null;
-  return <AgentNotifierActive />;
-}
-
-function AgentNotifierActive() {
-  useAgentGlobalNotifier();
-  return null;
-}
-
 /* ---------------- Job Feed Prefetch ----------------
    The job feed is the slowest data fetch in the app (the server gathers +
    ranks jobs for the user). Fetching it here — the moment auth resolves to an
@@ -613,8 +603,6 @@ const App: React.FC = () => {
                   <ScoutChatProvider>
                     <TourProvider>
                       <PageviewTracker />
-                      <AgentNotifierMount />
-                      <LoginNotification />
                       <PendingShareModal />
                       <AppRoutes />
                     </TourProvider>

@@ -25,11 +25,6 @@ const COMPLETION_AUTO_DISMISS_MS = 3000;
 // -----------------------------------------------------------------------------
 export type TourDemoSurface =
   | 'people'
-  | 'hiring-managers'
-  | 'companies'
-  | 'my-network'
-  | 'inbox'
-  | 'meeting-prep'
   | 'scout'
   | 'loops'
   | 'applications';
@@ -82,22 +77,6 @@ export const TOUR_STEPS: TourStepConfig[] = [
     tab: 'contact-search',
     demoSurface: 'people',
   },
-  // Find Companies
-  {
-    target: '[data-tour="tour-find-companies"]',
-    title: 'Find Companies',
-    content: "Describe the kind of companies you're targeting in plain English and we'll surface the ones that fit.",
-    route: '/find?tab=companies',
-    demoSurface: 'companies',
-  },
-  // Find Hiring Manager
-  {
-    target: '[data-tour="tour-find-hiring-managers"]',
-    title: 'Find Hiring Manager',
-    content: "Paste a job posting URL and we'll find the recruiter and hiring manager for that role.",
-    route: '/find?tab=hiring-managers',
-    demoSurface: 'hiring-managers',
-  },
   // Job Board block: list → find-people → auto-apply → applications. The page
   // auto-selects the first job on mount (JobBoardPage.redesign.tsx ~287-298),
   // so the detail panel (and its find-people + action-row anchors) is in the
@@ -139,30 +118,13 @@ export const TOUR_STEPS: TourStepConfig[] = [
     route: '/applications',
     demoSurface: 'applications',
   },
-  // My Network. Trimmed: the inbox/Gmail story now lives in its own step.
+  // Contacts: everyone you've saved, each with their conversation and
+  // meeting prep on the same card.
   {
-    target: '[data-tour="tour-network-table"]',
-    title: 'My Network',
-    content: "Everyone you find and save lands here. Click the mail icon on any contact to open the conversation.",
-    route: '/my-network/people',
-    demoSurface: 'my-network',
-  },
-  // Inbox. Was implicit in the old My Network copy; now a step of its own
-  // anchored on the /outbox surface so the spotlight matches the language.
-  {
-    target: '[data-tour="tour-inbox"]',
-    title: 'Inbox',
-    content: "Track every conversation in one place. Manage replies and follow-ups here, or jump to Gmail to see the drafts we wrote.",
-    route: '/outbox',
-    demoSurface: 'inbox',
-  },
-  // Meeting Prep
-  {
-    target: '[data-tour="tour-coffee-chat-prep"]',
-    title: 'Meeting Prep',
-    content: "When you land a call, prep here. Paste a LinkedIn URL and get talking points, recent news, and smart questions tailored to who you're meeting.",
-    route: '/coffee-chat-prep',
-    demoSurface: 'meeting-prep',
+    target: '[data-tour="tour-contacts"]',
+    title: 'Contacts',
+    content: "Everyone you find and save lands here. Open a contact to see your conversation, reply, and run a meeting prep before you talk.",
+    route: '/contacts',
   },
   // Closer — centered send-off on Search so the tour ends where the user will
   // actually live, not parked on the Loops setup page.
@@ -170,7 +132,7 @@ export const TOUR_STEPS: TourStepConfig[] = [
     id: 'closing',
     target: 'body',
     title: "You're ready",
-    content: "Start by finding one person you want to talk to. Replies land in your Inbox, and Loops keep working for you in the background.",
+    content: "Start by finding one person you want to talk to. Replies land in Contacts, and Loops keep working for you in the background.",
     route: '/find',
     placement: 'center',
     nextLabel: 'Finish',

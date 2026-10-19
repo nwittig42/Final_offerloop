@@ -321,7 +321,7 @@ export function ScoutSidePanel() {
         auto_populate: searchHelpResponse.auto_populate,
       }),
     );
-    const targetRoute = searchHelpResponse.search_type === 'contact' ? '/find' : '/find?tab=companies';
+    const targetRoute = '/find';
     closePanel();
     if (location.pathname !== targetRoute) {
       navigate(targetRoute);

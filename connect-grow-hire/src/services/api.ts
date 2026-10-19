@@ -405,6 +405,16 @@ export interface OutboxThread {
   duplicateOf?: string;
 }
 
+// Ranker deck. Person fields are loosely shaped on the wire; see
+// components/find/people/peopleModel.ts for the mapping.
+export interface RankerDeckResponse {
+  candidates: Array<Record<string, any>>;
+  count: number;
+  deck_id?: string;
+  generatedAt?: string;
+  reason?: "sparse_profile" | "no_candidates" | string;
+}
+
 export interface OutboxStats {
   total: number;
   byStage: Record<PipelineStage, number>;
@@ -2053,6 +2063,53 @@ async markOutboxThreadRead(contactId: string): Promise<{ thread: OutboxThread } 
     `/outbox/threads/${contactId}/mark-read`,
     { method: 'POST', headers }
   );
+}
+
+// ── Ranker: recommended people (same deck the mobile People feed uses) ──
+
+/** Ranked people to reach out to, sourced from the user's school and dream
+ *  companies (or one company, with `company`). `exclude` = candidate ids already shown, so "load more" extends
+ *  the list instead of replaying it. Echo deck_id on feedback/outreach. */
+async getRankerCandidates(params?: { limit?: number; exclude?: string[]; company?: string }): Promise<RankerDeckResponse> {
+  const headers = await this.getAuthHeaders();
+  const qs = new URLSearchParams({ surface: "web_find" });
+  if (params?.limit) qs.set("limit", String(params.limit));
+  // company= scopes the deck to one firm; when nobody is on file there the
+  // backend goes and finds people at it (the "dig") before answering.
+  if (params?.company) qs.set("company", params.company);
+  if (params?.exclude?.length) qs.set("exclude", params.exclude.slice(0, 500).join(","));
+  const q = qs.toString();
+  return this.makeRequest<RankerDeckResponse>(`/ranker/candidates${q ? `?${q}` : ""}`, { method: 'GET', headers });
+}
+
+/** Record interest in a candidate. "left" hides them from future decks. */
+async sendRankerFeedback(body: { candidateId: string; signal: "right" | "left" | "skip"; deckId: string; rank: number }): Promise<void> {
+  const headers = await this.getAuthHeaders();
+  await this.makeRequest('/ranker/feedback', {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidate_id: body.candidateId, signal: body.signal, deck_id: body.deckId, rank: body.rank }),
+  });
+}
+
+/** Find a candidate's verified email (8 credits, refunded on a miss). */
+async revealRankerEmail(candidateId: string, deckId?: string): Promise<{ email: string | null; verified: boolean; cached: boolean; charged: boolean }> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/reveal-email`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deck_id: deckId, surface: "web_find" }),
+  });
+}
+
+/** Write to a candidate after a reveal. No extra charge; saves them to Contacts. */
+async rankerOutreach(candidateId: string, action: "draft" | "send", deckId?: string): Promise<{ drafted: boolean; sent: boolean }> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/outreach`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, deck_id: deckId }),
+  });
 }
 
 /** Mark a contact as won (meeting booked) */

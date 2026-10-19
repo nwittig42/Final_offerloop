@@ -13,8 +13,6 @@ import {
   FileText,
   Users,
   Search,
-  Coffee,
-  Inbox,
   Briefcase,
   Upload,
   BookOpen,
@@ -81,13 +79,11 @@ type NavItemDef = {
 const discoverNavItems: NavItemDef[] = [
   { title: "Search",      url: "/find",        LucideIcon: Search },
   { title: "Job Board",   url: "/job-board",   LucideIcon: Briefcase },
-  { title: "My Network",  url: "/my-network",  LucideIcon: Users },
   { title: "Upload List", url: "/upload-list", LucideIcon: Upload },
 ];
 
 const engageNavItems: NavItemDef[] = [
-  { title: "Inbox",        url: "/outbox",           LucideIcon: Inbox,  dataTour: "tour-track-email" },
-  { title: "Meeting Prep", url: "/coffee-chat-prep", LucideIcon: Coffee, dataTour: "tour-coffee-chat-prep" },
+  { title: "Contacts", url: "/contacts", LucideIcon: Users, dataTour: "tour-contacts-nav" },
 ];
 
 const applicationsNavItems: NavItemDef[] = [
@@ -95,7 +91,6 @@ const applicationsNavItems: NavItemDef[] = [
 ];
 
 const utilityNavItems: NavItemDef[] = [
-  { title: "Integrations",  url: "/integrations",  LucideIcon: Plug },
   { title: "Pricing",       url: "/pricing",       LucideIcon: Tag },
 ];
 
@@ -103,6 +98,7 @@ const userMenuItems = [
   { title: "Profile",           url: "/profile",            icon: User },
   { title: "Refer & Earn",      url: "/refer",              icon: Gift },
   { title: "Account Settings",  url: "/account-settings",   icon: Settings },
+  { title: "Integrations",      url: "/integrations",       icon: Plug },
   { title: "Documentation",     url: "/documentation",      icon: FileText },
   { title: "About Us",          url: "/about",              icon: Info },
   { title: "Contact Us",        url: "/contact-us",         icon: MessageSquare },
@@ -464,7 +460,7 @@ export function AppSidebar() {
                   <span>Take the tour</span>
                 </button>
                 <NavLink
-                  to="/tracker"
+                  to="/contacts"
                   onClick={() => {
                     setUserDropdownOpen(false);
                     trackNavClick("Notifications", "sidebar_dropdown");

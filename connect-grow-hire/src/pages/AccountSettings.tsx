@@ -21,7 +21,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { apiService, BACKEND_URL } from "@/services/api";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, ChevronRight } from "lucide-react";
 import { ACCEPTED_RESUME_TYPES, isValidResumeFile } from "@/utils/resumeFileTypes";
 
 // Constants for dropdowns
@@ -2840,6 +2840,30 @@ export default function AccountSettings() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Click-through to the full Integrations page (moved off the sidebar) */}
+                    <button
+                      type="button"
+                      onClick={() => navigate('/integrations')}
+                      className="flex w-full items-center justify-between gap-4 text-left transition-colors hover:bg-[#F3F6FF]"
+                      style={{
+                        padding: '16px 20px',
+                        borderRadius: '12px',
+                        background: '#FAFBFF',
+                        border: '1px solid rgba(59, 130, 246, 0.06)',
+                        fontFamily: "'DM Sans', system-ui, sans-serif",
+                      }}
+                    >
+                      <span>
+                        <span style={{ display: 'block', fontWeight: 600, color: '#0F172A', fontSize: '15px' }}>
+                          Manage integrations
+                        </span>
+                        <span style={{ display: 'block', fontSize: '14px', color: '#6B7280', marginTop: '2px' }}>
+                          Connect accounts and see what's coming next
+                        </span>
+                      </span>
+                      <ChevronRight className="h-5 w-5 shrink-0" style={{ color: '#94A3B8' }} />
+                    </button>
                     </div>
                   </SettingsSection>
 

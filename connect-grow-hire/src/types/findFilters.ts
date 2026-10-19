@@ -3,8 +3,6 @@
 // mirror the backend parsers exactly (people: prompt_parser.py, companies:
 // company_search.parse_firm_search_prompt) — nothing invented client-side.
 
-export type FindTab = "people" | "companies" | "hiring-managers";
-
 export interface PeopleFilters {
   titles: string[];
   companies: string[];

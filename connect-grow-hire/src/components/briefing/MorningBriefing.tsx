@@ -625,12 +625,12 @@ export function MorningBriefing() {
   };
 
   const goToTracker = (filter?: "replies" | "followups") => {
-    const url = filter ? `/tracker?filter=${filter}` : "/tracker";
+    const url = "/contacts";
     navigate(url);
   };
 
   const goToContact = (contactId: string) => {
-    navigate(`/tracker?contact=${contactId}`);
+    navigate(`/contacts?contact=${contactId}`);
   };
 
   // Empty state for brand new users with no data

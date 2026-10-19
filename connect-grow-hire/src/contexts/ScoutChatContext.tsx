@@ -244,13 +244,12 @@ export function ScoutChatProvider({ children }: { children: React.ReactNode }) {
       const detail = (e as CustomEvent<ScoutSearchCompletedDetail>).detail;
       if (!detail) return;
       const count = typeof detail.count === 'number' ? detail.count : 0;
-      // Default to the My Network tab matching the source page. Identity-
-      // based: the firm search is /find?tab=companies; every other source is
-      // people.
+      // Results land in Contacts. Identity-based: the firm search was
+      // /find?tab=companies; every other source is people.
       const sourceId = scoutPageIdentity(detail.route || '');
       const wasContacts = !(sourceId.path === '/find' && sourceId.tab === 'companies');
       const resultsRoute = detail.results_route
-        || (wasContacts ? '/my-network/people' : '/my-network/companies');
+        || '/contacts';
       const subject = wasContacts ? 'contact' : 'firm';
       const subjectPlural = wasContacts ? 'contacts' : 'firms';
       const chipLabel = wasContacts ? 'Open your network' : 'Open your companies';

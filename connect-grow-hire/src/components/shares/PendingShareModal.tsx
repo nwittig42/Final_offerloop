@@ -189,7 +189,7 @@ export default function PendingShareModal() {
               className={GHOST_BTN}
               onClick={() => {
                 setImported(null);
-                navigate("/my-network/people");
+                navigate("/contacts");
               }}
             >
               <Users className="h-4 w-4" />
@@ -199,7 +199,7 @@ export default function PendingShareModal() {
               className={PRIMARY_BTN}
               onClick={() => {
                 setImported(null);
-                navigate("/outbox");
+                navigate("/contacts");
               }}
             >
               <Inbox className="h-4 w-4" />

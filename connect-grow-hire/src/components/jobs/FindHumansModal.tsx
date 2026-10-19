@@ -529,11 +529,11 @@ export function FindHumansModal({ open, onOpenChange, job, kind = "recruiter", c
   }, [open]);
 
   const handleInbox = () => {
-    navigate("/outbox", { state: { focusEmail: focusEmail(), segment: outboxSegment } });
+    navigate("/contacts", { state: { focusEmail: focusEmail(), segment: outboxSegment } });
     onOpenChange(false);
   };
   const handleViewSpreadsheet = () => {
-    navigate(`/my-network/${networkTab}`);
+    navigate(networkTab === "people" ? "/contacts?view=table" : "/contacts");
     onOpenChange(false);
   };
 

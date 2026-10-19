@@ -629,7 +629,7 @@ const UploadListPage = () => {
                       Upload another list
                     </Button>
                     <Button
-                      onClick={() => navigate("/my-network/people")}
+                      onClick={() => navigate("/contacts")}
                       className="flex-1 h-11 rounded-[3px] bg-[#0F172A] hover:bg-[#1E293B] text-white"
                     >
                       View in My Network
