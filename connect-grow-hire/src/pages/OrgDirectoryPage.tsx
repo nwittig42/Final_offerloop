@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Search, X } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
@@ -242,17 +242,21 @@ export default function OrgDirectoryPage() {
                         </button>
                       )}
                     </label>
-                    <select
-                      value={sort}
-                      onChange={(e) => setSort(e.target.value as Sort)}
-                      aria-label="Sort"
-                      className="h-14 rounded-full bg-white px-5 text-[15px] text-[#1D1D1F] shadow-[0_6px_24px_rgba(0,0,0,0.12)] outline-none"
-                    >
-                      <option value="complete">Most complete first</option>
-                      <option value="recent">Newest first</option>
-                      <option value="oldest">Oldest first</option>
-                      <option value="name">Last name A–Z</option>
-                    </select>
+                    {/* Native arrow hidden (it hugged the edge); ours has room. */}
+                    <div className="relative">
+                      <select
+                        value={sort}
+                        onChange={(e) => setSort(e.target.value as Sort)}
+                        aria-label="Sort"
+                        className="h-14 cursor-pointer appearance-none rounded-full bg-white pl-5 pr-12 text-[15px] font-medium text-[#1D1D1F] shadow-[0_6px_24px_rgba(0,0,0,0.12)] outline-none"
+                      >
+                        <option value="complete">Most complete first</option>
+                        <option value="recent">Newest first</option>
+                        <option value="oldest">Oldest first</option>
+                        <option value="name">Last name A–Z</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-5 top-1/2 h-5 w-5 -translate-y-1/2 text-[#1D1D1F]" strokeWidth={2.2} />
+                    </div>
                     {data && text && (
                       <span className={`text-[14px] ${branded ? "text-white/85" : "text-[#6E6E73]"}`}>
                         {people.length.toLocaleString()} match{people.length === 1 ? "" : "es"}
