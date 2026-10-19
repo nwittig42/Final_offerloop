@@ -21,6 +21,7 @@ import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@
 import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
 import { useOrgs } from "@/hooks/useOrgs";
+import { orgLogo } from "@/lib/orgLogos";
 import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
@@ -396,9 +397,13 @@ const FindPage: React.FC = () => {
                       className="group flex min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
                       style={{ fontFamily: APPLE_FONT }}
                     >
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
-                        <Users className="h-4 w-4" />
-                      </span>
+                      {orgLogo(o.id) ? (
+                        <img src={orgLogo(o.id)!} alt="" aria-hidden className="h-10 w-10 shrink-0 object-contain" />
+                      ) : (
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
+                          <Users className="h-4 w-4" />
+                        </span>
+                      )}
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">{o.name} alumni directory</span>
                         <span className="block truncate text-[12.5px] text-[#6E6E73]">See every alum, free to browse</span>

@@ -18,6 +18,7 @@ import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/peo
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
 import { personFromDirectory, type Person } from "@/components/find/people/peopleModel";
 import { orgAccent, orgMonogram } from "@/hooks/useOrgs";
+import { orgLogo } from "@/lib/orgLogos";
 
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
 const PAGE = 48;
@@ -67,7 +68,7 @@ export default function OrgDirectoryPage() {
         ? `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`)
         : sort === "recent" ? (b.year ?? 0) - (a.year ?? 0) : (a.year ?? 9999) - (b.year ?? 9999),
     );
-    return sorted.map((m, i) => ({ person: personFromDirectory(m, i, revealed[m.personKey] || ""), hasEmail: m.hasEmail }));
+    return sorted.map((m, i) => ({ person: personFromDirectory(m, i, revealed[m.personKey] || "", orgId), hasEmail: m.hasEmail }));
   }, [data, unlocked, text, sort]);
 
   useEffect(() => setShown(PAGE), [text, sort]);
@@ -155,11 +156,15 @@ export default function OrgDirectoryPage() {
                     className="mt-3 flex items-center gap-4 rounded-[26px] px-5 py-6 text-white sm:px-8"
                     style={{ background: `linear-gradient(160deg, ${orgAccent(org)} 0%, #1A1A1A 140%)` }}
                   >
-                    {org && (
+                    {org && (orgLogo(org.id) ? (
+                      <span className="hidden h-[72px] w-[72px] shrink-0 items-center justify-center rounded-[18px] bg-white p-2 shadow-[0_4px_14px_rgba(0,0,0,0.25)] sm:flex" aria-hidden>
+                        <img src={orgLogo(org.id)!} alt="" className="h-full w-full object-contain" />
+                      </span>
+                    ) : (
                       <span className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-[16px] bg-white/15 text-[17px] font-bold tracking-wide ring-1 ring-white/25 sm:flex" aria-hidden>
                         {orgMonogram(org)}
                       </span>
-                    )}
+                    ))}
                     <div className="min-w-0">
                       <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]" style={{ fontFamily: APPLE_FONT, color: "#FFFFFF" }}>
                         {org ? `${org.name} alumni` : "Alumni directory"}

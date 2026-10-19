@@ -12,6 +12,7 @@ import { UNIVERSITIES } from "@/data/universities";
 import { industries } from "@/data/industries";
 import offerloopIcon from "@/assets/offerloopiconlogo.png";
 import type { Org } from "@/services/api";
+import { orgLogo } from "@/lib/orgLogos";
 import { getUniversityShortName } from "@/lib/universityUtils";
 import { APPLE_FONT } from "./PersonCard";
 
@@ -280,6 +281,7 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
           const on = filters.organizations.includes(o.id);
           return (
             <button key={o.id} type="button" onClick={() => toggleOrg(o.id)} aria-pressed={on} className={pillClass(on)}>
+              {orgLogo(o.id) && <img src={orgLogo(o.id)!} alt="" aria-hidden className="h-[18px] w-[18px] object-contain" />}
               {o.shortName} alumni
             </button>
           );

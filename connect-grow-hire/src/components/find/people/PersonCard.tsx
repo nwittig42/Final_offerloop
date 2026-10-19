@@ -9,6 +9,7 @@ import { linkedInHref } from "@/components/contacts/contactsModel";
 import { relationFor, type Person } from "./peopleModel";
 import { PersonAvatar } from "./PersonAvatar";
 import { LinkedInLink } from "./LinkedInLink";
+import { orgLogo } from "@/lib/orgLogos";
 import { useEffect, useState } from "react";
 import { MIN_LOGO_PX, findUniversity, sameUniversity, universityLogoSources } from "@/lib/universityLogos";
 
@@ -195,7 +196,9 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
         )}
         {person.orgBadge && (
           <span className="inline-flex h-6 max-w-full items-center gap-1 rounded-full px-2.5 text-[12px] font-semibold" style={{ background: "#EEF1FA", color: "#3A4E8C" }}>
-            <Users className="h-3 w-3 shrink-0" />
+            {orgLogo(person.orgId)
+              ? <img src={orgLogo(person.orgId)!} alt="" aria-hidden className="h-4 w-4 shrink-0 object-contain" />
+              : <Users className="h-3 w-3 shrink-0" />}
             <span className="truncate">{person.orgBadge}</span>
           </span>
         )}

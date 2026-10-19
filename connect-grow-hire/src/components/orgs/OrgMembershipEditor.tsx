@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import type { Org } from "@/services/api";
 import { OrgJoinForm } from "@/components/orgs/OrgJoinForm";
 import { orgAccent, orgMonogram, sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
+import { orgLogo } from "@/lib/orgLogos";
 
 interface OrgMembershipEditorProps {
   school: string | null;
@@ -20,6 +21,10 @@ interface OrgMembershipEditorProps {
 }
 
 function Monogram({ org, size = 36 }: { org: Org; size?: number }) {
+  const logo = orgLogo(org.id);
+  if (logo) {
+    return <img src={logo} alt="" aria-hidden className="shrink-0 object-contain" style={{ width: size, height: size }} />;
+  }
   return (
     <span
       className="flex shrink-0 items-center justify-center rounded-[10px] text-[12px] font-bold tracking-wide text-white"
