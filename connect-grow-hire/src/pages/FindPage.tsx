@@ -3,9 +3,9 @@
 // The search bar and LinkedIn-style filter pills on top swap the gallery for
 // search results in the same card layout.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, ArrowLeft } from "lucide-react";
+import { RefreshCw, ArrowLeft, Users, ChevronRight } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
@@ -362,6 +362,31 @@ const FindPage: React.FC = () => {
                   searching={searching}
                 />
               </div>
+
+              {/* Org alumni directories the student belongs to (OFF-42) */}
+              {joinedOrgs.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {joinedOrgs.map((o) => (
+                    <Link
+                      key={o.id}
+                      to={`/directory/${o.id}`}
+                      className="group flex min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
+                      style={{ fontFamily: APPLE_FONT }}
+                    >
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
+                        <Users className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">{o.name} alumni directory</span>
+                        <span className="block truncate text-[12.5px] text-[#6E6E73]">See every alum, free to browse</span>
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-medium text-[#0071E3]">
+                        Open <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              )}
 
               {/* Section header */}
               <div className="mb-4 mt-8 flex flex-wrap items-end justify-between gap-3">

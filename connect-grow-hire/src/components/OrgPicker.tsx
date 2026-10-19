@@ -9,9 +9,11 @@ interface OrgPickerProps {
   selected: string[];
   onToggle: (orgId: string) => void;
   busyId?: string | null;
+  // Shown next to orgs the student has joined (Account Settings).
+  onOpen?: (orgId: string) => void;
 }
 
-export function OrgPicker({ orgs, selected, onToggle, busyId }: OrgPickerProps) {
+export function OrgPicker({ orgs, selected, onToggle, busyId, onOpen }: OrgPickerProps) {
   if (orgs.length === 0) {
     return <p className="text-[14px] text-[#64748B]">No organizations are available yet.</p>;
   }
@@ -31,6 +33,11 @@ export function OrgPicker({ orgs, selected, onToggle, busyId }: OrgPickerProps) 
                 {[o.school, o.memberCount ? `${o.memberCount.toLocaleString()} members` : ""].filter(Boolean).join(" · ")}
               </div>
             </div>
+            {on && onOpen && (
+              <button type="button" onClick={() => onOpen(o.id)} className="shrink-0 text-[14px] font-semibold text-[#3A4E8C] hover:underline">
+                Open directory
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onToggle(o.id)}

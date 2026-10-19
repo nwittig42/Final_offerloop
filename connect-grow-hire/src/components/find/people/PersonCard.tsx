@@ -169,7 +169,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             type="button"
             onClick={onContact}
             disabled={isSample || contactState === "working"}
-            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : "Drafts an outreach email"}
+            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : person.source === "directory" && !person.email ? "Unlocks their email (10 credits, once) and drafts an outreach" : "Drafts an outreach email"}
             className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
           >
             {contactState === "working" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

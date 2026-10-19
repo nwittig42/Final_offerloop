@@ -1,9 +1,9 @@
 // One card shape for every person on the Find page, whether they came from
 // the ranker (recommended, no email yet) or from a typed search (prompt
 // search in preview mode, email already found).
-import type { Contact } from "@/services/api";
+import type { Contact, DirectoryMember } from "@/services/api";
 
-export type PersonSource = "recommended" | "search" | "sample";
+export type PersonSource = "recommended" | "search" | "sample" | "directory";
 
 export interface Person {
   id: string;
@@ -120,6 +120,33 @@ export function personFromSearch(c: Contact, index: number): Person {
     rank: index,
     deckId: "",
     orgBadge: str(c.OrgBadge),
+  };
+}
+
+// Org directory row (OFF-42). `email` stays "" until the student unlocks it.
+export function personFromDirectory(m: DirectoryMember, index: number, revealedEmail = ""): Person {
+  const name = `${m.firstName} ${m.lastName}`.trim() || "Unknown";
+  return {
+    id: m.personKey,
+    source: "directory",
+    name,
+    firstName: m.firstName,
+    lastName: m.lastName,
+    title: m.title,
+    company: m.company,
+    location: "",
+    school: m.school,
+    linkedinUrl: m.linkedinUrl,
+    photoUrl: m.photoUrl,
+    email: revealedEmail,
+    // The raw directory headline is the best "where they are now" we have
+    // when there's no clean company/title.
+    reasons: !m.company && !m.title && m.headline ? [m.headline] : [],
+    briefing: m.headline,
+    matchScore: null,
+    rank: index,
+    deckId: "",
+    orgBadge: m.badge,
   };
 }
 
