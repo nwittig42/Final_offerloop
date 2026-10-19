@@ -173,6 +173,7 @@ def create_nudge_draft(nudge_id: str):
         email_tracking.register(
             tracking_token, uid, "follow_up", recipient_email=to_email,
             contact_id=contact_id, draft_id=draft_id,
+            message_id=draft.get("message", {}).get("id"),
             thread_id=draft.get("message", {}).get("threadId"),
         )
 

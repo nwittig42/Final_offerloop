@@ -281,3 +281,58 @@ def test_pixel_route_serves_gif_even_when_recording_fails(client):
         resp = client.get("/api/t/o/abc123.gif")
     assert resp.status_code == 200
     assert resp.data == email_tracking.PIXEL_GIF
+
+
+# ---------------------------------------------------------------------------
+# Coverage guard
+# ---------------------------------------------------------------------------
+
+# "file:function" -> reason a Gmail draft/send site is deliberately untracked.
+UNTRACKED_OK = {}
+
+
+def test_every_gmail_send_site_is_tracked():
+    """Every Gmail draft/send site must carry the pixel (email_tracking) or
+    pass tracking_kind to the shared sender."""
+    import ast
+    import re
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    pattern = re.compile(r"drafts\(\)\.create\(|messages\(\)\.send\(")
+    offenders = []
+    for path in sorted(app_dir.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not pattern.search(source):
+            continue
+        lines = source.splitlines()
+        funcs = [n for n in ast.walk(ast.parse(source))
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for lineno, line in enumerate(lines, 1):
+            if not pattern.search(line) or line.lstrip().startswith("#"):
+                continue
+            enclosing = [f for f in funcs if f.lineno <= lineno <= f.end_lineno]
+            if not enclosing:
+                offenders.append(f"{path.relative_to(app_dir.parent)}:{lineno} (module level)")
+                continue
+            fn = max(enclosing, key=lambda f: f.lineno)  # innermost
+            body = "\n".join(lines[fn.lineno - 1:fn.end_lineno])
+            key = f"{path.name}:{fn.name}"
+            if key in UNTRACKED_OK:
+                continue
+            if "email_tracking" not in body and "tracking_kind" not in body:
+                offenders.append(f"{path.relative_to(app_dir.parent)}:{lineno} in {fn.name}()")
+    assert not offenders, (
+        "Gmail draft/send sites without open tracking (use email_tracking, or add "
+        "to UNTRACKED_OK with a reason):\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_register_for_draft_stores_message_id(db):
+    email_tracking.register(
+        "tok", "u1", "outreach", recipient_email="a@b.com",
+        draft_id="d1", message_id="m1", thread_id="t1",
+    )
+    doc = db.tracking()["tok"]
+    assert doc["gmailMessageId"] == "m1"
+    assert doc["gmailDraftId"] == "d1"

@@ -449,7 +449,8 @@ def generate_reply_draft(contact_id):
         draft = gmail_service.users().drafts().create(userId='me', body=draft_body).execute()
         email_tracking.register(
             tracking_token, user_id, 'reply', recipient_email=contact_data.get('email'),
-            contact_id=contact_id, draft_id=draft.get('id'), thread_id=thread_id,
+            contact_id=contact_id, draft_id=draft.get('id'),
+            message_id=draft.get('message', {}).get('id'), thread_id=thread_id,
         )
         
         # Mark as read
@@ -865,7 +866,8 @@ def send_reply_draft(contact_id):
         draft = service.users().drafts().create(userId="me", body=draft_body).execute()
         email_tracking.register(
             tracking_token, uid, "reply", recipient_email=to_email,
-            contact_id=contact_id, draft_id=draft.get("id"), thread_id=thread_id,
+            contact_id=contact_id, draft_id=draft.get("id"),
+            message_id=draft.get("message", {}).get("id"), thread_id=thread_id,
         )
 
         # Log reply_response_sent metric
