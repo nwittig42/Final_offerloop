@@ -1481,16 +1481,22 @@ class ApiService {
     });
   }
 
-  // Org alumni directories (OFF-42). Joining is instant for now; the backend
-  // owns membership (clients can't write orgMemberships).
+  // Org alumni directories (OFF-42). Joining takes the org's password; the
+  // backend owns membership (clients can't write orgMemberships).
   async getOrgs(): Promise<{ orgs: Org[]; memberships: string[] }> {
     const headers = await this.getAuthHeaders();
     return this.makeRequest<{ orgs: Org[]; memberships: string[] }>('/orgs', { method: 'GET', headers });
   }
 
-  async joinOrg(orgId: string): Promise<{ ok: boolean; memberships: string[] }> {
+  // Needs the org's join password. A failure throws with the backend code
+  // as the message: wrong_password, too_many_attempts or join_closed.
+  async joinOrg(orgId: string, password: string): Promise<{ ok: boolean; memberships: string[] }> {
     const headers = await this.getAuthHeaders();
-    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/join`, { method: 'POST', headers });
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/join`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
   }
 
   async leaveOrg(orgId: string): Promise<{ ok: boolean; memberships: string[] }> {

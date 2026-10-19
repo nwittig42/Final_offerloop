@@ -22,9 +22,7 @@ const STEP_NUM_IMAGES = [StepNum1, StepNum2, StepNum3];
 import OfferloopLogo from "@/assets/offerloop_logo2_allwhite.png";
 import { OB, obPrimaryButton } from "./onboardingTheme";
 import { OrgPicker } from "@/components/OrgPicker";
-import { ORGS_KEY, sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
-import { useQueryClient } from "@tanstack/react-query";
-import { apiService } from "@/services/api";
+import { sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
 import { trackFeatureActionCompleted } from "@/lib/analytics";
 
 // Resume-first onboarding: intro slides, then a single resume/LinkedIn page.
@@ -62,10 +60,10 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     step: string;
   } | null>(null);
 
-  // Org alumni directories: picks are joined once the profile is saved.
-  const { orgs } = useOrgs(!!user);
-  const queryClient = useQueryClient();
-  const [orgPicks, setOrgPicks] = useState<string[]>([]);
+  // Org alumni directories: joining checks the org's password right here
+  // (the user doc already exists from sign-up), and the shared orgs query
+  // updates so Find shows the org as soon as onboarding ends.
+  const { orgs, memberships, join, leave } = useOrgs(!!user);
   const afterResumeStep: Step = orgs.length > 0 ? "orgs" : "inbox";
 
   // Onboarding analytics: fire-and-forget step events.
@@ -156,11 +154,6 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
       logOnboardingEvent("completed", step);
       const finalData = buildFinalData(prefill, linkedinUrl, inboxSkipped);
       await completeOnboarding(finalData);
-      // Best-effort: a failed join is fixable from Account Settings and
-      // must not block finishing onboarding.
-      await Promise.allSettled(orgPicks.map((id) => apiService.joinOrg(id)));
-      // So Find shows the org pill right away instead of the cached pre-join list.
-      if (orgPicks.length) await queryClient.invalidateQueries({ queryKey: ORGS_KEY });
       await new Promise((r) => setTimeout(r, 300));
       await refreshUser();
       trackFeatureActionCompleted("onboarding", "complete", true);
@@ -192,7 +185,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     setCurrentStep(afterResumeStep);
   };
   const handleOrgsDone = () => {
-    logOnboardingEvent("completed", "orgs", orgPicks.length === 0);
+    logOnboardingEvent("completed", "orgs", memberships.length === 0);
     setCurrentStep("inbox");
   };
   const handleInboxDone = (skipped: boolean) => {
@@ -265,7 +258,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     },
     orgs: {
       headline: <>Are you part of {em("an organization")}?</>,
-      sub: "Members get their organization's full alumni directory in Find. Pick any you belong to.",
+      sub: "Members get their organization's full alumni directory in Find. Enter your organization's password to join.",
       footer: {
         hint: (
           <>
@@ -498,11 +491,12 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
             <div>
               <OrgPicker
                 orgs={sortOrgsForSchool(orgs, pendingCompletion?.prefill.university)}
-                selected={orgPicks}
-                onToggle={(id) => setOrgPicks((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))}
+                joined={memberships}
+                onJoin={async (id, password) => { await join.mutateAsync({ id, password }); }}
+                onLeave={async (id) => { await leave.mutateAsync(id); }}
               />
               <button type="button" onClick={handleOrgsDone} style={{ ...obPrimaryButton, marginTop: 24 }}>
-                {orgPicks.length > 0 ? "Continue" : "None of these, continue"}
+                {memberships.length > 0 ? "Continue" : "Skip for now"}
               </button>
             </div>
           )}

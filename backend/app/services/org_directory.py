@@ -20,6 +20,10 @@ import time
 
 MEMBERSHIPS_FIELD = "orgMemberships"
 ORGS_COLLECTION = "orgs"
+# Join passwords live apart from orgs/ so no org read can ever return one.
+# Server-only (default-deny in firestore.rules). Written by
+# scripts/org_directory_set_password.py as a werkzeug hash, never plaintext.
+ORG_SECRETS_COLLECTION = "org_secrets"
 PEOPLE_COLLECTION = "people"
 LINKS_COLLECTION = "person_org_links"
 
@@ -55,6 +59,18 @@ def list_orgs(db) -> list[dict]:
             out.append(_org_public(snap.id, d))
     out.sort(key=lambda o: o["name"].lower())
     return out
+
+
+def check_org_password(db, org_id: str, password: str) -> bool | None:
+    """True/False for the org's join password; None when it has none set
+    (an org without a password can't be self-joined)."""
+    from werkzeug.security import check_password_hash
+
+    snap = db.collection(ORG_SECRETS_COLLECTION).document(org_id).get()
+    pw_hash = (snap.to_dict() or {}).get("passwordHash") if snap.exists else None
+    if not pw_hash:
+        return None
+    return bool(password) and check_password_hash(pw_hash, password)
 
 
 def active_org_ids(user_data: dict | None) -> list[str]:

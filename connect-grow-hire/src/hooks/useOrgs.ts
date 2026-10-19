@@ -1,5 +1,6 @@
 // Org alumni directories (OFF-42): which orgs exist and which the student
-// has joined. Join/leave write through the backend and refresh this query.
+// has joined. Join (with the org's password) and leave write through the
+// backend and refresh this query.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiService, type Org } from "@/services/api";
 import { getUniversityShortName } from "@/lib/universityUtils";
@@ -17,7 +18,10 @@ export function useOrgs(enabled = true) {
     queryClient.setQueryData(ORGS_KEY, (prev: { orgs: Org[]; memberships: string[] } | undefined) =>
       prev ? { ...prev, memberships: res.memberships } : prev,
     );
-  const join = useMutation({ mutationFn: (id: string) => apiService.joinOrg(id), onSuccess });
+  const join = useMutation({
+    mutationFn: ({ id, password }: { id: string; password: string }) => apiService.joinOrg(id, password),
+    onSuccess,
+  });
   const leave = useMutation({ mutationFn: (id: string) => apiService.leaveOrg(id), onSuccess });
 
   const orgs = query.data?.orgs ?? [];

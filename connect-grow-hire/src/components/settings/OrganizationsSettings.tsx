@@ -1,6 +1,5 @@
-// Account Settings → Organizations (OFF-42). Joining or leaving saves right
-// away (it's a backend write, not part of the profile Save button).
-import { useState } from "react";
+// Account Settings → Organizations (OFF-42). Joining (with the org's
+// password) or leaving saves right away; it isn't part of the Save button.
 import { useNavigate } from "react-router-dom";
 import { OrgPicker } from "@/components/OrgPicker";
 import { sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
@@ -8,23 +7,19 @@ import { toast } from "@/hooks/use-toast";
 
 export default function OrganizationsSettings({ school }: { school: string | null }) {
   const { orgs, memberships, loading, join, leave } = useOrgs();
-  const [busyId, setBusyId] = useState<string | null>(null);
   const navigate = useNavigate();
+  const nameOf = (id: string) => orgs.find((o) => o.id === id)?.name ?? "the organization";
 
-  const toggle = async (id: string) => {
-    const org = orgs.find((o) => o.id === id);
-    const leaving = memberships.includes(id);
-    setBusyId(id);
+  const onJoin = async (id: string, password: string) => {
+    await join.mutateAsync({ id, password });
+    toast({ title: `You're in ${nameOf(id)}`, description: "Open the directory here or from Find to browse every alum." });
+  };
+  const onLeave = async (id: string) => {
     try {
-      await (leaving ? leave : join).mutateAsync(id);
-      toast({
-        title: leaving ? `Left ${org?.name ?? "organization"}` : `You're in ${org?.name ?? "the organization"}`,
-        description: leaving ? undefined : "Open the directory here or from Find to browse every alum.",
-      });
+      await leave.mutateAsync(id);
+      toast({ title: `Left ${nameOf(id)}`, description: "You'll need the password to rejoin." });
     } catch {
-      toast({ title: "Couldn't update your organizations", description: "Try again in a moment.", variant: "destructive" });
-    } finally {
-      setBusyId(null);
+      toast({ title: "Couldn't leave right now", description: "Try again in a moment.", variant: "destructive" });
     }
   };
 
@@ -32,9 +27,9 @@ export default function OrganizationsSettings({ school }: { school: string | nul
   return (
     <OrgPicker
       orgs={sortOrgsForSchool(orgs, school)}
-      selected={memberships}
-      onToggle={toggle}
-      busyId={busyId}
+      joined={memberships}
+      onJoin={onJoin}
+      onLeave={onLeave}
       onOpen={(id) => navigate(`/directory/${id}`)}
     />
   );

@@ -76,3 +76,15 @@ regexes, for the next directory's actual export shape). If a generic
 ingestion format gets built later (per the original product brief), this
 parser becomes the first of several adapters feeding one shared loader
 instead of a one-off script.
+
+## Making an org live in the app (OFF-42)
+
+After ingesting, two steps make an org joinable:
+
+1. `org_directory_seed_org.py` sets the short name, school, the words
+   students type for it ("tke"), and `joinable: true`.
+2. `org_directory_set_password.py --org-id <id>` sets the join password at
+   a hidden prompt. Only a hash is stored, in `org_secrets/{id}`. Students
+   join in Account Settings or onboarding by typing it; the right password
+   makes them an active member right away. An org with no password can't be
+   joined, and wrong guesses lock out for 15 minutes after 8 tries.

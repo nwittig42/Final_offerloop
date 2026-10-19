@@ -14,10 +14,15 @@ from google.api_core.exceptions import AlreadyExists
 
 from app.extensions import get_db, require_firebase_auth
 from app.services.org_directory import (
-    MEMBERSHIPS_FIELD, _org_public, active_org_ids, directory_contacts, directory_row, list_orgs,
+    MEMBERSHIPS_FIELD, _org_public, active_org_ids, check_org_password, directory_contacts, directory_row, list_orgs,
 )
 
 REVEALS_SUBCOLLECTION = "orgReveals"
+# Wrong-password throttle, per user per org, kept in Firestore so it holds
+# across gunicorn workers.
+ATTEMPTS_SUBCOLLECTION = "orgJoinAttempts"
+MAX_ATTEMPTS = 8
+ATTEMPT_WINDOW_SEC = 15 * 60
 
 orgs_bp = Blueprint("orgs", __name__, url_prefix="/api/orgs")
 
@@ -53,14 +58,34 @@ def get_orgs():
 @orgs_bp.route("/<org_id>/join", methods=["POST"])
 @require_firebase_auth
 def join_org(org_id):
+    """Join with the org's password. Right password = instant active member."""
     db = get_db()
     if not _joinable(db, org_id):
         return jsonify({"error": "Organization not found"}), 404
     ref = _user_ref(db)
+    attempts_ref = ref.collection(ATTEMPTS_SUBCOLLECTION).document(org_id)
+    now = datetime.now(timezone.utc).timestamp()
+    attempts_snap = attempts_ref.get()
+    attempts = (attempts_snap.to_dict() or {}) if attempts_snap.exists else {}
+    in_window = now - float(attempts.get("windowStart") or 0) < ATTEMPT_WINDOW_SEC
+    failed = int(attempts.get("count") or 0) if in_window else 0
+    if failed >= MAX_ATTEMPTS:
+        return jsonify({"error": "too_many_attempts"}), 429
+
+    password = ((request.get_json(silent=True) or {}).get("password") or "")
+    ok = check_org_password(db, org_id, password)
+    if ok is None:
+        return jsonify({"error": "join_closed"}), 403
+    if not ok:
+        attempts_ref.set({"count": failed + 1, "windowStart": attempts.get("windowStart") if in_window else now})
+        return jsonify({"error": "wrong_password", "attemptsLeft": MAX_ATTEMPTS - failed - 1}), 403
+
+    if attempts_snap.exists:
+        attempts_ref.delete()
     ref.set({MEMBERSHIPS_FIELD: {org_id: {
         "status": "active",
         "joinedAt": datetime.now(timezone.utc).isoformat(),
-        "source": "self_select",
+        "source": "password",
     }}}, merge=True)
     snap = ref.get()
     return jsonify({"ok": True, "memberships": active_org_ids(snap.to_dict() if snap.exists else {})})

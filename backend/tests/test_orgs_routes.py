@@ -23,8 +23,10 @@ def _snap(data, exists=True, doc_id="x"):
     return s
 
 
-def _db(org_doc, user_docs):
-    """user_docs: successive user snapshots returned by user_ref.get()."""
+def _db(org_doc, user_docs, password_hash=None, attempts=None):
+    """user_docs: successive user snapshots returned by user_ref.get().
+    password_hash: the org_secrets hash (None = no password set).
+    attempts: the user's orgJoinAttempts doc for the org (None = none)."""
     db = MagicMock()
     org_ref, user_ref = MagicMock(), MagicMock()
     org_ref.get.return_value = org_doc
@@ -34,7 +36,13 @@ def _db(org_doc, user_docs):
     orgs_col.stream.return_value = [_snap({"name": "USC Tau Kappa Epsilon", "shortName": "USC TKE", "joinable": True}, doc_id="usc_tke"),
                                     _snap({"name": "Hidden"}, doc_id="hidden")]
     users_col.document.return_value = user_ref
-    db.collection.side_effect = lambda name: {"orgs": orgs_col, "users": users_col}[name]
+    attempts_ref = user_ref.collection.return_value.document.return_value
+    attempts_ref.get.return_value = _snap(attempts or {}, exists=attempts is not None)
+    secrets_col = MagicMock()
+    secrets_col.document.return_value.get.return_value = _snap(
+        {"passwordHash": password_hash} if password_hash else {}, exists=password_hash is not None)
+    db.collection.side_effect = lambda name: {"orgs": orgs_col, "users": users_col, "org_secrets": secrets_col}[name]
+    db.attempts_ref = attempts_ref
     return db, user_ref
 
 
@@ -49,9 +57,17 @@ def client():
     return app.test_client()
 
 
-def _call(client, db, method, path):
+def _call(client, db, method, path, body=None):
     with patch("app.routes.orgs.get_db", return_value=db):
-        return getattr(client, method)(path, headers={"Authorization": "Bearer t"})
+        kwargs = {"headers": {"Authorization": "Bearer t"}}
+        if body is not None:
+            kwargs["json"] = body
+        return getattr(client, method)(path, **kwargs)
+
+
+from werkzeug.security import generate_password_hash  # noqa: E402
+
+PW_HASH = generate_password_hash("tke-1899")
 
 
 def test_join_unknown_org_404(client):
@@ -74,15 +90,58 @@ def test_join_rejects_non_joinable_org(client):
     user_ref.set.assert_not_called()
 
 
-def test_join_writes_active_membership(client):
+def test_join_with_right_password_writes_active_membership(client):
     after = _snap({"orgMemberships": {"usc_tke": {"status": "active"}}})
-    db, user_ref = _db(_snap({"joinable": True}), [after])
-    r = _call(client, db, "post", "/api/orgs/usc_tke/join")
+    db, user_ref = _db(_snap({"joinable": True}), [after], password_hash=PW_HASH,
+                       attempts={"count": 2, "windowStart": 9e12})
+    r = _call(client, db, "post", "/api/orgs/usc_tke/join", {"password": "tke-1899"})
     assert r.status_code == 200
     assert r.get_json()["memberships"] == ["usc_tke"]
     (payload,), kwargs = user_ref.set.call_args
     assert kwargs == {"merge": True}
     assert payload["orgMemberships"]["usc_tke"]["status"] == "active"
+    db.attempts_ref.delete.assert_called_once()  # success clears the throttle
+
+
+def test_join_wrong_or_missing_password_is_refused_and_counted(client):
+    for body in ({"password": "nope"}, {}, {"password": ""}):
+        db, user_ref = _db(_snap({"joinable": True}), [], password_hash=PW_HASH)
+        r = _call(client, db, "post", "/api/orgs/usc_tke/join", body)
+        assert r.status_code == 403 and r.get_json()["error"] == "wrong_password"
+        assert r.get_json()["attemptsLeft"] == 7
+        user_ref.set.assert_not_called()
+        (counted,), _ = db.attempts_ref.set.call_args
+        assert counted["count"] == 1
+
+
+def test_join_without_a_password_set_is_closed(client):
+    db, user_ref = _db(_snap({"joinable": True}), [])
+    r = _call(client, db, "post", "/api/orgs/usc_tke/join", {"password": "anything"})
+    assert r.status_code == 403 and r.get_json()["error"] == "join_closed"
+    user_ref.set.assert_not_called()
+
+
+def test_join_throttles_after_max_attempts(client):
+    import time
+    db, user_ref = _db(_snap({"joinable": True}), [], password_hash=PW_HASH,
+                       attempts={"count": 8, "windowStart": time.time() - 60})
+    r = _call(client, db, "post", "/api/orgs/usc_tke/join", {"password": "tke-1899"})
+    assert r.status_code == 429
+    user_ref.set.assert_not_called()
+
+
+def test_join_throttle_window_expires(client):
+    import time
+    after = _snap({"orgMemberships": {"usc_tke": {"status": "active"}}})
+    db, _ = _db(_snap({"joinable": True}), [after], password_hash=PW_HASH,
+                attempts={"count": 8, "windowStart": time.time() - 3600})
+    assert _call(client, db, "post", "/api/orgs/usc_tke/join", {"password": "tke-1899"}).status_code == 200
+
+
+def test_list_never_returns_a_password(client):
+    db, _ = _db(_snap({}), [_snap({})], password_hash=PW_HASH)
+    body = _call(client, db, "get", "/api/orgs").get_json()
+    assert "password" not in str(body).lower()
 
 
 def test_leave_deletes_membership(client):
