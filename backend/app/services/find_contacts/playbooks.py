@@ -148,5 +148,5 @@ def slot_specs(facts, size):
     return {
         "leader": {"titles": leader_titles, "keywords": keywords},
         "process": {"titles": _fill(process), "keywords": keywords},
-        "recruiter": {"titles": _fill(recruiter), "keywords": keywords},
+        "recruiter": {"titles": _fill(recruiter), "keywords": []},
     }

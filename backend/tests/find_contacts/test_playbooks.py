@@ -30,6 +30,7 @@ def test_ib_large_specs():
     assert specs["recruiter"]["titles"] == [
         "Campus Recruiting", "Campus Recruiter", "Early Careers Recruiter"]
     assert specs["leader"]["keywords"] == ["tmt"]
+    assert specs["recruiter"]["keywords"] == []
 
 
 def test_octo_specs():
