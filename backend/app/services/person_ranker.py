@@ -66,9 +66,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import random
 import re
 from datetime import datetime, timezone
 from typing import Optional
+
+from google.cloud.firestore_v1.field_path import FieldPath
 
 from app.services.firm_cache.schema import (
     FIRM_EMPLOYEES_COLLECTION,
@@ -601,20 +604,40 @@ def _fetch_candidates(
     seen_ids: set[str] = set()
     docs: list[dict] = []
 
-    def _stream(query) -> None:
+    def _take(snaps) -> None:
+        for snap in snaps:
+            _id = snap.id
+            if _id in seen_ids:
+                continue
+            seen_ids.add(_id)
+            d = snap.to_dict() or {}
+            d["_id"] = _id
+            docs.append(d)
+
+    col = db.collection(FIRM_EMPLOYEES_COLLECTION)
+
+    def _stream(query, n: int) -> None:
+        """Up to n people from query, starting at a random document id and
+        wrapping around. A bare where().limit(n) comes back in document-id
+        order (the LinkedIn handle), so a firm with more than n people only
+        ever showed its alphabetical head: Goldman's 107 stopped at "k"
+        (2026-10-20). The random start keeps every person reachable."""
         try:
-            for snap in query.stream():
-                _id = snap.id
-                if _id in seen_ids:
-                    continue
-                seen_ids.add(_id)
-                d = snap.to_dict() or {}
-                d["_id"] = _id
-                docs.append(d)
+            by_id = query.order_by(FieldPath.document_id())
+            start = col.document(_random_id_start())
+            head = list(by_id.start_at({FieldPath.document_id(): start}).limit(n).stream())
+            got = {s.id for s in head}
+            if len(head) < n:
+                # Wrap: the ids before the start point. Stop at the first
+                # repeat, which means the whole set has been read.
+                for snap in by_id.limit(n - len(head)).stream():
+                    if snap.id in got:
+                        break
+                    head.append(snap)
+            _take(head)
         except Exception as exc:
             logger.debug("person_ranker: firm_employees query failed: %s", exc)
 
-    col = db.collection(FIRM_EMPLOYEES_COLLECTION)
     # Each firm gets a fair share of the pool. One firm at the full cap
     # used to fill the pool before the student's other targets were read.
     per_firm = max(60, cap // max(1, len(companies))) if companies else cap
@@ -623,8 +646,8 @@ def _fetch_candidates(
             for sch in schools:
                 _stream(
                     col.where("company", "==", co)
-                       .where("schools", "array_contains", sch)
-                       .limit(cap)
+                       .where("schools", "array_contains", sch),
+                    cap,
                 )
         if alumni_only:
             # The alumni chip: only people who share the student's school.
@@ -640,27 +663,27 @@ def _fetch_candidates(
         # warmth scorer still floats any alumni to the top.
         if len(docs) < cap:
             for co in companies:
-                _stream(col.where("company", "==", co).limit(per_firm))
+                _stream(col.where("company", "==", co), per_firm)
         if len(docs) < cap and per_firm < cap:
             for co in companies:
                 if len(docs) >= cap:
                     break
-                _stream(col.where("company", "==", co).limit(cap))
+                _stream(col.where("company", "==", co), cap)
         if len(docs) < cap:
             for sch in schools:
-                _stream(col.where("schools", "array_contains", sch).limit(cap))
+                _stream(col.where("schools", "array_contains", sch), cap)
     elif companies:
         for co in companies:
-            _stream(col.where("company", "==", co).limit(per_firm))
+            _stream(col.where("company", "==", co), per_firm)
         if len(docs) < cap and per_firm < cap:
             # Some targets were thin: let the deep ones fill the rest.
             for co in companies:
                 if len(docs) >= cap:
                     break
-                _stream(col.where("company", "==", co).limit(cap))
+                _stream(col.where("company", "==", co), cap)
     else:
         for sch in schools:
-            _stream(col.where("schools", "array_contains", sch).limit(cap))
+            _stream(col.where("schools", "array_contains", sch), cap)
 
     kept: list[dict] = []
     for doc in docs:
@@ -674,6 +697,15 @@ def _fetch_candidates(
             break
 
     return [firm_employee_doc_to_app_contact(d) for d in kept]
+
+
+_ID_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def _random_id_start() -> str:
+    """A random point in document-id order. Ids are LinkedIn handles
+    (lowercase letters, digits, dashes) or synth: keys."""
+    return "".join(random.choice(_ID_CHARS) for _ in range(3))
 
 
 # ── Scoring ───────────────────────────────────────────────────────────

@@ -151,42 +151,95 @@ def test_load_user_context_reads_web_school_field():
     assert ctx["school_slugs"] == ["usc"]
 
 
-def test_each_target_firm_gets_a_share_of_the_pool():
+class _FakeQuery:
+    """firm_employees stand-in: where(company ==), order by document id,
+    start_at, limit, stream. Records every limit asked for."""
+
+    def __init__(self, rosters, limits, firm=None, start=None, n=None):
+        self.rosters, self.limits, self.firm, self.start, self.n = rosters, limits, firm, start, n
+
+    def _with(self, **kw):
+        args = dict(firm=self.firm, start=self.start, n=self.n)
+        args.update(kw)
+        return _FakeQuery(self.rosters, self.limits, **args)
+
+    def where(self, field, op, value):
+        return self._with(firm=value) if field == "company" else self
+
+    def order_by(self, _field):
+        return self
+
+    def document(self, doc_id):
+        return MagicMock(id=doc_id)
+
+    def start_at(self, cursor):
+        return self._with(start=next(iter(cursor.values())).id)
+
+    def limit(self, n):
+        self.limits.append(n)
+        return self._with(n=n)
+
+    def stream(self):
+        ids = sorted(self.rosters.get(self.firm, []))
+        if self.start is not None:
+            ids = [i for i in ids if i >= self.start]
+        return [
+            MagicMock(id=i, **{"to_dict.return_value": {"first_name": i, "last_name": "x"}})
+            for i in ids[: self.n]
+        ]
+
+
+def _fake_db(rosters, limits):
     db = MagicMock()
+    db.collection.return_value = _FakeQuery(rosters, limits)
+    return db
+
+
+def test_each_target_firm_gets_a_share_of_the_pool():
     limits = []
-    query = MagicMock()
-    query.where.return_value = query
-    query.limit.side_effect = lambda n: (limits.append(n), query)[1]
-    query.stream.return_value = []
-    db.collection.return_value = query
+    db = _fake_db({}, limits)
     ctx = _ctx(slugs=[f"firm_{i}" for i in range(5)])
     pr._fetch_candidates(ctx, db, cap=400)
-    # Equal shares first; every firm here is empty, so each is then asked
-    # for the full cap to fill the pool (never smaller than before).
-    assert limits == [80] * 5 + [400] * 5
+    # Equal shares first (each read as a random start plus a wrap); every
+    # firm here is empty, so each is then asked for the full cap.
+    assert limits == [80, 80] * 5 + [400, 400] * 5
 
 
 def test_a_deep_firm_still_fills_the_pool_when_others_are_thin():
-    db = MagicMock()
-    query = MagicMock()
-    query.where.return_value = query
-    limit_seen = []
-    def _limit(n):
-        limit_seen.append(n)
-        q = MagicMock()
-        firm = query.where.call_args[0][2]
-        size = 1000 if firm == "deep" else 0
-        q.stream.return_value = [
-            MagicMock(id=f"{firm}-{i}", **{"to_dict.return_value": {"first_name": f"p{i}", "last_name": "x"}})
-            for i in range(min(n, size))
-        ]
-        return q
-    query.limit.side_effect = _limit
-    db.collection.return_value = query
+    db = _fake_db({"deep": [f"deep-{i:04d}" for i in range(1000)]}, [])
     ctx = _ctx(slugs=["thin_a", "thin_b", "thin_c", "deep"])
     with patch.object(pr, "firm_employee_doc_to_app_contact", side_effect=lambda d: d):
         out = pr._fetch_candidates(ctx, db, cap=400)
     assert len(out) == 400
+
+
+def test_a_big_firm_is_not_cut_off_alphabetically(monkeypatch):
+    """Goldman's 107 used to stop at "k": a share of 60 always read the
+    alphabetical head. A random start reaches the whole roster."""
+    roster = [f"{c}{i}" for c in "abcdefghijklmnopqrstuvwxyz" for i in range(4)]
+    db = _fake_db({"gs": roster}, [])
+    ctx = _ctx(slugs=["gs"] + [f"empty_{i}" for i in range(11)])
+    seen = set()
+    with patch.object(pr, "firm_employee_doc_to_app_contact", side_effect=lambda d: d):
+        for start in ("a", "m", "t", "x"):
+            monkeypatch.setattr(pr, "_random_id_start", lambda s=start: s)
+            out = pr._fetch_candidates(ctx, db, cap=400)
+            assert len(out) == len(roster)  # thin others: deep fill reads it all
+            # The first 60 come from the random start, not from "a".
+            assert out[0]["_id"] >= start
+            seen.update(d["_id"] for d in out[:60])
+    assert any(i.startswith("z") for i in seen)
+
+
+def test_a_small_firm_is_read_whole_with_no_repeats(monkeypatch):
+    roster = [f"p{i:02d}" for i in range(30)]
+    db = _fake_db({"evercore": roster}, [])
+    monkeypatch.setattr(pr, "_random_id_start", lambda: "p20")
+    with patch.object(pr, "firm_employee_doc_to_app_contact", side_effect=lambda d: d):
+        out = pr._fetch_candidates(_ctx(slugs=["evercore"]), db, cap=400)
+    ids = [d["_id"] for d in out]
+    assert sorted(ids) == roster and len(ids) == len(set(ids))
+    assert ids[0] == "p20"
 
 
 def test_declared_firms_survive_the_target_cap():
