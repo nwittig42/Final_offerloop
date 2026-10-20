@@ -63,8 +63,8 @@ def test_charges_5_per_person_once(client):
     assert body["creditsCharged"] == 15 and body["credits"] == 85
     ded.assert_called_once_with("test-user-id", 15, "find_contacts")
     search.assert_called_once_with(db, "j1", "USC")
-    db.unlock_ref.set.assert_called_once()
-    assert db.unlock_ref.set.call_args[0][0]["charged"] == 15
+    db.unlock_ref.create.assert_called_once()
+    assert db.unlock_ref.create.call_args[0][0]["charged"] == 15
 
     resp2, _, ded2 = _post(client, _db(unlocked=True), credits=85)
     assert resp2.status_code == 200
@@ -91,7 +91,7 @@ def test_searching_returns_202(client):
     resp, _, ded = _post(client, db, search=MagicMock(return_value={"status": "searching"}))
     assert resp.status_code == 202
     ded.assert_not_called()
-    db.unlock_ref.set.assert_not_called()
+    db.unlock_ref.create.assert_not_called()
 
 
 def test_unknown_job_404(client):
@@ -112,18 +112,38 @@ def test_ready_with_no_people_charges_zero_and_unlocks(client):
     assert resp.status_code == 200
     assert resp.get_json()["creditsCharged"] == 0
     ded.assert_not_called()
-    assert db.unlock_ref.set.call_args[0][0]["charged"] == 0
+    assert db.unlock_ref.create.call_args[0][0]["charged"] == 0
 
 
 def test_failed_deduction_returns_402_without_unlock(client):
     db = _db()
     resp, _, _ = _post(client, db, deduct=(False, 3))
     assert resp.status_code == 402
-    db.unlock_ref.set.assert_not_called()
+    db.unlock_ref.create.assert_called_once()
+    db.unlock_ref.delete.assert_called_once()
+
+
+def test_concurrent_claim_charges_zero(client):
+    from google.api_core.exceptions import AlreadyExists
+    db = _db()
+    db.unlock_ref.create.side_effect = AlreadyExists("claimed")
+    resp, _, ded = _post(client, db)
+    assert resp.status_code == 200
+    assert resp.get_json()["creditsCharged"] == 0
+    ded.assert_not_called()
+
+
+def test_email_route_403_without_unlock(client):
+    db = _db(unlocked=False)
+    with patch(f"{MOD}.get_db", return_value=db), \
+         patch(f"{MOD}.reveal_email") as rev:
+        resp = client.post(EMAIL_URL, json={"jobId": "j1", "personKey": "k1"}, headers=HEADERS)
+    assert resp.status_code == 403
+    rev.assert_not_called()
 
 
 def test_email_route_no_charge(client):
-    db = _db()
+    db = _db(unlocked=True)
     with patch(f"{MOD}.get_db", return_value=db), \
          patch(f"{MOD}.reveal_email", return_value={"email": "a@b.com", "status": "found"}) as rev, \
          patch(f"{MOD}.deduct_credits_atomic") as ded:
@@ -135,7 +155,7 @@ def test_email_route_no_charge(client):
 
 
 def test_email_route_not_available_404(client):
-    with patch(f"{MOD}.get_db", return_value=_db()), \
+    with patch(f"{MOD}.get_db", return_value=_db(unlocked=True)), \
          patch(f"{MOD}.reveal_email", return_value=None):
         resp = client.post(EMAIL_URL, json={"jobId": "j1", "personKey": "k1"}, headers=HEADERS)
     assert resp.status_code == 404

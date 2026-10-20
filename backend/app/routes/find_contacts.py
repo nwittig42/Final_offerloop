@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from firebase_admin import firestore
+from google.api_core.exceptions import AlreadyExists
 from flask import Blueprint, jsonify, request
 
 from app.extensions import get_db, require_firebase_auth
@@ -73,13 +74,21 @@ def find_contacts():
     charged = 0
     balance = current_credits
     if not already_unlocked:
-        charged = RECRUITER_CREDIT_COST * len(result.get("people") or [])
-        if charged:
-            ok, new_balance = deduct_credits_atomic(uid, charged, "find_contacts")
+        amount = RECRUITER_CREDIT_COST * len(result.get("people") or [])
+        try:
+            # Claim first: only one concurrent request can create the doc and pay.
+            unlock_ref.create({"charged": amount, "at": firestore.SERVER_TIMESTAMP})
+        except AlreadyExists:
+            amount = 0
+        if amount:
+            ok, new_balance = deduct_credits_atomic(uid, amount, "find_contacts")
             if not ok:
-                return _insufficient(charged, current_credits)
-            balance = new_balance
-        unlock_ref.set({"charged": charged, "at": firestore.SERVER_TIMESTAMP})
+                try:
+                    unlock_ref.delete()
+                except Exception:
+                    logger.exception("[FindContacts] failed to release unlock claim uid=%s job=%s", uid, job_id)
+                return _insufficient(amount, current_credits)
+            charged, balance = amount, new_balance
 
     return jsonify({**result, "creditsCharged": charged, "credits": balance}), 200
 
@@ -97,6 +106,11 @@ def find_contacts_email():
     db = get_db()
     if not db:
         return jsonify({"error": "Database not available"}), 500
+
+    uid = request.firebase_user.get("uid")
+    unlock = db.collection("users").document(uid).collection("contactUnlocks").document(job_id).get()
+    if not unlock.exists:
+        return jsonify({"error": "Find contacts for this job first"}), 403
 
     result = reveal_email(db, job_id, person_key)
     if result is None:
