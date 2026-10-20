@@ -1,14 +1,17 @@
 """Find contacts for one job, saved once and shared by every student.
 
 The result lives at jobs/{jobId}/contacts/result. The first caller takes a
-60-second lock in a transaction and runs the search; anyone arriving while
-the lock is live gets {"status": "searching"}. A crash leaves the lock to
-expire, and the next caller retakes it. Alumni status is per student, so
+lock (owner token + lock_until) in a transaction and runs the search; anyone
+arriving while the lock is live gets {"status": "searching"}. The owner
+refreshes the lock before each paid phase and saves only while it still
+owns the lock, so a caller who lost it never spends or overwrites. A crash
+leaves the lock to expire, and the next caller retakes it. Alumni status is per student, so
 the saved people carry `college` only and `alumni` is set on every read.
 """
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from firebase_admin import firestore
@@ -21,7 +24,8 @@ from app.services.fullenrich_client import find_work_email
 
 logger = logging.getLogger(__name__)
 
-LOCK_SECONDS = 60
+LOCK_SECONDS = 180
+NOT_FOUND = "not_found"
 _PRIVATE_FIELDS = ("alumni", "email", "email_status")
 
 
@@ -35,8 +39,8 @@ def _as_utc(value) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def _claim(db, ref) -> tuple[str, dict | None]:
-    """("ready", doc) when saved, ("searching", None) when locked, else ("claimed", None)."""
+def _claim(db, ref) -> tuple[str, dict | str | None]:
+    """("ready", doc) when saved, ("searching", None) when locked, else ("claimed", token)."""
 
     @firestore.transactional
     def _txn(tx):
@@ -48,11 +52,55 @@ def _claim(db, ref) -> tuple[str, dict | None]:
         lock_until = _as_utc((doc or {}).get("lock_until"))
         if lock_until and lock_until > now:
             return "searching", None
-        tx.set(ref, {"status": "searching",
+        token = uuid.uuid4().hex
+        tx.set(ref, {"status": "searching", "lock_owner": token,
                      "lock_until": now + timedelta(seconds=LOCK_SECONDS)}, merge=True)
-        return "claimed", None
+        return "claimed", token
 
     return _txn(db.transaction())
+
+
+def _owns(doc: dict | None, token: str) -> bool:
+    return bool(doc) and doc.get("status") != "ready" and doc.get("lock_owner") == token
+
+
+def _refresh_lock(db, ref, token: str) -> bool:
+    """Extend our lock before a paid phase; False when another caller owns it."""
+
+    @firestore.transactional
+    def _txn(tx):
+        snap = ref.get(transaction=tx)
+        if not _owns(snap.to_dict() if snap.exists else None, token):
+            return False
+        tx.set(ref, {"lock_until": datetime.now(timezone.utc)
+                     + timedelta(seconds=LOCK_SECONDS)}, merge=True)
+        return True
+
+    return _txn(db.transaction())
+
+
+def _save_if_owner(db, ref, token: str, doc: dict) -> dict | None:
+    """Save `doc` (clearing the lock) when we still own the lock.
+
+    Returns None on save, else the current doc (or {}) that won instead.
+    """
+
+    @firestore.transactional
+    def _txn(tx):
+        snap = ref.get(transaction=tx)
+        current = snap.to_dict() if snap.exists else None
+        if not _owns(current, token):
+            return current or {}
+        tx.set(ref, doc)  # full set drops lock_owner / lock_until
+        return None
+
+    return _txn(db.transaction())
+
+
+def _current_state(current: dict, student_school: str | None) -> dict:
+    if current.get("status") == "ready":
+        return _response(current, student_school)
+    return {"status": "searching"}
 
 
 def _response(doc: dict, student_school: str | None) -> dict:
@@ -67,12 +115,17 @@ def _response(doc: dict, student_school: str | None) -> dict:
     }
 
 
-def _posting_facts(job_ref, job: dict) -> dict:
+def _cached_facts(job: dict) -> dict | None:
     facts = job.get("posting_facts")
-    if isinstance(facts, dict) and facts:
-        return facts
+    return facts if isinstance(facts, dict) and facts else None
+
+
+def _read_and_cache_facts(job_ref, job: dict, job_id: str) -> dict:
     facts = read_posting(job)
-    job_ref.set({"posting_facts": facts}, merge=True)
+    try:
+        job_ref.update({"posting_facts": facts})  # update: never resurrects a deleted job
+    except Exception:
+        logger.warning("find_contacts: caching posting_facts failed job=%s", job_id, exc_info=True)
     return facts
 
 
@@ -84,14 +137,21 @@ def find_contacts_for_job(db, job_id: str, student_school: str | None) -> dict:
         return {"status": "not_found"}
 
     ref = _result_ref(db, job_id)
-    state, saved = _claim(db, ref)
+    state, claimed = _claim(db, ref)
     if state == "ready":
-        return _response(saved, student_school)
+        return _response(claimed, student_school)
     if state == "searching":
         return {"status": "searching"}
+    token = claimed
 
-    facts = _posting_facts(job_ref, job)
+    facts = _cached_facts(job)
+    if facts is None:
+        if not _refresh_lock(db, ref, token):
+            return {"status": "searching"}
+        facts = _read_and_cache_facts(job_ref, job, job_id)
     specs = slot_specs(facts, company_size(facts, job))
+    if not _refresh_lock(db, ref, token):
+        return {"status": "searching"}
     candidates = find_slot_candidates(facts, specs, Budget())
     people = [{k: v for k, v in p.items() if k != "alumni"}
               for p in fill_slots(candidates, facts, specs, None)]
@@ -106,7 +166,10 @@ def find_contacts_for_job(db, job_id: str, student_school: str | None) -> dict:
         "steps": steps,
         "created_at": firestore.SERVER_TIMESTAMP,
     }
-    ref.set(doc)  # replaces the lock fields
+    lost_to = _save_if_owner(db, ref, token, doc)
+    if lost_to is not None:
+        logger.warning("find_contacts: lost lock, discarding result job=%s", job_id)
+        return _current_state(lost_to, student_school)
     logger.info("find_contacts job=%s steps=%s", job_id, steps)
     return _response(doc, student_school)
 
@@ -126,6 +189,8 @@ def reveal_email(db, job_id: str, person_key: str) -> dict | None:
         return None
     if person.get("email"):
         return {"email": person["email"], "status": person.get("email_status") or ""}
+    if person.get("email_status") == NOT_FOUND:
+        return None
 
     found = find_work_email(
         first_name=person.get("first_name") or "",
@@ -134,9 +199,12 @@ def reveal_email(db, job_id: str, person_key: str) -> dict | None:
         linkedin_url=person.get("linkedin") or "",
         db=db,
     )
-    if not found or not found.get("email"):
-        return None
-    result = {"email": found["email"], "status": found.get("status") or ""}
+    if found and found.get("email"):
+        result = {"email": found["email"], "status": found.get("status") or ""}
+        fields = {"email": result["email"], "email_status": result["status"]}
+    else:
+        result = None  # save the miss so later clicks don't re-spend
+        fields = {"email_status": NOT_FOUND}
 
     # Re-read inside a transaction so concurrent reveals of other people
     # in the same doc are not overwritten.
@@ -146,8 +214,7 @@ def reveal_email(db, job_id: str, person_key: str) -> dict | None:
         doc = snap.to_dict() if snap.exists else None
         if _find_person(doc, person_key) is None:
             return
-        people = [dict(p, email=result["email"], email_status=result["status"])
-                  if p.get("person_key") == person_key else p
+        people = [dict(p, **fields) if p.get("person_key") == person_key else p
                   for p in doc.get("people") or []]
         tx.set(ref, {"people": people}, merge=True)
 

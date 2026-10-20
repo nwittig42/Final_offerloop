@@ -39,6 +39,12 @@ class _Doc:
             self._store[self.path] = copy.deepcopy(data)
 
 
+    def update(self, data):
+        if self.path not in self._store:
+            raise KeyError(f"no document {self.path}")
+        self._store[self.path].update(copy.deepcopy(data))
+
+
 class _Col:
     def __init__(self, store, path):
         self._store, self.path = store, path
@@ -199,7 +205,59 @@ def test_lock_written_before_search(db, calls, monkeypatch):
     service.find_contacts_for_job(db, "j1", None)
     assert seen["doc"]["status"] == "searching"
     lock = seen["doc"]["lock_until"]
-    assert before + timedelta(seconds=55) <= lock <= before + timedelta(seconds=65)
+    assert seen["doc"]["lock_owner"]
+    assert before + timedelta(seconds=175) <= lock <= before + timedelta(seconds=185)
+
+
+def test_second_caller_during_search_sees_searching(db, calls, monkeypatch):
+    real_search = service.find_slot_candidates
+    inner = {}
+
+    def search(facts, specs, budget):
+        inner["out"] = service.find_contacts_for_job(db, "j1", "USC")
+        return real_search(facts, specs, budget)
+
+    monkeypatch.setattr(service, "find_slot_candidates", search)
+    out = service.find_contacts_for_job(db, "j1", "USC")
+    assert inner["out"] == {"status": "searching"}
+    assert calls["search"] == 1 and out["status"] == "ready"
+    assert len(out["people"]) == 2
+
+
+def test_caller_who_lost_lock_does_not_overwrite(db, calls, monkeypatch):
+    winner = _saved_doc(team="Winner Team")
+
+    def search(facts, specs, budget):
+        # Our lock expired mid-search; another caller retook it and saved.
+        db.store[RESULT] = dict(winner)
+        return {k: [] for k in specs}
+
+    monkeypatch.setattr(service, "find_slot_candidates", search)
+    out = service.find_contacts_for_job(db, "j1", "USC")
+    assert db.store[RESULT]["team"] == "Winner Team"
+    assert out["status"] == "ready" and out["team"] == "Winner Team"
+
+
+def test_caller_who_lost_lock_mid_search_returns_searching(db, calls, monkeypatch):
+    def search(facts, specs, budget):
+        db.store[RESULT]["lock_owner"] = "someone-else"
+        return {k: [] for k in specs}
+
+    monkeypatch.setattr(service, "find_slot_candidates", search)
+    assert service.find_contacts_for_job(db, "j1", "USC") == {"status": "searching"}
+    assert db.store[RESULT]["lock_owner"] == "someone-else"
+    assert "people" not in db.store[RESULT]
+
+
+def test_lost_lock_before_search_spends_nothing(db, calls, monkeypatch):
+    def read_posting(job):
+        calls["read"] += 1
+        db.store[RESULT]["lock_owner"] = "someone-else"
+        return dict(FACTS)
+
+    monkeypatch.setattr(service, "read_posting", read_posting)
+    assert service.find_contacts_for_job(db, "j1", "USC") == {"status": "searching"}
+    assert calls["search"] == 0
 
 
 def test_stale_lock_retaken(db, calls):
@@ -260,6 +318,25 @@ def test_reveal_email_unknown_person_or_no_hit(db, calls, monkeypatch):
     assert service.reveal_email(db, "j1", "nobody") is None
     assert service.reveal_email(db, "other-job", "https://linkedin.com/in/ann") is None
     assert calls["email"] == []
-    monkeypatch.setattr(service, "find_work_email", lambda **kw: None)
-    assert service.reveal_email(db, "j1", "https://linkedin.com/in/ann") is None
-    assert "email" not in db.store[RESULT]["people"][0]
+
+
+def test_reveal_email_miss_saved_and_not_retried(db, calls, monkeypatch):
+    db.store[RESULT] = _saved_doc()
+    misses = []
+    monkeypatch.setattr(service, "find_work_email", lambda **kw: misses.append(kw))
+    key = "https://linkedin.com/in/ann"
+    assert service.reveal_email(db, "j1", key) is None
+    person = db.store[RESULT]["people"][0]
+    assert "email" not in person and person["email_status"] == "not_found"
+    assert service.reveal_email(db, "j1", key) is None
+    assert len(misses) == 1
+
+
+def test_posting_facts_not_written_to_deleted_job(db, calls, monkeypatch):
+    def read_posting(job):
+        del db.store["jobs/j1"]  # job deleted while the LLM ran
+        return dict(FACTS)
+
+    monkeypatch.setattr(service, "read_posting", read_posting)
+    service.find_contacts_for_job(db, "j1", None)
+    assert "jobs/j1" not in db.store
