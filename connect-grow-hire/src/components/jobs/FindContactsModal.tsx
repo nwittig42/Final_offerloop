@@ -381,7 +381,12 @@ export function FindContactsModal({ open, onOpenChange, job }: FindContactsModal
     ? [...result.people].sort((a, b) => (SLOT_ORDER[a.slot] ?? 9) - (SLOT_ORDER[b.slot] ?? 9))
     : [];
   const company = result?.company || job?.company || "";
-  const heading = result && people.length > 0 ? `${people.length} people to reach at ${company}` : "Find contacts";
+  const heading =
+    result && people.length > 0
+      ? people.length === 1
+        ? `1 person to reach at ${company}`
+        : `${people.length} people to reach at ${company}`
+      : "Find contacts";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
