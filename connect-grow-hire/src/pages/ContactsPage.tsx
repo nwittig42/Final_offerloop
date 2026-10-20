@@ -149,13 +149,13 @@ export default function ContactsPage() {
   // Lives top-left in both views (above the list, or leading the spreadsheet
   // toolbar) so switching is always in the same spot.
   const viewToggle = (
-    <div className="flex items-center">
-      {/* Same pill switch as the Job Board's List/Gallery: a navy thumb slides
-          under the active view. */}
-      <div className="relative inline-grid h-9 shrink-0 grid-cols-2 rounded-full border border-[#D4D4D4] bg-white p-[3px]" role="tablist" aria-label="View">
+    <div className="flex w-full items-center">
+      {/* Apple segmented control: gray track, white thumb slides under the
+          active view. */}
+      <div className="relative grid h-8 w-full shrink-0 grid-cols-2 rounded-[9px] bg-[rgba(118,118,128,0.12)] p-[2px]" role="tablist" aria-label="View">
         <span
           aria-hidden
-          className="absolute bottom-[3px] left-[3px] top-[3px] w-[calc(50%-3px)] rounded-full bg-[#1e2d4d] shadow-[0_1px_2px_rgba(15,23,42,0.18)] transition-transform duration-200 ease-out"
+          className="absolute bottom-[2px] left-[2px] top-[2px] w-[calc(50%-2px)] rounded-[7px] bg-white shadow-[0_3px_8px_rgba(0,0,0,0.12),0_1px_1px_rgba(0,0,0,0.04)] transition-transform duration-200 ease-out"
           style={{ transform: `translateX(${view === "table" ? 100 : 0}%)` }}
         />
         {([["list", "List", LayoutList], ["table", "Spreadsheet", Table2]] as const).map(([id, label, Icon]) => (
@@ -165,11 +165,11 @@ export default function ContactsPage() {
             role="tab"
             aria-selected={view === id}
             onClick={() => updateParams({ view: id === "table" ? "table" : null })}
-            className={`relative z-10 inline-flex items-center justify-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors duration-200 ${
-              view === id ? "cursor-default text-white" : "cursor-pointer text-[#6B7280] hover:text-[#1e2d4d]"
+            className={`relative z-10 inline-flex items-center justify-center gap-1.5 rounded-[7px] px-3 text-[13px] font-medium transition-colors duration-200 ${
+              view === id ? "cursor-default text-[#1d1d1f]" : "cursor-pointer text-[#6e6e73] hover:text-[#1d1d1f]"
             }`}
           >
-            <Icon className="h-3.5 w-3.5" /> {label}
+            <Icon className="h-3.5 w-3.5 shrink-0" /> {label}
           </button>
         ))}
       </div>
@@ -213,15 +213,15 @@ export default function ContactsPage() {
               <div className="flex min-w-0 flex-1 flex-col">
                 <div className="flex items-center justify-between gap-3 border-b border-line px-6 py-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    {viewToggle}
-                    <label className="flex h-9 w-72 items-center gap-2 rounded-full border border-[#D4D4D4] bg-white px-3.5 focus-within:border-[var(--accent,#4A60A8)]">
-                      <Search className="h-4 w-4 shrink-0 text-ink-3" />
+                    <div className="w-[260px] shrink-0">{viewToggle}</div>
+                    <label className="flex h-8 w-72 items-center gap-1.5 rounded-[10px] bg-[rgba(118,118,128,0.12)] px-2.5 focus-within:ring-2 focus-within:ring-[#0071e3]/40">
+                      <Search className="h-4 w-4 shrink-0 text-[#8e8e93]" strokeWidth={2.25} />
                       <input
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Search contacts"
+                        placeholder="Search"
                         aria-label="Search contacts"
-                        className="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-ink-3"
+                        className="min-w-0 flex-1 bg-transparent text-[14px] text-[#1d1d1f] outline-none placeholder:text-[#8e8e93]"
                       />
                     </label>
                     <span className="hidden text-[12.5px] text-ink-3 lg:inline">{visible.length} {visible.length === 1 ? "contact" : "contacts"}</span>
@@ -257,7 +257,7 @@ export default function ContactsPage() {
               <>
                 {/* Narrow screens show one pane at a time. */}
                 <aside className={`${detailOpen ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r border-line bg-white md:w-[320px]`}>
-                  <div className="border-b border-line px-3 py-2.5">{viewToggle}</div>
+                  <div className="px-3 pb-1 pt-3">{viewToggle}</div>
                   <div className="flex min-h-0 flex-1 flex-col">{listColumn}</div>
                 </aside>
                 <section className={`${detailOpen ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col overflow-y-auto bg-white`}>
