@@ -31,6 +31,7 @@ from .app.routes.search_history import search_history_bp
 from .app.routes.parse_prompt import parse_prompt_bp
 from .app.routes.contact_import import contact_import_bp
 from .app.routes.job_board import job_board_bp
+from .app.routes.find_contacts import find_contacts_bp
 from .app.routes.auto_apply import auto_apply_bp
 from .app.routes.alumni_discovery_routes import alumni_discovery_bp
 from .app.routes.scout_assistant import scout_assistant_bp, scout_admin_bp
@@ -281,6 +282,7 @@ def create_app() -> Flask:
     app.register_blueprint(parse_prompt_bp)
     app.register_blueprint(contact_import_bp)
     app.register_blueprint(job_board_bp)
+    app.register_blueprint(find_contacts_bp)
     app.register_blueprint(auto_apply_bp)
     app.register_blueprint(alumni_discovery_bp)
     app.register_blueprint(scout_assistant_bp)
