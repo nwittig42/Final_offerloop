@@ -257,7 +257,11 @@ def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     companies = parsed.get("companies") or []
     company_names = [c.get("name") for c in companies if isinstance(c, dict) and c.get("name")]
-    title_variations = _distinctive_variations(parsed.get("title_variations") or [])
+    title_variations = list(parsed.get("title_variations") or [])
+    # The distinctive-title guard is built for prompt search; callers with
+    # curated title tiers (hiring-manager finder) opt out.
+    if not parsed.get("skip_title_guard"):
+        title_variations = _distinctive_variations(title_variations)
     schools = parsed.get("schools") or []
     locations = parsed.get("locations") or []
 
