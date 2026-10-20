@@ -53,8 +53,9 @@ def test_fill_slots_output_shape_and_labels():
     out = fill_slots({"leader": [leader], "process": [named], "recruiter": [rec]}, FACTS, SPECS, "Stanford")
     assert [p["slot"] for p in out] == ["leader", "process", "recruiter"]
     first = out[0]
-    assert set(first) == {"slot", "label", "name", "title", "company", "city", "linkedin",
+    assert set(first) == {"slot", "label", "name", "first_name", "last_name", "title", "company", "city", "linkedin",
                           "photo", "alumni", "college", "found_by", "person_key"}
+    assert first["first_name"] == "Ann" and first["last_name"] == "Lee"
     assert first["label"] == "Leads this team · can vouch for you"
     assert first["alumni"] is True and first["college"] == "Stanford University"
     assert first["photo"] == "p.jpg" and first["found_by"] == "warehouse"

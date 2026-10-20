@@ -78,6 +78,8 @@ def _person(candidate: dict, slot: str) -> dict:
         "slot": slot,
         "label": NAMED_LABEL if found_by == "named" else SLOT_LABELS.get(slot, ""),
         "name": name,
+        "first_name": candidate.get("FirstName") or "",
+        "last_name": candidate.get("LastName") or "",
         "title": candidate.get("Title") or "",
         "company": candidate.get("Company") or "",
         "city": candidate.get("City") or "",
