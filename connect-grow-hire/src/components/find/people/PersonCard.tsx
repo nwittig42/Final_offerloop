@@ -241,7 +241,10 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
           </span>
         )}
         {person.school && !person.orgBadge && <SchoolChip school={person.school} sameSchool={sameUniversity(person.school, userSchool)} />}
-        {person.title && <Chip icon={<User className="h-3 w-3" />}>{relationFor(person.title)}</Chip>}
+        {/* Only Recruiter / Hiring manager earn a chip; "Employee" says nothing. */}
+        {person.title && relationFor(person.title) !== "Employee" && (
+          <Chip icon={<User className="h-3 w-3" />}>{relationFor(person.title)}</Chip>
+        )}
       </div>
 
       {reason && (
