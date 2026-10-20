@@ -723,3 +723,73 @@ def _synthesize_id(email: str, linkedin: str, first: str, last: str, company: st
 def _contact_key(contact: Dict[str, Any]) -> str:
     """Dedup key — prefer LinkedIn URL, fall back to pdlId."""
     return (contact.get("LinkedIn") or "").strip().lower() or contact.get("pdlId", "")
+
+
+# ---------------------------------------------------------------------------
+# Direct people queries (Find contacts). These bypass _distinctive_variations
+# and never require a job location as a person location.
+# ---------------------------------------------------------------------------
+
+
+def _current_company_clauses(company: str) -> List[Dict[str, Any]]:
+    return [
+        {"term": {"experience.active_experience": 1}},
+        {"match_phrase": {"experience.company_name": company}},
+    ]
+
+
+def search_people(
+    company: str,
+    titles: List[str],
+    keywords: Optional[List[str]] = None,
+    city: Optional[str] = None,
+    page_size: int = 10,
+) -> List[int]:
+    """ES ids of current employees of `company` holding any of `titles`.
+
+    Every keyword must appear in the same experience's position_title.
+    `city` (optional) is a match_phrase on location_full.
+    """
+    nested_must = _current_company_clauses(company)
+    nested_must.append({
+        "bool": {
+            "should": [{"match_phrase": {"experience.position_title": t}} for t in titles],
+            "minimum_should_match": 1,
+        }
+    })
+    for kw in keywords or []:
+        nested_must.append({"match_phrase": {"experience.position_title": kw}})
+    must: List[Dict[str, Any]] = [
+        {"nested": {"path": "experience", "query": {"bool": {"must": nested_must}}}}
+    ]
+    if city:
+        must.append({"match_phrase": {"location_full": city}})
+    return _search_ids({"query": {"bool": {"must": must}}}, page_size=page_size)
+
+
+def collect_contacts(ids: List[int], limit: int) -> List[Dict[str, Any]]:
+    """Collect at most `limit` profiles and normalize them to contacts."""
+    profiles = _collect_profiles_parallel(list(ids)[:limit])
+    contacts = [_normalize_to_contact(p) for p in profiles]
+    return [c for c in contacts if c]
+
+
+def find_person_by_name(full_name: str, company: str) -> Optional[Dict[str, Any]]:
+    """Look up one named person currently at `company`; None if not found."""
+    nested = {
+        "nested": {
+            "path": "experience",
+            "query": {"bool": {"must": _current_company_clauses(company)}},
+        }
+    }
+    query = {"query": {"bool": {"must": [
+        {"match_phrase": {"full_name": full_name}},
+        nested,
+    ]}}}
+    ids = _search_ids(query, page_size=1)
+    if not ids:
+        return None
+    profiles = _collect_profiles_parallel(ids[:1])
+    if not profiles:
+        return None
+    return _normalize_to_contact(profiles[0], target_company=company)
