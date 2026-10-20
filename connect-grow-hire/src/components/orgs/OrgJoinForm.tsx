@@ -18,9 +18,11 @@ interface OrgJoinFormProps {
   onCancel: () => void;
   // Button color; the org's own color in its card.
   accent?: string;
+  // Label for the dismiss button ("Skip for now" in onboarding).
+  cancelLabel?: string;
 }
 
-export function OrgJoinForm({ org, onJoin, onCancel, accent = "#3A4E8C" }: OrgJoinFormProps) {
+export function OrgJoinForm({ org, onJoin, onCancel, accent = "#3A4E8C", cancelLabel = "Cancel" }: OrgJoinFormProps) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,7 +67,7 @@ export function OrgJoinForm({ org, onJoin, onCancel, accent = "#3A4E8C" }: OrgJo
           Join
         </button>
         <button type="button" onClick={onCancel} className="h-10 shrink-0 px-2 text-[14px] text-[#64748B] hover:text-[#0F172A]">
-          Cancel
+          {cancelLabel}
         </button>
       </div>
       {error && <p role="alert" className="mt-2 text-[13px] text-[#B91C1C]">{error}</p>}

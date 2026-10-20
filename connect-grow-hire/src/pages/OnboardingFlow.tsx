@@ -4,7 +4,6 @@ import { ArrowLeft, Check } from "lucide-react";
 import { OnboardingSlides } from "./OnboardingSlides";
 import { OnboardingSource, type SourceResult } from "./OnboardingSource";
 import { OnboardingBuilder } from "./OnboardingBuilder";
-import { OnboardingInbox } from "./OnboardingInbox";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
 import { BACKEND_URL } from "@/services/api";
 import { toast } from "sonner";
@@ -27,16 +26,17 @@ import { trackFeatureActionCompleted } from "@/lib/analytics";
 
 // Resume-first onboarding: intro slides, then a single resume/LinkedIn page.
 // "builder" (the free resume generator) shares the resume phase on the rail.
-// "orgs" (OFF-42) also sits in the resume phase, and only appears when there
-// are org alumni directories to join.
-type Step = "slides" | "source" | "builder" | "orgs" | "inbox";
-const STEP_INDEX: Record<Step, number> = { slides: 0, source: 1, builder: 1, orgs: 1, inbox: 2 };
+// "orgs" (OFF-42, OFF-50) is the last step before the site, and only appears
+// when there are org alumni directories to join. Gmail connect isn't part of
+// onboarding (OFF-50); it's offered later, inside the site.
+type Step = "slides" | "source" | "builder" | "orgs";
+const STEP_INDEX: Record<Step, number> = { slides: 0, source: 1, builder: 1, orgs: 2 };
 
-const RAIL_STEPS: { label: string; optional?: boolean }[] = [
+const BASE_RAIL_STEPS: { label: string; optional?: boolean }[] = [
   { label: "What Offerloop does" },
   { label: "Your resume" },
-  { label: "Connect your inbox", optional: true },
 ];
+const ORGS_RAIL_STEP = { label: "Your organizations", optional: true };
 
 interface OnboardingFlowProps {
   onComplete: (data: unknown) => void;
@@ -53,7 +53,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   const [currentStep, setCurrentStep] = useState<Step>("slides");
   const [submitting, setSubmitting] = useState(false);
   const [source, setSource] = useState<SourceResult | null>(null);
-  // Completion is deferred until the inbox step resolves (connect or skip).
+  // Completion is deferred until the orgs step resolves (when it shows).
   const [pendingCompletion, setPendingCompletion] = useState<{
     prefill: ResumePrefill;
     linkedinUrl: string;
@@ -63,8 +63,11 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   // Org alumni directories: joining checks the org's password right here
   // (the user doc already exists from sign-up), and the shared orgs query
   // updates so Find shows the org as soon as onboarding ends.
-  const { orgs, memberships } = useOrgs(!!user);
-  const afterResumeStep: Step = orgs.length > 0 ? "orgs" : "inbox";
+  // While the list is still loading (or failed), show the step anyway: the
+  // editor has its own loading and retry states, and "Skip for now" still works.
+  const { orgs, memberships, loading: orgsLoading, isError: orgsError } = useOrgs(!!user);
+  const hasOrgStep = orgsLoading || orgsError || orgs.length > 0;
+  const RAIL_STEPS = hasOrgStep ? [...BASE_RAIL_STEPS, ORGS_RAIL_STEP] : BASE_RAIL_STEPS;
 
   // Onboarding analytics: fire-and-forget step events.
   const loggedSteps = useRef<Set<string>>(new Set());
@@ -94,7 +97,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   // userType is intentionally NOT written: without the manual step's
   // student/professional question, the backend infers stage from the resume
   // instead of a hardcoded "student" locking professionals into the wrong voice.
-  const buildFinalData = (prefill: ResumePrefill, linkedinUrl: string, inboxSkipped: boolean) => {
+  const buildFinalData = (prefill: ResumePrefill, linkedinUrl: string) => {
     const fullName = prefill.name || user?.name || "";
     const nameParts = fullName.trim().split(/\s+/);
     const firstName = prefill.firstName || nameParts[0] || "";
@@ -122,8 +125,9 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
       targetIndustries: [],
       goals: { careerTrack: "", careerTracks: [], targetIndustries: [] },
       onboarding: { completedAt: new Date().toISOString() },
-      // Read by the Settings surface to badge the Gmail connect card later.
-      ...(inboxSkipped ? { inboxConnectSkipped: true } : {}),
+      // Gmail isn't connected during onboarding anymore (OFF-50); this badges
+      // the Settings Gmail card so connecting it is the next nudge.
+      inboxConnectSkipped: true,
     };
   };
 
@@ -146,13 +150,12 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     prefill: ResumePrefill,
     linkedinUrl: string,
     step: string,
-    inboxSkipped: boolean,
   ) => {
     if (submitting) return;
     setSubmitting(true);
     try {
       logOnboardingEvent("completed", step);
-      const finalData = buildFinalData(prefill, linkedinUrl, inboxSkipped);
+      const finalData = buildFinalData(prefill, linkedinUrl);
       await completeOnboarding(finalData);
       await new Promise((r) => setTimeout(r, 300));
       await refreshUser();
@@ -175,28 +178,23 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     logOnboardingEvent("completed", "slides", skipped);
     setCurrentStep("source");
   };
+  // After the resume: the orgs step when there is one, else straight in.
+  const afterResume = (pending: { prefill: ResumePrefill; linkedinUrl: string; step: string }) => {
+    setPendingCompletion(pending);
+    if (hasOrgStep) setCurrentStep("orgs");
+    else void completeWithPrefill(pending.prefill, pending.linkedinUrl, pending.step);
+  };
   const handleSource = (data: SourceResult) => {
     setSource(data);
-    setPendingCompletion({ prefill: data.resolved, linkedinUrl: data.linkedinUrl, step: "source" });
-    setCurrentStep(afterResumeStep);
+    afterResume({ prefill: data.resolved, linkedinUrl: data.linkedinUrl, step: "source" });
   };
   const handleBuilderComplete = (prefill: ResumePrefill) => {
-    setPendingCompletion({ prefill, linkedinUrl: "", step: "resume_builder" });
-    setCurrentStep(afterResumeStep);
+    afterResume({ prefill, linkedinUrl: "", step: "resume_builder" });
   };
   const handleOrgsDone = () => {
-    logOnboardingEvent("completed", "orgs", memberships.length === 0);
-    setCurrentStep("inbox");
-  };
-  const handleInboxDone = (skipped: boolean) => {
     if (!pendingCompletion) return;
-    logOnboardingEvent("completed", "inbox", skipped);
-    void completeWithPrefill(
-      pendingCompletion.prefill,
-      pendingCompletion.linkedinUrl,
-      pendingCompletion.step,
-      skipped,
-    );
+    logOnboardingEvent("completed", "orgs", memberships.length === 0);
+    void completeWithPrefill(pendingCompletion.prefill, pendingCompletion.linkedinUrl, pendingCompletion.step);
   };
 
   const handleBack = async () => {
@@ -211,8 +209,6 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     else if (currentStep === "builder") setCurrentStep("source");
     else if (currentStep === "orgs")
       setCurrentStep(pendingCompletion?.step === "resume_builder" ? "builder" : "source");
-    else if (currentStep === "inbox")
-      setCurrentStep(orgs.length > 0 ? "orgs" : pendingCompletion?.step === "resume_builder" ? "builder" : "source");
   };
 
   // Slides bypass the Slate Split shell entirely (full-bleed navy).
@@ -258,24 +254,12 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     },
     orgs: {
       headline: <>Are you part of {em("an organization")}?</>,
-      sub: "Members get their organization's full alumni directory in Find. Enter your organization's password to join.",
+      sub: "Pick yours from the list and enter its password. Members get their organization's full alumni directory in Find.",
       footer: {
         hint: (
           <>
             Your organization's alumni show up in Find with a badge, ready to email. Type its name
             plus "alumni" in the search, or tap its pill under the search bar.
-          </>
-        ),
-      },
-    },
-    inbox: {
-      headline: <>Where should {em("your drafts")} go?</>,
-      sub: "Offerloop writes personalized outreach emails for you. Pick how you want to receive them.",
-      footer: {
-        hint: (
-          <>
-            Connect Gmail and every draft lands in your inbox, ready to send. Skip and your
-            emails arrive as one-tap downloads that open in any mail app, resume attached.
           </>
         ),
       },
@@ -489,14 +473,20 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
           )}
           {currentStep === "orgs" && (
             <div>
-              <OrgMembershipEditor school={pendingCompletion?.prefill.university || null} />
-              <button type="button" onClick={handleOrgsDone} style={{ ...obPrimaryButton, marginTop: 24 }}>
+              <OrgMembershipEditor
+                school={pendingCompletion?.prefill.university || null}
+                skipLabel="Skip for now"
+                onSkip={handleOrgsDone}
+              />
+              <button
+                type="button"
+                onClick={handleOrgsDone}
+                disabled={submitting}
+                style={{ ...obPrimaryButton, marginTop: 24, opacity: submitting ? 0.6 : 1 }}
+              >
                 {memberships.length > 0 ? "Continue" : "Skip for now"}
               </button>
             </div>
-          )}
-          {currentStep === "inbox" && (
-            <OnboardingInbox onDone={handleInboxDone} submitting={submitting} />
           )}
         </div>
       </div>
