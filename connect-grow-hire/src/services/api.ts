@@ -298,6 +298,47 @@ export interface FindHiringManagerResponse {
   error?: string;
 }
 
+// Find contacts (job board): up to one person per outreach slot for a saved job.
+export type ContactSlot = 'leader' | 'process' | 'recruiter';
+
+export interface ContactSlotPerson {
+  slot: ContactSlot;
+  label: string;
+  name: string;
+  title: string;
+  company: string;
+  city: string;
+  linkedin: string;
+  photo: string;
+  alumni: boolean;
+  found_by: string;
+  person_key: string;
+  college: string;
+  first_name: string;
+  last_name: string;
+}
+
+export type FindContactsResponse =
+  | {
+      status: 'ready';
+      company: string;
+      team: string;
+      team_source: string;
+      people: ContactSlotPerson[];
+      creditsCharged: number;
+      credits: number;
+    }
+  | { status: 'searching' }
+  | { status: 'insufficient_credits'; error: string; creditsRequired?: number; creditsAvailable?: number }
+  | { status: 'not_found' }
+  | { status: 'error'; error: string };
+
+export type RevealContactEmailResponse =
+  | { status: 'found'; email: string; emailStatus: string }
+  | { status: 'not_found' }
+  | { status: 'locked' }
+  | { status: 'error'; error: string };
+
 // Base response type
 export interface SearchResponse {
   contacts: Contact[];
@@ -2646,6 +2687,50 @@ async setOutboxThreadResolution(contactId: string, resolution: Resolution, detai
         }),
       }
     );
+  }
+
+  // Find contacts for a saved job. Non-200 statuses come back as typed results
+  // (202 searching, 402 credits, 404 gone) instead of throwing, so the modal
+  // can poll and show each state.
+  async findContacts(jobId: string): Promise<FindContactsResponse> {
+    const headers = await this.getAuthHeaders();
+    const res = await fetch(`${API_BASE_URL}/job-board/find-contacts`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jobId }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.status === 200 && data?.status === 'ready') {
+      return { ...data, people: Array.isArray(data.people) ? data.people : [] };
+    }
+    if (res.status === 202) return { status: 'searching' };
+    if (res.status === 402) {
+      return {
+        status: 'insufficient_credits',
+        error: data?.error || 'Insufficient credits',
+        creditsRequired: data?.creditsRequired,
+        creditsAvailable: data?.creditsAvailable,
+      };
+    }
+    if (res.status === 404) return { status: 'not_found' };
+    return { status: 'error', error: data?.error || `HTTP ${res.status}` };
+  }
+
+  // Look up (and save) one found person's work email. Paid lookup on first call.
+  async revealContactEmail(jobId: string, personKey: string): Promise<RevealContactEmailResponse> {
+    const headers = await this.getAuthHeaders();
+    const res = await fetch(`${API_BASE_URL}/job-board/find-contacts/email`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jobId, personKey }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.status === 200 && data?.email) {
+      return { status: 'found', email: data.email, emailStatus: data.status || '' };
+    }
+    if (res.status === 200 || res.status === 404) return { status: 'not_found' };
+    if (res.status === 403) return { status: 'locked' };
+    return { status: 'error', error: data?.error || `HTTP ${res.status}` };
   }
 
   async findRecruiters(params: FindRecruiterRequest): Promise<FindRecruiterResponse> {
