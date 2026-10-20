@@ -12,7 +12,7 @@
 
 **Where this plan differs from the spec (plan's calls):**
 - Company size comes from a curated large-employer list, `linkedin_org_employees`, and the posting reader's hint, not a Coresignal company lookup (our Coresignal client has no company endpoint wired).
-- Per Nick in chat, the job card goes to two buttons (`Find contacts`, `Auto-apply`); the card's "Email team" action is removed. The modal's other search kinds stay in the code.
+- Per Nick in chat, the job card goes to two buttons (`Find contacts`, and `Auto-apply` or a differently colored `Apply` link when auto-apply isn't supported, e.g. Workday); the card's "Email team" action is removed. The modal's other search kinds stay in the code.
 
 ## Global Constraints
 
@@ -25,7 +25,7 @@
   - recruiter: `"Scheduling and logistics"`
   - any person found by name in the posting: `"Named in the posting"` (replaces the slot label)
 - Panel heading copy: `"{n} people to reach at {company}"`; team line: `"{team} · from the {source}"` where source is `job title`, `department field` or `description`; when no team: `"We couldn't pin down the team for this role"`.
-- Job card buttons, exact labels: `Find contacts`, `Auto-apply`.
+- Job card buttons, exact labels: `Find contacts` plus either `Auto-apply` (when `job.autoApplyEligible`, filled primary style) or `Apply` (otherwise, e.g. every Workday job: outlined secondary style, opens `job.url` in a new tab).
 - Credits: 5 per person shown (`RECRUITER_CREDIT_COST`), charged once per student per job (record at `users/{uid}/contactUnlocks/{jobId}`), including when the result was already saved.
 - Vendor spend cap per first search: at most 6 Coresignal profile collects and 1 FullEnrich search call.
 - Startup = under 200 employees.
@@ -211,7 +211,7 @@
   - process: `"This person likely interviews for the role. Mention the student has applied and ask one specific question about the work."`
   - recruiter: `"This person coordinates recruiting. Ask a short logistics question about timeline or next steps."`
 - [ ] **Step 2: Run, expect FAIL.**
-- [ ] **Step 3: Implement** the prompt line, then the modal: heading, team line and labels per Global Constraints; rows in slot order leader → process → recruiter, the leader row tagged `Email first`; a row per person (photo, name, title, label, alumni badge, `See email`, `Draft`); a polling state when the route returns 202 (retry every 3s up to 60s, copy `"Finding the right people for this role…"`); the not-found copy when `people` is empty. Card shows exactly `Find contacts` and, when eligible, `Auto-apply`.
+- [ ] **Step 3: Implement** the prompt line, then the modal: heading, team line and labels per Global Constraints; rows in slot order leader → process → recruiter, the leader row tagged `Email first`; a row per person (photo, name, title, label, alumni badge, `See email`, `Draft`); a polling state when the route returns 202 (retry every 3s up to 60s, copy `"Finding the right people for this role…"`); the not-found copy when `people` is empty. Card shows exactly two actions: `Find contacts`, and `Auto-apply` when eligible or else `Apply` (outlined, different color from Auto-apply, opens the posting in a new tab).
 - [ ] **Step 4: Verify.** Backend test passes; `cd connect-grow-hire && npx tsc --noEmit -p tsconfig.app.json` shows no errors in the touched files; open localhost:8080 job board, check the card buttons and the modal on one job (vendor calls happen on click, so use one job only).
 - [ ] **Step 5: Commit** `feat(job-board): Find contacts card button and modal with per-role drafts (OFF-49)`.
 
