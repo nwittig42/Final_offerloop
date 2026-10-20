@@ -3,8 +3,9 @@
 // "Draft email" button that creates a cold first-touch Gmail draft.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, ExternalLink, Loader2, MoreHorizontal, Send, Sparkles, Mail } from "lucide-react";
+import { Archive, ArchiveRestore, Loader2, MoreHorizontal, Send, Sparkles, Mail } from "lucide-react";
 import { apiService, type ThreadMessage } from "@/services/api";
+import GmailLogo from "@/assets/Gmaillogopng.png";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
 import { useResumeStatus } from "@/hooks/useResumeStatus";
 import { toast } from "@/hooks/use-toast";
@@ -203,7 +204,7 @@ export function ContactConversation({ contact }: { contact: ContactRow }) {
               rel="noopener noreferrer"
               className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-paper-2/60 px-3 text-[13px] text-ink hover:bg-paper-2"
             >
-              <ExternalLink className="h-3.5 w-3.5" /> Gmail
+              <img src={GmailLogo} alt="" className="h-3.5 w-auto" /> Gmail
             </a>
           )}
           {hasThread && (
