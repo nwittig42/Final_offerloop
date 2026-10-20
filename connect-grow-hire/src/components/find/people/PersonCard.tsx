@@ -3,7 +3,8 @@
 // black/grey text scale, grey capsule chips, and capsule buttons (blue for
 // the main action). Same content as the app's People card: who they are,
 // where they work, why we picked them, Info and Contact.
-import { Bookmark, GraduationCap, Loader2, Mail, MapPin, User, Users, X } from "lucide-react";
+import { Bookmark, Check, GraduationCap, Loader2, Mail, MapPin, User, Users, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { CompanyLogo } from "@/components/CompanyLogo";
 import { linkedInHref } from "@/components/contacts/contactsModel";
 import { relationFor, type Person } from "./peopleModel";
@@ -13,7 +14,10 @@ import { orgLogo } from "@/lib/orgLogos";
 import { useEffect, useState } from "react";
 import { MIN_LOGO_PX, findUniversity, sameUniversity, universityLogoSources } from "@/lib/universityLogos";
 
-export type ContactState = "idle" | "working" | "drafted" | "no_email";
+// finding = looking up their email, working = writing the draft.
+export type ContactState = "idle" | "finding" | "working" | "drafted" | "no_email";
+
+export const isContactBusy = (s: ContactState) => s === "finding" || s === "working";
 
 // Apple-like system stack: SF Pro on Apple devices, Inter elsewhere.
 export const APPLE_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif';
@@ -108,17 +112,29 @@ interface PersonCardProps {
   onToggleBookmark?: () => void;
   // The signed-in student's school: highlights the pill on fellow alumni.
   userSchool?: string | null;
+  // Where "View contact" and "See email" go once they're drafted.
+  contactHref?: string;
+  emailHref?: string | null;
 }
 
-export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, bookmarked = false, onToggleBookmark, userSchool = null }: PersonCardProps) {
+export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, bookmarked = false, onToggleBookmark, userSchool = null, contactHref = "/contacts", emailHref = null }: PersonCardProps) {
   const linkedIn = linkedInHref(person.linkedinUrl);
   const isSample = person.source === "sample";
   const reason = person.reasons[0] || (featured ? "Most in common with you" : "");
+  const busy = isContactBusy(contactState);
+  const drafted = contactState === "drafted";
 
   return (
     <article
       className="group relative flex flex-col rounded-[22px] bg-white p-[18px] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)]"
-      style={{ fontFamily: APPLE_FONT, boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.05)" }}
+      style={{
+        fontFamily: APPLE_FONT,
+        boxShadow: busy
+          ? "0 0 0 2px #0071E3, 0 4px 14px rgba(0,113,227,0.12)"
+          : drafted
+            ? "0 0 0 1.5px #34C759, 0 4px 14px rgba(0,0,0,0.05)"
+            : "0 1px 2px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.05)",
+      }}
     >
       {onDismiss && !isSample && (
         <button
@@ -155,13 +171,13 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             ’{String(person.gradYear % 100).padStart(2, "0")}
           </span>
         ) : null}
-        {onToggleBookmark && !isSample && (
+        {onToggleBookmark && !isSample && !busy && !drafted && (
           <button
             type="button"
             onClick={onToggleBookmark}
             aria-pressed={bookmarked}
             aria-label={bookmarked ? `Remove ${person.name} from Saved` : `Save ${person.name} to Contacts`}
-            title={bookmarked ? "Saved to Contacts" : "Save for later"}
+            title={bookmarked ? "Saved. Find it in Contacts > Saved" : "Save for later (goes to Contacts > Saved)"}
             className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[#F5F5F7] active:bg-[#E8E8ED]"
             style={{ color: bookmarked ? "#0071E3" : INK_3 }}
           >
@@ -200,6 +216,15 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
 
       {/* Chips */}
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {drafted && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[11px] font-semibold"
+            style={{ background: "#E9F7EE", color: "#1D7A3E" }}
+            title="Email drafted. They're in your Contacts."
+          >
+            <Check className="h-3 w-3" strokeWidth={3} /> Drafted
+          </span>
+        )}
         {featured ? (
           <span className="rounded-full px-2 py-[3px] text-[11px] font-semibold" style={{ background: "#FBF3DF", color: "#8A6116" }}>
             Top match
@@ -224,37 +249,77 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
       )}
 
       {/* Actions */}
-      <div className="mt-auto flex gap-2 pt-4">
-        {linkedIn && <LinkedInLink href={linkedIn} name={person.name} />}
-        <button
-          type="button"
-          onClick={onInfo}
-          className="h-8 flex-1 rounded-full text-[13px] font-medium transition-colors hover:bg-[#E8E8ED]"
-          style={{ background: FILL, color: INK }}
-        >
-          Info
-        </button>
-        {contactState === "drafted" ? (
-          <span className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[13px] font-medium" style={{ background: "#E9F7EE", color: "#1D7A3E" }}>
-            Drafted
-          </span>
-        ) : contactState === "no_email" ? (
-          <span className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12px]" style={{ background: FILL, color: INK_3 }} title="No credits were charged">
-            No email found
-          </span>
-        ) : (
+      {busy ? (
+        <div className="mt-auto pt-4" role="status" aria-live="polite">
+          <div className="rounded-[14px] px-3 py-2.5" style={{ background: "#EEF5FE" }}>
+            <div className="flex items-center gap-2 text-[13px] font-medium" style={{ color: "#0058B0" }}>
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              {contactState === "finding" ? `Finding ${person.firstName || "their"}'s email` : `Writing your email to ${person.firstName || "them"}`}
+            </div>
+            <div className="mt-2 h-1 overflow-hidden rounded-full" style={{ background: "#D6E6FB" }}>
+              <div
+                className="h-full rounded-full bg-[#0071E3] transition-[width] duration-700 ease-out"
+                style={{ width: contactState === "finding" ? "40%" : "80%" }}
+              />
+            </div>
+            <div className="mt-1.5 text-[11.5px]" style={{ color: INK_3 }}>Keep browsing. We'll update this card.</div>
+          </div>
+        </div>
+      ) : drafted ? (
+        <div className="mt-auto flex gap-2 pt-4">
+          <Link
+            to={contactHref}
+            className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[13px] font-medium transition-colors hover:bg-[#E8E8ED]"
+            style={{ background: FILL, color: INK }}
+          >
+            View contact
+          </Link>
+          {emailHref ? (
+            <a
+              href={emailHref}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED]"
+            >
+              <Mail className="h-3.5 w-3.5" /> See email
+            </a>
+          ) : (
+            <Link
+              to={contactHref}
+              className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED]"
+            >
+              <Mail className="h-3.5 w-3.5" /> See email
+            </Link>
+          )}
+        </div>
+      ) : (
+        <div className="mt-auto flex gap-2 pt-4">
+          {linkedIn && <LinkedInLink href={linkedIn} name={person.name} />}
           <button
             type="button"
-            onClick={onContact}
-            disabled={isSample || contactState === "working"}
-            title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : "Drafts an outreach email"}
-            className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
+            onClick={onInfo}
+            className="h-8 flex-1 rounded-full text-[13px] font-medium transition-colors hover:bg-[#E8E8ED]"
+            style={{ background: FILL, color: INK }}
           >
-            {contactState === "working" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {contactState === "working" ? "Drafting" : "Contact"}
+            Info
           </button>
-        )}
-      </div>
+          {contactState === "no_email" ? (
+            <span className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12px]" style={{ background: FILL, color: INK_3 }} title="No credits were charged">
+              No email found
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onContact}
+              disabled={isSample}
+              title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : "Drafts an outreach email"}
+              className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
+            >
+              Contact
+            </button>
+          )}
+        </div>
+      )}
     </article>
   );
 }

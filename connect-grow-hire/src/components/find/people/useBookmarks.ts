@@ -3,7 +3,9 @@
 // written); un-bookmarking removes them, but only while they've never been
 // emailed. Recommended people use the deterministic doc id the backend's
 // ranker outreach also writes to, so a later Contact fills the same row.
-import { useCallback, useMemo } from "react";
+import { createElement, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { ToastAction } from "@/components/ui/toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { doc, setDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -13,9 +15,9 @@ import { toast } from "@/hooks/use-toast";
 import { CONTACTS_KEY, normalizeLinkedIn, rankerContactId } from "@/components/contacts/contactsModel";
 import type { Person } from "./peopleModel";
 
-type ContactDoc = Contact & Record<string, any>;
+export type ContactDoc = Contact & Record<string, any>;
 
-function neverEmailed(c: ContactDoc): boolean {
+export function neverEmailed(c: ContactDoc): boolean {
   return !c.emailBody && !c.gmailDraftId && !c.gmailThreadId && !c.emailSent && !c.inOutbox;
 }
 
@@ -23,6 +25,7 @@ export function useBookmarks() {
   const { user } = useFirebaseAuth();
   const uid = user?.uid;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const key = [...CONTACTS_KEY, uid];
 
   // Same query (and cache) the Contacts page reads.
@@ -57,7 +60,12 @@ export function useBookmarks() {
     return undefined;
   }, [index]);
 
-  const isBookmarked = useCallback((p: Person) => !!findContact(p), [findContact]);
+  // Filled only for people saved and not yet emailed. Once Contact drafts
+  // to someone the card shows "Drafted" instead.
+  const isBookmarked = useCallback((p: Person) => {
+    const c = findContact(p);
+    return !!c && neverEmailed(c);
+  }, [findContact]);
 
   const setCache = (fn: (list: ContactDoc[]) => ContactDoc[]) =>
     queryClient.setQueryData<ContactDoc[]>(key, (old) => fn(old ?? []));
@@ -110,11 +118,16 @@ export function useBookmarks() {
         const realId = await firebaseApi.createContact(uid, docData);
         setCache((list) => list.map((c) => (c.id === id ? { ...c, id: realId } : c)));
       }
+      toast({
+        title: `Saved ${p.firstName || p.name}`,
+        description: "Bookmarks live in Contacts under Saved.",
+        action: createElement(ToastAction, { altText: "View saved contacts", onClick: () => navigate("/contacts?filter=saved") }, "View"),
+      });
     } catch (e) {
       setCache((list) => list.filter((c) => c.id !== id));
       toast({ title: "Couldn't save", description: e instanceof Error ? e.message : "Try again.", variant: "destructive" });
     }
-  }, [uid, findContact, queryClient]);
+  }, [uid, findContact, queryClient, navigate]);
 
-  return { isBookmarked, toggle };
+  return { isBookmarked, toggle, contactFor: findContact };
 }

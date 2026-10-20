@@ -24,10 +24,11 @@ import { useOrgs } from "@/hooks/useOrgs";
 import { orgLogo } from "@/lib/orgLogos";
 import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
+import { ContactProgressTray, type TrayItem } from "@/components/find/people/ContactProgressTray";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
 import { GOLD_RING } from "@/components/find/people/PersonAvatar";
 import { seedCompanies, type FeedProfile } from "@/components/find/people/feedSeeds";
-import { useBookmarks } from "@/components/find/people/useBookmarks";
+import { neverEmailed, useBookmarks } from "@/components/find/people/useBookmarks";
 import {
   personFromRanker, personFromSearch, type Person,
 } from "@/components/find/people/peopleModel";
@@ -282,10 +283,33 @@ const FindPage: React.FC = () => {
   const bookmarks = useBookmarks();
   const [infoPerson, setInfoPerson] = useState<Person | null>(null);
   const setContactState = (id: string, s: ContactState) => setContactStates((m) => ({ ...m, [id]: s }));
+  // Gmail links from this session's drafts, until Contacts refetches.
+  const [draftUrls, setDraftUrls] = useState<Record<string, string>>({});
+  // People contacted this session, newest first, for the progress tray.
+  const [trayPeople, setTrayPeople] = useState<Person[]>([]);
+
+  // A card's state: what's in flight this session, else what Contacts says,
+  // so someone drafted earlier still reads as drafted after a reload.
+  const stateFor = (p: Person): ContactState => {
+    const local = contactStates[p.id];
+    if (local && local !== "idle") return local;
+    const c = bookmarks.contactFor(p);
+    return c && !neverEmailed(c) ? "drafted" : "idle";
+  };
+  const contactHrefFor = (p: Person) => {
+    const c = bookmarks.contactFor(p);
+    return c?.id ? `/contacts?contact=${encodeURIComponent(c.id)}` : "/contacts";
+  };
+  const emailHrefFor = (p: Person): string | null => {
+    const c = bookmarks.contactFor(p);
+    if (c?.gmailThreadId) return `https://mail.google.com/mail/u/0/#all/${c.gmailThreadId}`;
+    return c?.gmailDraftUrl || draftUrls[p.id] || null;
+  };
 
   const contact = useCallback(async (person: Person) => {
     if (person.source === "sample") return;
-    setContactState(person.id, "working");
+    setTrayPeople((list) => [person, ...list.filter((q) => q.id !== person.id)].slice(0, 4));
+    setContactState(person.id, person.source === "recommended" ? "finding" : "working");
     try {
       if (person.source === "recommended") {
         // Reveal (8 credits, refunded on a miss), then draft to that exact
@@ -296,6 +320,7 @@ const FindPage: React.FC = () => {
           toast({ title: "No email found", description: `We couldn't find a verified address for ${person.firstName}. No credits were charged.` });
           return;
         }
+        setContactState(person.id, "working");
         await apiService.rankerOutreach(person.id, "draft", person.deckId);
         void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
       } else {
@@ -313,6 +338,8 @@ const FindPage: React.FC = () => {
         });
         if ("error" in res) throw new Error(res.message || res.error);
         if (!res.success || !res.draft_count) throw new Error("No draft was created. Check that Gmail is connected.");
+        const url = res.drafts?.[0]?.gmailUrl;
+        if (url) setDraftUrls((m) => ({ ...m, [person.id]: url }));
       }
       setContactState(person.id, "drafted");
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
@@ -320,6 +347,7 @@ const FindPage: React.FC = () => {
       toast({ title: `Drafted an email to ${person.firstName}`, description: "It's in your Gmail drafts and in Contacts." });
     } catch (e: any) {
       setContactState(person.id, "idle");
+      setTrayPeople((list) => list.filter((q) => q.id !== person.id));
       const msg = e?.status === 402 ? "You're out of credits for this. Contacting someone costs 8 credits." : e?.message || "Try again.";
       toast({ title: "Couldn't contact them", description: msg, variant: "destructive" });
     }
@@ -329,6 +357,21 @@ const FindPage: React.FC = () => {
     setDismissed((d) => new Set(d).add(person.id));
     void apiService.sendRankerFeedback({ candidateId: person.id, signal: "left", deckId: person.deckId, rank: person.rank }).catch(() => {});
   };
+
+  // Dev only: /find?previewContact=1 puts the first three cards in the
+  // finding / writing / drafted states so the UI can be checked without
+  // spending credits or creating real drafts.
+  const previewContact = import.meta.env.DEV && searchParams.get("previewContact") === "1";
+  const previewPeople = results ?? recommendedPeople;
+  const previewReady = previewContact && previewPeople.length >= 3;
+  useEffect(() => {
+    if (!previewReady) return;
+    const [a, b, c] = previewPeople;
+    setContactStates((m) => ({ ...m, [a.id]: "finding", [b.id]: "working", [c.id]: "drafted" }));
+    setDraftUrls((m) => ({ ...m, [c.id]: "https://mail.google.com/mail/u/0/#drafts" }));
+    setTrayPeople([a, b, c]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewReady]);
 
   // ── Render ──────────────────────────────────────────────────────────────
   if (schoolLoaded && !userUniversity && !universityOptOut && user?.uid) {
@@ -347,6 +390,7 @@ const FindPage: React.FC = () => {
 
   const inSearch = results !== null || searching;
   const people = inSearch ? results ?? [] : recommendedPeople;
+
 
   return (
     <SidebarProvider>
@@ -468,7 +512,9 @@ const FindPage: React.FC = () => {
                       key={`${p.source}-${p.id}`}
                       person={p}
                       featured={featured}
-                      contactState={contactStates[p.id] ?? "idle"}
+                      contactState={stateFor(p)}
+                      contactHref={contactHrefFor(p)}
+                      emailHref={emailHrefFor(p)}
                       onContact={() => contact(p)}
                       onInfo={() => setInfoPerson(p)}
                       onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
@@ -535,9 +581,15 @@ const FindPage: React.FC = () => {
 
       <PersonInfoDialog
         person={infoPerson}
-        contactState={infoPerson ? contactStates[infoPerson.id] ?? "idle" : "idle"}
+        contactState={infoPerson ? stateFor(infoPerson) : "idle"}
         onContact={() => infoPerson && contact(infoPerson)}
         onClose={() => setInfoPerson(null)}
+      />
+      <ContactProgressTray
+        items={trayPeople.map((p): TrayItem => ({
+          person: p, state: stateFor(p), contactHref: contactHrefFor(p), emailHref: emailHrefFor(p),
+        }))}
+        onDismiss={(id) => setTrayPeople((list) => list.filter((q) => q.id !== id))}
       />
     </SidebarProvider>
   );

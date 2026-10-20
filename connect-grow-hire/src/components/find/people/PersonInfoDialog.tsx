@@ -95,7 +95,7 @@ export function PersonInfoDialog({ person, contactState, onContact, onClose }: P
                   disabled={person.source === "sample" || contactState !== "idle"}
                   className="h-9 rounded-lg bg-[var(--accent,#4A60A8)] px-5 text-[13px] font-medium text-white disabled:opacity-50"
                 >
-                  {contactState === "working" ? "Drafting…" : contactState === "no_email" ? "No email found" : "Contact"}
+                  {contactState === "finding" ? "Finding email…" : contactState === "working" ? "Drafting…" : contactState === "no_email" ? "No email found" : "Contact"}
                 </button>
               )}
             </div>
