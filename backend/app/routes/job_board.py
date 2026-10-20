@@ -7800,6 +7800,17 @@ def _check_user_rate_limit(user_id: str, scope: str, limit_str: str) -> bool:
         return True
 
 
+def _feed_warehouse(people: list, tag: str) -> None:
+    """Every recruiter / hiring manager / employee a search turns up becomes
+    a permanent warehouse row, same as People search (flag-gated by
+    ENABLE_FIRM_CACHE_WRITE, async). Never breaks the search."""
+    try:
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        cache_pdl_contacts(people or [], shape="app", async_write=True)
+    except Exception:
+        logger.warning(f"[{tag}] warehouse feed failed")
+
+
 @job_board_bp.route("/find-recruiter", methods=["POST"])
 @require_firebase_auth
 @require_tier(['pro', 'elite'])
@@ -8032,6 +8043,7 @@ def find_recruiter_endpoint():
         all_recruiters = result.get("recruiters", [])
         all_emails = result.get("emails", [])
         total_found = result.get("total_found", 0)
+        _feed_warehouse(all_recruiters, "FindRecruiter")
         # Results are already limited to max_results_to_fetch, but we still need to respect credits
         affordable_recruiters = all_recruiters[:max_affordable]
         
@@ -8594,6 +8606,7 @@ def find_employee_endpoint():
         all_people = result.get("recruiters", [])
         all_emails = result.get("emails", [])
         total_found = result.get("total_found", 0)
+        _feed_warehouse(all_people, "FindEmployee")
         affordable_people = all_people[:max_affordable]
 
         affordable_emails = []
@@ -9078,6 +9091,7 @@ def find_hiring_manager_endpoint():
         all_hiring_managers = result.get("hiringManagers", [])
         all_emails = result.get("emails", [])
         total_found = result.get("total_found", 0)
+        _feed_warehouse(all_hiring_managers, "FindHiringManager")
         
         # Results are already limited to max_results_to_fetch, but we still need to respect credits
         affordable_managers = all_hiring_managers[:max_affordable]
