@@ -119,7 +119,7 @@ LAMBDA_ROLE_FAMILY = 0.5           # squared penalty per repeat role family
 V1_PERCENT_ENV = "PERSON_RANKER_V1_PERCENT"
 V1_PERCENT_DEFAULT = 50
 
-TARGET_FIRM_POINTS   = 12   # × source strength; firms from loops/saved jobs
+TARGET_FIRM_POINTS   = 12   # × source strength; declared firms and saved jobs
 TARGET_ROLE_POINTS   = 10   # title matches a role the student is hunting
 STAGE_FIT_POINTS     = 6    # the right kind of person for their year
 COMPANY_AFFINITY_CAP = 12   # firms that already turned into replies/meetings
@@ -219,8 +219,8 @@ def rank_people_for_user(
         rprofile = load_ranking_profile(uid, db, user_ctx["profile"])
         user_ctx["ranking_profile"] = rprofile
         if not company and rprofile["targets"]:
-            # Loop briefs and saved jobs name firms too, and most students
-            # never fill dreamCompanies in Settings. Source from all of them.
+            # Saved jobs name firms too, and most students never fill
+            # dreamCompanies in Settings. Source from both.
             user_ctx["dream_company_names"] = [t["name"] for t in rprofile["targets"].values()]
             user_ctx["dream_company_slugs"] = list(rprofile["targets"])
 

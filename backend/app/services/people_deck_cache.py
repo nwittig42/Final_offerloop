@@ -14,8 +14,8 @@ version:
     acted on sink a little each time, so each new visit leads with people
     they haven't seen. "Load more" (?exclude=) walks further down the list.
   * The list rebuilds itself, while the old one keeps serving, when it is
-    a day old, when the profile that built it changed, when a Loop or saved
-    job changes the targets, or when the student's ranker arm changes.
+    a day old, when the profile that built it changed, when a saved job
+    changes the targets, or when the student's ranker arm changes.
 
 Only the general deck is saved. Company / role / focus decks stay live:
 they are narrow, cheap, and may need a dig.

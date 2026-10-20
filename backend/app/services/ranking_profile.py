@@ -4,7 +4,6 @@ people ranker scores against (OFF-41).
 The deck used to read two fields, dreamCompanies and academics.school.
 Students tell us far more than that, just not in those two fields:
 
-  * Loops briefs name firms and roles outright ("Goldman, JPM, analyst").
   * Saved jobs name firms they are applying to.
   * Settings holds preferred roles and grad year.
   * Their own pipeline says which firms and role families actually turned
@@ -33,11 +32,10 @@ logger = logging.getLogger(__name__)
 
 # ── Tunables ──────────────────────────────────────────────────────────
 
-# How strongly each source says "this firm is a target". Declared and Loop
-# targets are the student's own words; a saved job is a softer signal.
+# How strongly each source says "this firm is a target". Declared targets
+# are the student's own words; a saved job is a softer signal.
 TARGET_STRENGTH = {
     "declared": 1.0,
-    "loop":     1.0,
     "saved_job": 0.5,
 }
 MAX_TARGET_FIRMS = 10          # bounds the per-deck Firestore fan-out
@@ -63,7 +61,6 @@ AFFINITY_HALF_LIFE_DAYS = 60.0
 # A firm becomes a negative after this many passes with no positive signal.
 NEGATIVE_MIN_PASSES = 3
 
-MAX_LOOPS = 20
 MAX_SAVED_JOBS = 50
 MAX_PREFS = 500
 
@@ -88,7 +85,6 @@ def _names(raw) -> list[str]:
 
 def collect_targets(
     profile: dict,
-    loops: Iterable[dict] = (),
     saved_jobs: Iterable[dict] = (),
 ) -> dict:
     """Target firms keyed by company slug.
@@ -116,11 +112,6 @@ def collect_targets(
     goals = profile.get("goals") or {}
     for name in _names(goals.get("dreamCompanies") or profile.get("dreamCompanies")):
         _add(name, "declared")
-    for loop in loops:
-        if (loop.get("status") or "") == "done":
-            continue
-        for name in _names((loop.get("briefParsed") or {}).get("companies")):
-            _add(name, "loop")
     for job in saved_jobs:
         name = job.get("company")
         if isinstance(name, dict):
@@ -129,7 +120,7 @@ def collect_targets(
             _add(str(name).strip(), "saved_job")
 
     # Every firm the student declared stays; the cap only trims the
-    # inferred ones (Loops, saved jobs) so the deck never loses a target
+    # inferred ones (saved jobs) so the deck never loses a target
     # it used to read.
     ordered = sorted(targets.items(), key=lambda kv: -kv[1]["strength"])
     declared = [kv for kv in ordered if "declared" in kv[1]["sources"]]
@@ -138,16 +129,12 @@ def collect_targets(
     return dict(declared + inferred[:room])
 
 
-def collect_target_roles(profile: dict, loops: Iterable[dict] = ()) -> list[str]:
+def collect_target_roles(profile: dict) -> list[str]:
     """Role phrases the student is hunting for, deduped, original casing."""
     goals = profile.get("goals") or {}
     raw: list[str] = []
     for key in ("targetRoles", "target_roles", "preferredJobRolesOrTitles", "preferredJobRole"):
         raw += _names(goals.get(key) or profile.get(key))
-    for loop in loops:
-        if (loop.get("status") or "") == "done":
-            continue
-        raw += _names((loop.get("briefParsed") or {}).get("roles"))
     seen: set[str] = set()
     out: list[str] = []
     for r in raw:
@@ -236,13 +223,11 @@ def negatives_from_prefs(prefs: Iterable[dict], positive_companies: Iterable[str
 def build_ranking_profile(
     profile: dict,
     *,
-    loops: Iterable[dict] = (),
     saved_jobs: Iterable[dict] = (),
     contacts: Iterable[dict] = (),
     prefs: Iterable[dict] = (),
     now: Optional[datetime] = None,
 ) -> dict:
-    loops = list(loops)
     contacts = list(contacts)
     school = get_user_school(profile) or ""
     school_slug = slugify_school(school) if school else ""
@@ -250,8 +235,8 @@ def build_ranking_profile(
     return {
         "school":            school,
         "school_slugs":      [school_slug] if school_slug else [],
-        "targets":           collect_targets(profile, loops, saved_jobs),
-        "target_roles":      collect_target_roles(profile, loops),
+        "targets":           collect_targets(profile, saved_jobs),
+        "target_roles":      collect_target_roles(profile),
         "stage":             recruiting_stage(profile, now=now),
         "company_affinity":  company_aff,
         "family_affinity":   family_aff,
@@ -275,30 +260,29 @@ def _stream(query, limit: int) -> list[dict]:
 
 
 def load_ranking_profile(uid: str, db, profile: dict, contacts: Optional[list] = None) -> dict:
-    """Read the student's loops, saved jobs, swipes (and contacts unless
+    """Read the student's saved jobs, swipes (and contacts unless
     the caller already streamed them) and build the profile. Never raises."""
     try:
         from concurrent.futures import ThreadPoolExecutor
         user_ref = db.collection("users").document(uid)
         reads = {
-            "loops":  (user_ref.collection("loops"), MAX_LOOPS),
             "saved":  (user_ref.collection("savedJobs"), MAX_SAVED_JOBS),
             "prefs":  (user_ref.collection("peoplePreferences"), MAX_PREFS),
         }
         if contacts is None:
             reads["contacts"] = (user_ref.collection("contacts"), 2000)
-        # Parallel so the deck pays one round trip, not four.
+        # Parallel so the deck pays one round trip, not three.
         with ThreadPoolExecutor(max_workers=len(reads)) as pool:
             futures = {k: pool.submit(_stream, q, n) for k, (q, n) in reads.items()}
             got = {k: f.result() for k, f in futures.items()}
-        loops, saved_jobs, prefs = got["loops"], got["saved"], got["prefs"]
+        saved_jobs, prefs = got["saved"], got["prefs"]
         contacts = got.get("contacts", contacts)
     except Exception as exc:
         logger.warning("ranking_profile: load failed uid=%s: %s", uid, exc)
         return empty_ranking_profile(profile)
     try:
         return build_ranking_profile(
-            profile, loops=loops, saved_jobs=saved_jobs, contacts=contacts, prefs=prefs,
+            profile, saved_jobs=saved_jobs, contacts=contacts, prefs=prefs,
         )
     except Exception:
         logger.exception("ranking_profile: build failed uid=%s", uid)

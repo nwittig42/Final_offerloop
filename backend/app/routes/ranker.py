@@ -313,7 +313,7 @@ def get_ranked_candidates():
             from app.services.person_ranker import _load_user_context
             _ctx = _load_user_context(uid, db) or {}
             # A company deck digs that company and nothing else. On v1 the
-            # targets also come from Loops and saved jobs.
+            # targets also come from saved jobs.
             _firms = [slugify_company(company)] if company else (_ctx.get("dream_company_slugs") or [])
             if not company and ranker_variant(uid) == "v1":
                 from app.services.ranking_profile import load_ranking_profile

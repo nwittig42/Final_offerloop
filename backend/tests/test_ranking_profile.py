@@ -13,41 +13,39 @@ def _iso(days_ago: float) -> str:
 # ── targets ──────────────────────────────────────────────────────────
 
 
-def test_targets_merge_declared_loops_and_saved_jobs():
+def test_targets_merge_declared_and_saved_jobs():
     profile = {"dreamCompanies": ["Goldman Sachs"]}
-    loops = [{"status": "running", "briefParsed": {"companies": ["JPMorgan", "Goldman Sachs"]}}]
-    saved = [{"company": "Evercore"}]
-    t = rp.collect_targets(profile, loops, saved)
-    assert list(t) == ["goldman_sachs", "jpmorgan", "evercore"]
-    assert t["goldman_sachs"]["sources"] == ["declared", "loop"]
+    saved = [{"company": "Evercore"}, {"company": "Goldman Sachs"}]
+    t = rp.collect_targets(profile, saved)
+    assert list(t) == ["goldman_sachs", "evercore"]
+    assert t["goldman_sachs"]["sources"] == ["declared", "saved_job"]
     assert t["evercore"]["strength"] == rp.TARGET_STRENGTH["saved_job"]
 
 
-def test_targets_read_goals_dicts_and_skip_finished_loops():
+def test_targets_read_goals_dicts():
     profile = {"goals": {"dreamCompanies": [{"name": "McKinsey & Company"}]}}
-    loops = [{"status": "done", "briefParsed": {"companies": ["Bain"]}}]
-    t = rp.collect_targets(profile, loops)
+    t = rp.collect_targets(profile)
     assert list(t) == ["mckinsey"]
 
 
 def test_inferred_targets_are_capped():
-    loops = [{"status": "running", "briefParsed": {"companies": [f"Firm {i}" for i in range(30)]}}]
-    assert len(rp.collect_targets({}, loops)) == rp.MAX_TARGET_FIRMS
+    saved = [{"company": f"Firm {i}"} for i in range(30)]
+    assert len(rp.collect_targets({}, saved)) == rp.MAX_TARGET_FIRMS
 
 
 def test_saved_job_never_outranks_a_declared_firm():
     saved = [{"company": "Stripe"}]
-    t = rp.collect_targets({"dreamCompanies": ["Stripe"]}, (), saved)
+    t = rp.collect_targets({"dreamCompanies": ["Stripe"]}, saved)
     assert t["stripe"]["strength"] == 1.0
 
 
 # ── roles + stage ────────────────────────────────────────────────────
 
 
-def test_target_roles_from_settings_and_loops_deduped():
-    profile = {"preferredJobRolesOrTitles": ["Analyst", "Product Manager"]}
-    loops = [{"status": "idle", "briefParsed": {"roles": ["analyst", "Associate"]}}]
-    assert rp.collect_target_roles(profile, loops) == ["Analyst", "Product Manager", "Associate"]
+def test_target_roles_from_settings_deduped():
+    profile = {"goals": {"targetRoles": ["Analyst", "Product Manager"]},
+               "preferredJobRolesOrTitles": ["analyst", "Associate"]}
+    assert rp.collect_target_roles(profile) == ["Analyst", "Product Manager", "Associate"]
 
 
 def test_stage_from_grad_year():

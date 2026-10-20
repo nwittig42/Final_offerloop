@@ -60,10 +60,9 @@ def test_default_split_puts_some_users_in_each_arm(monkeypatch):
 # ── v1 scoring ───────────────────────────────────────────────────────
 
 
-def test_v1_floats_a_loop_target_firm(flow, monkeypatch):
+def test_v1_floats_a_target_firm(flow, monkeypatch):
     monkeypatch.setenv(pr.V1_PERCENT_ENV, "100")
-    flow["profile"] = rp.build_ranking_profile(
-        {}, loops=[{"status": "running", "briefParsed": {"companies": ["Evercore"]}}])
+    flow["profile"] = rp.build_ranking_profile({"dreamCompanies": ["Evercore"]})
     flow["cands"] = [_cand("Ann", "Google"), _cand("Bob", "Evercore")]
     feats: dict = {}
     out = pr.rank_people_for_user("u1", db=object(), limit=10, features_out=feats)
@@ -74,12 +73,11 @@ def test_v1_floats_a_loop_target_firm(flow, monkeypatch):
     assert [o["score"] for o in out] == [20, 20]
 
 
-def test_v1_sources_from_loop_targets(flow, monkeypatch):
-    """A student with no dreamCompanies but a Loop gets that firm's deck."""
+def test_v1_sources_from_saved_job_targets(flow, monkeypatch):
+    """A student with no dreamCompanies but a saved job gets that firm's deck."""
     monkeypatch.setenv(pr.V1_PERCENT_ENV, "100")
     flow["ctx"] = _ctx(slugs=())
-    flow["profile"] = rp.build_ranking_profile(
-        {}, loops=[{"status": "idle", "briefParsed": {"companies": ["Lazard"]}}])
+    flow["profile"] = rp.build_ranking_profile({}, saved_jobs=[{"company": "Lazard"}])
     seen = {}
     def fake_fetch(user_ctx, db, **kw):
         seen["slugs"] = list(user_ctx["dream_company_slugs"])
@@ -126,8 +124,7 @@ def test_declared_dream_firm_is_not_double_paid(flow, monkeypatch):
 
 def test_v0_ignores_the_profile(flow, monkeypatch):
     monkeypatch.setenv(pr.V1_PERCENT_ENV, "0")
-    flow["profile"] = rp.build_ranking_profile(
-        {}, loops=[{"status": "running", "briefParsed": {"companies": ["Evercore"]}}])
+    flow["profile"] = rp.build_ranking_profile({"dreamCompanies": ["Evercore"]})
     flow["cands"] = [_cand("Ann", "Google"), _cand("Bob", "Evercore")]
     feats: dict = {}
     out = pr.rank_people_for_user("u1", db=object(), limit=10, features_out=feats)
@@ -194,9 +191,9 @@ def test_a_deep_firm_still_fills_the_pool_when_others_are_thin():
 
 def test_declared_firms_survive_the_target_cap():
     profile = {"dreamCompanies": [f"Firm {i}" for i in range(14)]}
-    loops = [{"status": "running", "briefParsed": {"companies": ["Loop Co"]}}]
-    t = rp.collect_targets(profile, loops)
-    assert len(t) == 14 and "loop_co" not in t
+    saved = [{"company": "Saved Co"}]
+    t = rp.collect_targets(profile, saved)
+    assert len(t) == 14 and "saved_co" not in t
 
 
 # ── deck route helper ────────────────────────────────────────────────
