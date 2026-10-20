@@ -196,7 +196,7 @@ When the posting names no team, the leader slot falls back to the head of that f
 - **Frontend is in scope:** button rename, the panel above, per-role drafts.
 - **Credits:** unchanged for now, 5 credits per person shown, charged to each student who views them, even when the result was saved by someone else's earlier click. Nick to confirm.
 - **Spend cap per first click:** about $1 of vendor spend; stop early when the warehouse fills the slots.
-- **Fantastic.jobs:** the 2-hour pipeline is switched to skip it until Nick confirms the subscription; the test is capped at about $25. Part B does not depend on it.
+- **Fantastic.jobs:** the 2-hour pipeline already skips it (`full` mode passes `skip_fantastic=True`), so nothing changes there. The test is a capped probe (~$25) run only after Nick confirms the subscription. Part B does not depend on it.
 - **Sid's branch:** not pushed as of 2026-10-20. Build on main's email code as is.
 
 ## Left to the builder
