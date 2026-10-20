@@ -310,7 +310,6 @@ def get_ranked_candidates():
         try:
             from app.services import coresignal_client
             from app.services.firm_cache.writer import cache_pdl_contacts
-            from app.services.person_ranker import _load_user_context
             _ctx = _load_user_context(uid, db) or {}
             # A company deck digs that company and nothing else. On v1 the
             # targets also come from saved jobs.
