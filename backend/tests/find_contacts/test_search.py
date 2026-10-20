@@ -160,3 +160,28 @@ def test_vendor_errors_do_not_crash(m):
     m["fullenrich"].side_effect = RuntimeError("boom")
     out = find_slot_candidates(FACTS, SPECS, Budget())
     assert out == {"leader": [], "process": [], "recruiter": []}
+
+
+def test_fullenrich_abbreviated_title_fills_single_empty_slot(m):
+    m["warehouse"].side_effect = lambda parsed, n, **kw: (
+        [] if parsed["title_variations"] == ["Director"] else
+        [_c(parsed["title_variations"][0].replace(" ", ""), "X", parsed["title_variations"][0])], 0, [], {})
+    m["fullenrich"].return_value = ([_c("Vee", "Pee", "VP, Payments")], 0, [], {})
+    out = find_slot_candidates(FACTS, SPECS, Budget())
+    assert m["fullenrich"].call_args.args[0]["title_variations"] == ["Director"]
+    assert out["process"][0]["FirstName"] == "Vee"
+    assert out["process"][0]["_found_by"] == "fullenrich"
+
+
+def test_fullenrich_unmatched_fill_empty_slots_in_order(m):
+    m["fullenrich"].return_value = ([
+        _c("Odd", "One", "MD – Coverage"),
+        _c("Rec", "Ruiter", "Campus Recruiter"),
+        _c("Odd", "Two", "Payments Lead"),
+    ], 0, [], {})
+    out = find_slot_candidates(FACTS, SPECS, Budget())
+    m["fullenrich"].assert_called_once()
+    assert out["recruiter"][0]["FirstName"] == "Rec"  # title match wins its slot
+    assert out["leader"][0]["LastName"] == "One"      # leftovers in slot order
+    assert out["process"][0]["LastName"] == "Two"
+    assert all(out[s][0]["_found_by"] == "fullenrich" for s in SPECS)

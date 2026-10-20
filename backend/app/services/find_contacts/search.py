@@ -151,10 +151,20 @@ def find_slot_candidates(facts: dict, specs: dict, budget: Budget) -> dict[str, 
             titles += [t for t in specs[slot].get("titles") or [] if t not in titles]
         parsed = {"companies": [{"name": company}], "title_variations": titles, "locations": []}
         result = _safe(search_contacts_from_prompt, None, parsed, FULLENRICH_MAX)
+        # Title matches first; FullEnrich titles are often abbreviated
+        # ("VP, Payments"), so leftovers then fill empty slots in slot order.
+        unmatched = []
         for contact in (result or [[]])[0]:
-            for slot in still_empty:
-                if not out[slot] and title_matches(contact.get("Title"), specs[slot].get("titles")):
-                    add(slot, [contact], "fullenrich")
-                    break
+            slot = next((s for s in still_empty if not out[s] and title_matches(
+                contact.get("Title"), specs[s].get("titles"))), None)
+            if slot:
+                add(slot, [contact], "fullenrich")
+            else:
+                unmatched.append(contact)
+        for contact in unmatched:
+            slot = next((s for s in still_empty if not out[s]), None)
+            if slot is None:
+                break
+            add(slot, [contact], "fullenrich")
 
     return out
