@@ -114,6 +114,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(service, "read_posting", read_posting)
     monkeypatch.setattr(service, "find_slot_candidates", find_slot_candidates)
     monkeypatch.setattr(service, "find_work_email", find_work_email)
+    monkeypatch.setattr(service, "fullenrich_enabled", lambda db: True)
     return seen
 
 
@@ -328,8 +329,41 @@ def test_reveal_email_miss_saved_and_not_retried(db, calls, monkeypatch):
     assert service.reveal_email(db, "j1", key) is None
     person = db.store[RESULT]["people"][0]
     assert "email" not in person and person["email_status"] == "not_found"
+    checked = person["email_checked_at"]
+    assert abs(datetime.now(timezone.utc) - checked) < timedelta(seconds=5)
     assert service.reveal_email(db, "j1", key) is None
     assert len(misses) == 1
+    assert "email_checked_at" not in service.find_contacts_for_job(db, "j1", None)["people"][0]
+
+
+def test_reveal_email_disabled_saves_nothing(db, calls, monkeypatch):
+    db.store[RESULT] = _saved_doc()
+    monkeypatch.setattr(service, "fullenrich_enabled", lambda db: False)
+    assert service.reveal_email(db, "j1", "https://linkedin.com/in/ann") is None
+    assert calls["email"] == []
+    person = db.store[RESULT]["people"][0]
+    assert "email_status" not in person and "email_checked_at" not in person
+
+
+def test_reveal_email_recent_miss_not_retried(db, calls):
+    doc = _saved_doc()
+    doc["people"][0].update(email_status="not_found",
+                            email_checked_at=datetime.now(timezone.utc) - timedelta(days=6))
+    db.store[RESULT] = doc
+    assert service.reveal_email(db, "j1", "https://linkedin.com/in/ann") is None
+    assert calls["email"] == []
+
+
+def test_reveal_email_old_miss_retried(db, calls):
+    doc = _saved_doc()
+    doc["people"][0].update(email_status="not_found",
+                            email_checked_at=datetime.now(timezone.utc) - timedelta(days=8))
+    db.store[RESULT] = doc
+    key = "https://linkedin.com/in/ann"
+    assert service.reveal_email(db, "j1", key) == {"email": "ann.lee@gs.com", "status": "valid"}
+    assert len(calls["email"]) == 1
+    person = db.store[RESULT]["people"][0]
+    assert person["email"] == "ann.lee@gs.com" and person["email_status"] == "valid"
 
 
 def test_posting_facts_not_written_to_deleted_job(db, calls, monkeypatch):

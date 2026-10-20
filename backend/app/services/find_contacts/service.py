@@ -20,13 +20,15 @@ from app.services.find_contacts.playbooks import company_size, slot_specs
 from app.services.find_contacts.posting_reader import read_posting
 from app.services.find_contacts.scoring import fill_slots, mark_alumni
 from app.services.find_contacts.search import Budget, find_slot_candidates
+from app.services.fullenrich_client import enabled as fullenrich_enabled
 from app.services.fullenrich_client import find_work_email
 
 logger = logging.getLogger(__name__)
 
 LOCK_SECONDS = 180
 NOT_FOUND = "not_found"
-_PRIVATE_FIELDS = ("alumni", "email", "email_status")
+MISS_RETRY_AFTER = timedelta(days=7)
+_PRIVATE_FIELDS = ("alumni", "email", "email_status", "email_checked_at")
 
 
 def _result_ref(db, job_id: str):
@@ -190,7 +192,11 @@ def reveal_email(db, job_id: str, person_key: str) -> dict | None:
     if person.get("email"):
         return {"email": person["email"], "status": person.get("email_status") or ""}
     if person.get("email_status") == NOT_FOUND:
-        return None
+        checked = _as_utc(person.get("email_checked_at"))
+        if checked and datetime.now(timezone.utc) - checked < MISS_RETRY_AFTER:
+            return None  # recent miss; older ones are retried
+    if not fullenrich_enabled(db):
+        return None  # no key or spend cap reached: not a verdict, save nothing
 
     found = find_work_email(
         first_name=person.get("first_name") or "",
@@ -204,7 +210,7 @@ def reveal_email(db, job_id: str, person_key: str) -> dict | None:
         fields = {"email": result["email"], "email_status": result["status"]}
     else:
         result = None  # save the miss so later clicks don't re-spend
-        fields = {"email_status": NOT_FOUND}
+        fields = {"email_status": NOT_FOUND, "email_checked_at": datetime.now(timezone.utc)}
 
     # Re-read inside a transaction so concurrent reveals of other people
     # in the same doc are not overwritten.
