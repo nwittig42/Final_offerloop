@@ -356,14 +356,29 @@ def sync_board_jobs(
 _DIRECT_ATS_PREFIXES = ("direct_greenhouse_", "direct_lever_", "direct_ashby_")
 
 
-def _ttl_deletable(doc) -> bool:
+def _ats_board(doc_id: str) -> Optional[tuple[str, str]]:
+    """(platform, slug) for a direct-ATS job id, else None."""
+    for prefix in _DIRECT_ATS_PREFIXES:
+        if doc_id.startswith(prefix):
+            platform = prefix[len("direct_"):-1]
+            slug = doc_id[len(prefix):].rsplit("_", 1)[0]
+            return platform, slug
+    return None
+
+
+def _ttl_deletable(doc, board_state) -> bool:
     """Direct-ATS jobs are written once and never rewritten on unchanged
     boards, so their expires_at lapses while they are still posted (and
-    kept_job_ids stops them ever being re-added). Their liveness comes from
-    sync_board_jobs' expired=True; delete them only then."""
-    if doc.id.startswith(_DIRECT_ATS_PREFIXES):
-        return (doc.to_dict() or {}).get("expired") is True
-    return True
+    kept_job_ids stops them ever being re-added). Delete them only once
+    sync_board_jobs marked them expired, or their board is no longer
+    crawled (dormant or no state), since then nothing would expire them."""
+    board = _ats_board(doc.id)
+    if board is None:
+        return True
+    if (doc.to_dict() or {}).get("expired") is True:
+        return True
+    state = board_state(*board)
+    return state is None or crawl_state.is_dormant(state)
 
 
 def delete_expired_jobs() -> int:
@@ -373,9 +388,17 @@ def delete_expired_jobs() -> int:
     if not db:
         raise RuntimeError("Firestore DB not initialized")
 
+    states: dict = {}
+
+    def board_state(platform: str, slug: str):
+        key = (platform, slug)
+        if key not in states:
+            states[key] = crawl_state.read_state(platform, slug)
+        return states[key]
+
     now = datetime.now(timezone.utc)
     query = db.collection(COLLECTION).where(filter=FieldFilter("expires_at", "<", now))
-    refs = [doc.reference for doc in query.stream() if _ttl_deletable(doc)]
+    refs = [doc.reference for doc in query.stream() if _ttl_deletable(doc, board_state)]
 
     for i in range(0, len(refs), DELETE_BATCH_SIZE):
         chunk = refs[i : i + DELETE_BATCH_SIZE]
