@@ -747,21 +747,29 @@ def search_people(
 ) -> List[int]:
     """ES ids of current employees of `company` holding any of `titles`.
 
-    Every keyword must appear in the same experience's position_title.
+    Every keyword must appear in the current role's position_title or
+    department, or in the headline (bank titles are often just "Vice
+    President"; the group shows up in department or headline).
     `city` (optional) is a match_phrase on location_full.
     """
-    nested_must = _current_company_clauses(company)
-    nested_must.append({
+    def current_role(extra: Dict[str, Any]) -> Dict[str, Any]:
+        return {"nested": {"path": "experience", "query": {"bool": {
+            "must": _current_company_clauses(company) + [extra]}}}}
+
+    must: List[Dict[str, Any]] = [current_role({
         "bool": {
             "should": [{"match_phrase": {"experience.position_title": t}} for t in titles],
             "minimum_should_match": 1,
         }
-    })
+    })]
     for kw in keywords or []:
-        nested_must.append({"match_phrase": {"experience.position_title": kw}})
-    must: List[Dict[str, Any]] = [
-        {"nested": {"path": "experience", "query": {"bool": {"must": nested_must}}}}
-    ]
+        must.append({"bool": {"should": [
+            current_role({"bool": {"should": [
+                {"match_phrase": {"experience.position_title": kw}},
+                {"match_phrase": {"experience.department": kw}},
+            ], "minimum_should_match": 1}}),
+            {"match_phrase": {"headline": kw}},
+        ], "minimum_should_match": 1}})
     if city:
         must.append({"match_phrase": {"location_full": city}})
     return _search_ids({"query": {"bool": {"must": must}}}, page_size=page_size)

@@ -22,6 +22,17 @@ def _titles(titles):
     }}
 
 
+def _keyword(kw):
+    # Team word in the current role's title or department, or in the headline.
+    return {"bool": {"should": [
+        _nested([{"bool": {"should": [
+            {"match_phrase": {"experience.position_title": kw}},
+            {"match_phrase": {"experience.department": kw}},
+        ], "minimum_should_match": 1}}]),
+        {"match_phrase": {"headline": kw}},
+    ], "minimum_should_match": 1}}
+
+
 def test_titles_only():
     with patch.object(cc, "_search_ids", return_value=[1, 2]) as s:
         out = cc.search_people("Stripe", ["Recruiter", "Technical Recruiter"])
@@ -36,11 +47,9 @@ def test_titles_and_keywords():
     with patch.object(cc, "_search_ids", return_value=[]) as s:
         cc.search_people("Stripe", ["Director"], keywords=["engineering", "payments"], page_size=5)
     assert s.call_args.args[0] == {"query": {"bool": {"must": [
-        _nested([
-            _titles(["Director"]),
-            {"match_phrase": {"experience.position_title": "engineering"}},
-            {"match_phrase": {"experience.position_title": "payments"}},
-        ])
+        _nested([_titles(["Director"])]),
+        _keyword("engineering"),
+        _keyword("payments"),
     ]}}}
 
 

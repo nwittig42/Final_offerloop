@@ -31,14 +31,15 @@ def _large_employers():
 
 
 def company_size(facts, job):
+    """Startup only when we know the company is small; unknown size counts as large."""
     if _canonicalize(facts.get("company")) in _large_employers():
         return "large"
     employees = (job or {}).get("linkedin_org_employees")
-    if isinstance(employees, (int, float)) and employees >= LARGE_EMPLOYEE_THRESHOLD:
-        return "large"
-    if facts.get("size_hint") == "large":
-        return "large"
-    return "startup"
+    if isinstance(employees, (int, float)) and not isinstance(employees, bool) and employees > 0:
+        return "large" if employees >= LARGE_EMPLOYEE_THRESHOLD else "startup"
+    if facts.get("size_hint") == "startup":
+        return "startup"
+    return "large"
 
 
 _STOP_WORDS = {"of", "the", "and", "&", "for", "in", "at", "a", "an"}

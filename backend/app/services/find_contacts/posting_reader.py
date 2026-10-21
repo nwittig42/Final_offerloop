@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from app.services.openai_client import get_openai_client
@@ -31,7 +32,7 @@ TEAM_SOURCES = ("job title", "department field", "description")
 SYSTEM_PROMPT = """You read a job posting and extract facts used to find the people behind it.
 
 Return STRICT JSON with exactly these keys:
-- team: the specific team or group the role sits in, as a short name ("Investment Banking", "Office of the CTO", "Payments Risk"). Empty string if the posting does not say. Do not invent one and do not just repeat the company name.
+- team: the specific team or group the role sits in, as a short name ("Investment Banking", "Office of the CTO", "Payments Risk"). Empty string if the posting does not say. Do not invent one and do not just repeat the company name. A department that only names the hiring program or HR ("University Recruiting", "Early Careers", "Internships") is not a team.
 - team_source: where you found the team: "job title", "department field", or "description". Empty string if team is empty.
 - function: one of ib, sales_trading, asset_management, consulting, software, product, data, marketing, strategy, finance, operations, other
 - office_city: the city the role is based in, or null if remote, hybrid, multiple locations, or unclear
@@ -59,8 +60,28 @@ def _is_internship(job: dict, level: str) -> bool:
     return "intern" in haystack
 
 
+# Department values that describe the hiring program or HR, not a team.
+_NOT_A_TEAM = re.compile(
+    r"recruit|campus|early.?career|early talent|university|intern|student|graduate|"
+    r"\bprograms?\b|talent|human resources|\bhr\b|people ops|^general$|^other$|^n/?a$", re.I)
+
+
+def _names_a_team(value: str, company: str) -> bool:
+    if not value or _NOT_A_TEAM.search(value):
+        return False
+    if sum(ch.isdigit() for ch in value) >= 3:  # "R0123456", "1040 - Corp"
+        return False
+    return value.lower() != (company or "").strip().lower()
+
+
 def _structured_team(job: dict) -> str:
-    return _clean(job.get("department")) or _clean(job.get("team"))
+    """department or team field, only when it names a real team."""
+    company = _clean(job.get("company"))
+    for field in ("department", "team"):
+        value = _clean(job.get(field))
+        if _names_a_team(value, company):
+            return value
+    return ""
 
 
 def _fallback(job: dict) -> dict:
@@ -136,14 +157,19 @@ def read_posting(job: dict) -> dict:
         logger.exception("Posting reader: LLM call failed, raw=%s", raw[:200])
         return _fallback(job)
 
+    # A team named in the job title is the strongest clue, then a department
+    # field that names a team, then whatever the description says.
+    llm_team = _clean(parsed.get("team"))
+    llm_source = _clean(parsed.get("team_source"))
+    if not llm_team or llm_source not in TEAM_SOURCES:
+        llm_team, llm_source = "", ""
     structured = _structured_team(job)
-    if structured:
+    if llm_source == "job title":
+        team, team_source = llm_team, llm_source
+    elif structured:
         team, team_source = structured, "department field"
     else:
-        team = _clean(parsed.get("team"))
-        team_source = _clean(parsed.get("team_source"))
-        if not team or team_source not in TEAM_SOURCES:
-            team, team_source = "", ""
+        team, team_source = llm_team, llm_source
 
     function = _clean(parsed.get("function")).lower()
     if function not in FUNCTIONS:

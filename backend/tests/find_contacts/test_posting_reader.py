@@ -27,13 +27,33 @@ def _read(job, **client_kwargs):
         return read_posting(job), client
 
 
-def test_department_field_wins():
+def test_department_field_beats_description():
     job = {"title": "Analyst", "company": "Acme", "department": "Investment Banking"}
     out, _ = _read(job, payload={"team": "Something Else", "team_source": "description", "function": "ib"})
     assert out["team"] == "Investment Banking"
     assert out["team_source"] == "department field"
     assert out["function"] == "ib"
     assert set(out) == KEYS
+
+
+def test_team_in_title_beats_department_field():
+    job = {"title": "OCTO Strategy Intern", "company": "Acme", "department": "Technology"}
+    out, _ = _read(job, payload={"team": "Office of the CTO", "team_source": "job title"})
+    assert (out["team"], out["team_source"]) == ("Office of the CTO", "job title")
+
+
+def test_recruiting_department_is_not_a_team():
+    for dept in ("University Recruiting", "Early Careers", "Campus Programs", "Internships",
+                 "Students & Graduates", "Human Resources", "R0123456", "1040 - Corp", "Acme"):
+        job = {"title": "Summer Analyst", "company": "Acme", "department": dept}
+        out, _ = _read(job, payload={"team": "Global Markets", "team_source": "description"})
+        assert (out["team"], out["team_source"]) == ("Global Markets", "description"), dept
+
+
+def test_recruiting_department_ignored_without_llm():
+    job = {"title": "Summer Analyst", "company": "Acme", "department": "Early Careers"}
+    out, _ = _read(job, raises=RuntimeError("boom"))
+    assert out["team"] == "" and out["team_source"] == ""
 
 
 def test_team_from_title():

@@ -56,7 +56,8 @@ def test_fill_slots_output_shape_and_labels():
     assert set(first) == {"slot", "label", "name", "first_name", "last_name", "title", "company", "city", "linkedin",
                           "photo", "alumni", "college", "found_by", "person_key"}
     assert first["first_name"] == "Ann" and first["last_name"] == "Lee"
-    assert first["label"] == "Leads this team · can vouch for you"
+    # "Vice President" with no team words: we can't say they lead this team.
+    assert first["label"] == "Senior at Acme · team not confirmed"
     assert first["alumni"] is True and first["college"] == "Stanford University"
     assert first["photo"] == "p.jpg" and first["found_by"] == "warehouse"
     assert out[1]["label"] == "Named in the posting"
@@ -88,3 +89,24 @@ def test_alumni_flag_via_fill_slots():
     c = _c("Ann", "Lee", "Vice President", _found_by="warehouse", College="University of Southern California")
     out = fill_slots({"leader": [c]}, FACTS, SPECS, "USC")
     assert out[0]["alumni"] is True
+
+
+def test_label_matches_evidence():
+    by_query = _c("Ann", "Lee", "Vice President", _found_by="coresignal_r2")
+    by_title = _c("Bob", "Ray", "Director, Payments", _found_by="warehouse")
+    out = fill_slots({"leader": [by_query], "process": [by_title], "recruiter": []}, FACTS, SPECS, None)
+    assert out[0]["label"] == "Leads this team · can vouch for you"
+    assert out[1]["label"] == "Likely runs interviews"
+
+    broad_leader = _c("Cy", "Doe", "Managing Director", _found_by="coresignal_r4")
+    broad_process = _c("Di", "Fox", "Senior Manager", _found_by="fullenrich")
+    out = fill_slots({"leader": [broad_leader], "process": [broad_process]}, FACTS, SPECS, None)
+    assert out[0]["label"] == "Senior at Acme · team not confirmed"
+    assert out[1]["label"] == "Could run interviews · team not confirmed"
+
+
+def test_startup_founder_leads():
+    specs = {"leader": {"titles": ["Founder", "CEO"], "keywords": []}}
+    out = fill_slots({"leader": [_c("Ed", "Gu", "Co-Founder & CEO", _found_by="coresignal_r4")]},
+                     FACTS, specs, None)
+    assert out[0]["label"] == "Leads this team · can vouch for you"

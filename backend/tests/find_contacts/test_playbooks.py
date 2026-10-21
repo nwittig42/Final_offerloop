@@ -17,9 +17,15 @@ def test_other_large_signals():
     assert company_size(_facts(company="Tiny Co", size_hint="large"), {}) == "large"
 
 
-def test_small_unknown_is_startup():
+def test_known_small_is_startup():
     assert company_size(_facts(company="Zorblax Labs"), {"linkedin_org_employees": 40}) == "startup"
-    assert company_size(_facts(company="Zorblax Labs"), {}) == "startup"
+    assert company_size(_facts(company="Zorblax Labs", size_hint="startup"), {}) == "startup"
+
+
+def test_unknown_size_is_large():
+    # No headcount on the job and not on the list: a Fortune 500 must not get Founder/CEO.
+    assert company_size(_facts(company="Zorblax Labs"), {}) == "large"
+    assert company_size(_facts(company="Zorblax Labs", size_hint="unknown"), {"linkedin_org_employees": 0}) == "large"
 
 
 def test_ib_large_specs():

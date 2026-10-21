@@ -15,7 +15,15 @@ SLOT_LABELS = {
     "process": "Likely runs interviews",
     "recruiter": "Scheduling and logistics",
 }
+# When nothing ties the person to the team, the label says so.
+BROAD_LABELS = {
+    "leader": "Senior at {company} · team not confirmed",
+    "process": "Could run interviews · team not confirmed",
+}
 NAMED_LABEL = "Named in the posting"
+# Coresignal rounds whose query required the team words.
+TEAM_ROUNDS = {"coresignal_r1", "coresignal_r2"}
+_FOUNDER = re.compile(r"\b(co-?founder|founder|ceo|chief executive officer)\b", re.I)
 
 
 def person_key(contact: dict) -> str:
@@ -71,12 +79,32 @@ def mark_alumni(people: list[dict], student_school: str | None) -> list[dict]:
             for p in people]
 
 
-def _person(candidate: dict, slot: str) -> dict:
+def on_team(candidate: dict, slot: str, specs: dict) -> bool:
+    """True when the evidence ties this person to the posting's team."""
+    if (candidate.get("_found_by") or "") in TEAM_ROUNDS:
+        return True
+    title = (candidate.get("Title") or "").lower()
+    if any(_has_phrase(title, kw) for kw in (specs.get(slot) or {}).get("keywords") or []):
+        return True
+    # A startup's founder leads every team.
+    return slot == "leader" and bool(_FOUNDER.search(title))
+
+
+def _label(candidate: dict, slot: str, specs: dict) -> str:
+    if (candidate.get("_found_by") or "") == "named":
+        return NAMED_LABEL
+    if slot in BROAD_LABELS and not on_team(candidate, slot, specs):
+        company = candidate.get("Company") or "the company"
+        return BROAD_LABELS[slot].format(company=company)
+    return SLOT_LABELS.get(slot, "")
+
+
+def _person(candidate: dict, slot: str, specs: dict) -> dict:
     found_by = candidate.get("_found_by") or ""
     name = f"{candidate.get('FirstName') or ''} {candidate.get('LastName') or ''}".strip()
     return {
         "slot": slot,
-        "label": NAMED_LABEL if found_by == "named" else SLOT_LABELS.get(slot, ""),
+        "label": _label(candidate, slot, specs),
         "name": name,
         "first_name": candidate.get("FirstName") or "",
         "last_name": candidate.get("LastName") or "",
@@ -103,5 +131,5 @@ def fill_slots(candidates: dict, facts: dict, specs: dict,
         best = max(pool, key=lambda c: (c.get("_found_by") == "named",
                                         score(c, slot, facts, specs)))
         used.add(person_key(best))
-        people.append(_person(best, slot))
+        people.append(_person(best, slot, specs))
     return mark_alumni(people, student_school)
