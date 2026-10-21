@@ -73,7 +73,11 @@ def make_job_id(platform: str, slug: str, external_id: str) -> str:
 
 
 def crawled_hosts() -> frozenset[str]:
-    """Hostnames of every board URL in the target-platform CSVs.
+    """Hostnames of the HOT-tier target-platform boards (CSV rows whose
+    `{platform}:{slug}` is in hot_slugs.txt), i.e. the boards the scheduled
+    crawl actually visits. Simplify listings on these hosts are skipped as
+    duplicates. Cold-tier rows are excluded: they are crawled only on manual
+    dispatch, so their Simplify listings must be kept.
 
     Empty when the CSVs don't exist yet.
     """
@@ -81,7 +85,10 @@ def crawled_hosts() -> frozenset[str]:
 
     hosts: set[str] = set()
     for platform in TARGET_PLATFORMS:
+        hot = set(slug_loader.load_slugs(platform, "hot"))
         for rec in slug_loader.load_all_records(platform):
+            if rec.get("slug") not in hot:
+                continue
             host = (urlparse(rec.get("url") or "").hostname or "").lower()
             if host:
                 hosts.add(host)
