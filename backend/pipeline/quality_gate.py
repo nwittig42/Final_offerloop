@@ -182,6 +182,11 @@ def _matches_cold_allowlist(doc: dict) -> bool:
     return True
 
 
+# "Sr", "Sr.", "Snr" or "Sen." as a word. Target-board titles only; not part
+# of _SENIOR_TITLE, so legacy gating and tiering are unchanged.
+_SENIOR_ABBREV_TITLE = re.compile(r"\b(?:sr|snr)\b|\bsen\.", re.I)
+
+
 def is_candidate_title(title: str, analyst_entry: bool) -> bool:
     """True if the title reads as early-career for a direct target-employer board.
 
@@ -195,7 +200,8 @@ def is_candidate_title(title: str, analyst_entry: bool) -> bool:
         or (analyst_entry and _ANALYST_TITLE.search(title))
     ):
         return False
-    return not (_SENIOR_TITLE.search(title) or _EVENT_TITLE.search(title))
+    return not (_SENIOR_TITLE.search(title) or _SENIOR_ABBREV_TITLE.search(title)
+                or _EVENT_TITLE.search(title))
 
 
 def compute_relevance_tier(doc: dict) -> int:

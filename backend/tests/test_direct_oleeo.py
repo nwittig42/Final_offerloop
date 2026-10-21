@@ -11,6 +11,9 @@ FIX = Path(__file__).parent / "fixtures" / "direct"
 BOARD = (FIX / "oleeo_board_jefferies.html").read_text()
 CAPTCHA = (FIX / "oleeo_board_evercore.html").read_text()  # real bot-challenge response
 VACANCY = (FIX / "oleeo_vacancy_jefferies.html").read_text()
+# Real BofA campus boards (2026-10-21): vacancy/1 "Global Programs", vacancy/2 "Campus Events".
+BOFA_PROGRAMS = (FIX / "oleeo_board_bofa_campus_programs.html").read_text()
+BOFA_EVENTS = (FIX / "oleeo_board_bofa_campus_events.html").read_text()
 RECORD = {"name": "Jefferies", "slug": "jefferies", "analyst_entry": True,
           "url": "https://jefferies.tal.net/vx/lang-en-GB/mobile-0/appcentre-ext/brand-4/candidate/jobboard/vacancy/2/adv/"}
 HOST = "https://jefferies.tal.net/vx/lang-en-GB/mobile-0/appcentre-1/brand-4/candidate/so/pm/1/pl/2/opp"
@@ -170,6 +173,69 @@ def test_any_failure_raises(env, monkeypatch, case):
         _serve(env, [board], vacancy='<html><script id="wcn-page-config"></script><body>Oops</body></html>')
     elif case == "vacancy_http_error":
         env.get.side_effect = lambda url, **kw: (
-            _resp("x", status=404) if "/opp/" in url else _resp(board))
+            _resp("x", status=500) if "/opp/" in url else _resp(board))
     with pytest.raises(FetchError):
         oleeo.fetch("jefferies")
+
+
+@pytest.mark.parametrize("status", [403, 404, 410])
+def test_vacancy_404_skips_posting(env, status, caplog):
+    board = _board([(1, "Summer Analyst Program A"), (2, "Summer Analyst Program B"),
+                    (3, "Summer Analyst Program C")])
+    env.get.side_effect = lambda url, **kw: (
+        _resp("gone", status=status) if "/opp/2-" in url else
+        _resp(VACANCY) if "/opp/" in url else _resp(board))
+    jobs = oleeo.fetch("jefferies")
+    assert [j["job_id"] for j in jobs] == ["direct_oleeo_jefferies_1", "direct_oleeo_jefferies_3"]
+    assert any("skipp" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_many_vacancy_failures_raise(env):
+    board = _board([(i, f"Summer Analyst Program {i}") for i in range(10)])
+    env.get.side_effect = lambda url, **kw: (
+        _resp("gone", status=404) if any(f"/opp/{i}-" in url for i in (1, 3, 5, 7)) else
+        _resp(VACANCY) if "/opp/" in url else _resp(board))
+    with pytest.raises(FetchError):
+        oleeo.fetch("jefferies")
+
+
+def test_board_page_404_still_raises(env):
+    env.get.side_effect = lambda url, **kw: _resp("gone", status=404)
+    with pytest.raises(FetchError):
+        oleeo.fetch("jefferies")
+
+
+BOFA_PROGRAMS_URL = ("https://bankcampuscareers.tal.net/vx/lang-en-GB/mobile-0/brand-4/"
+                     "candidate/jobboard/vacancy/1/adv/")
+
+
+def test_bofa_campus_events_board_has_no_candidates(env, monkeypatch):
+    """vacancy/2 (the old CSV URL) is BofA's "Campus Events" board: only info
+    sessions and roadshows, so 0 jobs was the correct reading of it."""
+    rec = {"name": "Bank of America", "slug": "bofa-campus", "analyst_entry": True,
+           "url": BOFA_PROGRAMS_URL.replace("/vacancy/1/", "/vacancy/2/")}
+    monkeypatch.setattr(oleeo.slug_loader, "get_record", lambda a, s: dict(rec))
+    _serve(env, [BOFA_EVENTS])
+    assert "<title>Campus Events" in BOFA_EVENTS
+    assert oleeo.fetch("bofa-campus") == []
+    assert not any("/opp/" in c.args[0] for c in env.get.call_args_list)
+
+
+def test_bofa_campus_programs_board(env, monkeypatch):
+    rec = {"name": "Bank of America", "slug": "bofa-campus", "analyst_entry": True,
+           "url": BOFA_PROGRAMS_URL}
+    monkeypatch.setattr(oleeo.slug_loader, "get_record", lambda a, s: dict(rec))
+    _serve(env, [BOFA_PROGRAMS])  # Jefferies vacancy page (Region: Americas) stands in for each opp
+    jobs = oleeo.fetch("bofa-campus")
+    titles = {j["title"] for j in jobs}
+    # 46 programs on the board, 43 candidate titles (non-US ones are dropped
+    # later by each real vacancy's Region label, faked here as Americas)
+    assert len(jobs) == 43
+    assert "Global Investment Banking Summer Associate Program - 2027" in titles
+    assert all(j["job_id"].startswith("direct_oleeo_bofa-campus_") for j in jobs)
+
+
+def test_bofa_campus_csv_points_at_programs_board():
+    from backend.pipeline import slug_loader
+    rec = slug_loader.get_record("oleeo", "bofa-campus")
+    assert rec["url"] == BOFA_PROGRAMS_URL

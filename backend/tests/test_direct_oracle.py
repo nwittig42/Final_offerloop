@@ -174,10 +174,10 @@ def test_any_failure_raises(env):
     with pytest.raises(FetchError):
         oracle.fetch("jpmorgan")
 
-    # detail failure for one job
+    # detail failure for one job (a 500; 403/404/410 skip the posting instead)
     env.get.side_effect = lambda url, **kw: (
         _resp(_page([_row(1)])) if "findReqs" in url and "keyword=intern," in url else
-        _resp(_page([])) if "findReqs" in url else _resp(status=404))
+        _resp(_page([])) if "findReqs" in url else _resp(status=500))
     with pytest.raises(FetchError):
         oracle.fetch("jpmorgan")
 
@@ -192,3 +192,37 @@ def test_unknown_slug_raises(env, monkeypatch):
     monkeypatch.setattr(oracle.slug_loader, "get_record", lambda a, s: None)
     with pytest.raises(FetchError):
         oracle.fetch("nope")
+
+
+def _serve_three(env, failing_id, status):
+    env.get.side_effect = lambda url, **kw: (
+        _resp(_page([_row(1), _row(2), _row(3)])) if "findReqs" in url and "keyword=intern," in url else
+        _resp(_page([])) if "findReqs" in url else
+        _resp(status=status) if f'Id="{failing_id}"' in url else _resp(_detail()))
+
+
+@pytest.mark.parametrize("status", [403, 404, 410])
+def test_detail_403_skips_posting(env, status, caplog):
+    _serve_three(env, 2, status)
+    jobs = oracle.fetch("jpmorgan")
+    assert [j["job_id"] for j in jobs] == ["direct_oracle_jpmorgan_1", "direct_oracle_jpmorgan_3"]
+    assert any("skipp" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_many_detail_failures_raise(env):
+    rows = [_row(i) for i in range(10)]
+    env.get.side_effect = lambda url, **kw: (
+        _resp(_page(rows)) if "findReqs" in url and "keyword=intern," in url else
+        _resp(_page([])) if "findReqs" in url else
+        _resp(status=404) if any(f'Id="{i}"' in url for i in (1, 3, 5, 7)) else _resp(_detail()))
+    with pytest.raises(FetchError):
+        oracle.fetch("jpmorgan")
+
+
+def test_details_in_list_order(env):
+    ids = [7, 3, 9, 1, 5]
+    env.get.side_effect = lambda url, **kw: (
+        _resp(_page([_row(i) for i in ids])) if "findReqs" in url and "keyword=intern," in url else
+        _resp(_page([])) if "findReqs" in url else _resp(_detail()))
+    assert [j["job_id"] for j in oracle.fetch("jpmorgan")] == [
+        f"direct_oracle_jpmorgan_{i}" for i in ids]

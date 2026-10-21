@@ -43,6 +43,20 @@ def test_cleanup_parses_new_platform_ids():
     assert writer._ats_board("direct_oleeo_jefferies_1991") == ("oleeo", "jefferies")
 
 
+def test_sr_abbreviation_rejected():
+    from backend.pipeline.direct import is_candidate_title
+
+    assert is_candidate_title("Sr. Analyst, Treasury", True) is False
+    assert is_candidate_title("Snr Associate", False) is False
+    assert is_candidate_title("Summer Analyst", False) is True
+    assert is_candidate_title("Sr. Cyber Threat Intel Technical Analyst", True) is False
+    assert is_candidate_title("SR Summer Intern", False) is False
+    assert is_candidate_title("Sen. Analyst - Intern Program", True) is False
+    # whole words only
+    assert is_candidate_title("Srinivasan Summer Analyst Program", False) is True
+    assert is_candidate_title("Senate Relations Summer Intern", False) is True
+
+
 def test_candidate_titles():
     from backend.pipeline.direct import is_candidate_title
 

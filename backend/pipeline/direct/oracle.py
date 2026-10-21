@@ -2,7 +2,9 @@
 
 Board record URL: https://{host}/hcmUI/CandidateExperience/{lang}/sites/{site}.
 Searches each early-career term, keeps US rows with a candidate title, then
-fetches the detail for each survivor. Any failure raises FetchError.
+fetches the detail for each survivor (DETAIL_WORKERS at a time, results in list
+order). A detail call returning 403/404/410 skips that posting unless too many
+do (`check_skip_ceiling`); any other failure raises FetchError.
 """
 from __future__ import annotations
 
@@ -16,8 +18,11 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from backend.pipeline import slug_loader
-from backend.pipeline.fetcher import REQUEST_TIMEOUT, USER_AGENT, _polite_sleep, _strip_html
-from backend.pipeline.direct import FetchError, is_candidate_title, make_job_id
+from backend.pipeline.fetcher import (
+    POOL_SIZE, REQUEST_TIMEOUT, USER_AGENT, _polite_sleep, _strip_html)
+from backend.pipeline.direct import (
+    DETAIL_WORKERS, SKIPPABLE_STATUSES, FetchError, check_skip_ceiling, is_candidate_title,
+    make_job_id, map_in_order)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +34,7 @@ _BAD_ID_CHARS = re.compile(r"[^A-Za-z0-9-]")
 _DEPT_KEYS = ("Department", "Organization", "JobFamily", "JobFunction")
 
 
-def _build_session(pool_size: int = 4) -> requests.Session:
+def _build_session(pool_size: int = 4, hosts: int = 4) -> requests.Session:
     session = requests.Session()
     retry = Retry(
         total=2,
@@ -39,13 +44,15 @@ def _build_session(pool_size: int = 4) -> requests.Session:
         respect_retry_after_header=True,
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size, max_retries=retry)
+    adapter = HTTPAdapter(pool_connections=hosts, pool_maxsize=pool_size, max_retries=retry)
     session.mount("https://", adapter)
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
     return session
 
 
-_SESSION = _build_session(4)
+# Shared by every board thread: BOARDS boards x DETAIL_WORKERS detail calls.
+_BOARDS = POOL_SIZE.get("oracle", 4)
+_SESSION = _build_session(pool_size=_BOARDS * DETAIL_WORKERS, hosts=_BOARDS * 2)
 
 
 def _parse_board_url(url: str) -> tuple[str, str]:
@@ -120,9 +127,8 @@ def fetch(slug: str) -> list[dict]:
             logger.warning("Oracle [%s] term %r hit the %d-result cap; results may be truncated",
                            slug, term, MAX_PER_TERM)
 
-    jobs: list[dict] = []
-    seen_ids: set[str] = set()
-    for rid, row in rows.items():
+    def detail(rid: str) -> dict | None:
+        """Detail item for one requisition, or None when it 403/404/410s."""
         _polite_sleep()
         url = (f"{base}/recruitingCEJobRequisitionDetails?expand=all&onlyData=true"
                f'&finder=ById;Id="{rid}",siteNumber={site}')
@@ -130,7 +136,23 @@ def fetch(slug: str) -> list[dict]:
             resp = _SESSION.get(url, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
             raise FetchError(f"Oracle [{slug}] detail {rid} failed: {exc}") from exc
-        info = _first_item(_json(resp), f"detail {rid}")
+        if resp.status_code in SKIPPABLE_STATUSES:
+            logger.warning("Oracle [%s] detail %s returned %s; skipping posting",
+                           slug, rid, resp.status_code)
+            return None
+        return _first_item(_json(resp), f"detail {rid}")
+
+    rids = list(rows)
+    infos = map_in_order(detail, rids)
+    skipped = sum(info is None for info in infos)
+    check_skip_ceiling(f"Oracle [{slug}]", skipped, len(rids))
+
+    jobs: list[dict] = []
+    seen_ids: set[str] = set()
+    for rid, info in zip(rids, infos):
+        if info is None:
+            continue
+        row = rows[rid]
         ext_id = _BAD_ID_CHARS.sub("-", rid)
         try:
             job_id = make_job_id("oracle", slug, ext_id)
@@ -165,5 +187,5 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Oracle [%s] -> %d jobs", slug, len(jobs))
+    logger.info("  Oracle [%s] -> %d jobs (%d gone)", slug, len(jobs), skipped)
     return jobs

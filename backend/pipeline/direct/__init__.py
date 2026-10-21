@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import importlib
 import re
-from typing import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Iterable, TypeVar
 from urllib.parse import urlparse
 
 from backend.pipeline.quality_gate import BOARD_DIFF_SOURCES, is_candidate_title
@@ -30,7 +31,24 @@ __all__ = [
     "get_fetcher",
     "make_job_id",
     "crawled_hosts",
+    "DETAIL_WORKERS",
+    "SKIPPABLE_STATUSES",
+    "map_in_order",
+    "check_skip_ceiling",
 ]
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+# Concurrent per-posting detail calls within one board (Workday / Oracle).
+DETAIL_WORKERS = 4
+# A per-posting detail/vacancy call with one of these statuses means the
+# posting is gone or not publicly viewable: skip it (it will drop off the
+# board) instead of failing the whole board. Any other failure still raises.
+SKIPPABLE_STATUSES = frozenset({403, 404, 410})
+# ...unless too many are skipped, which looks like the board blocking us.
+_SKIP_CEILING_RATIO = 0.10
+_SKIP_CEILING_MIN = 3
 
 
 class FetchError(Exception):
@@ -43,6 +61,31 @@ ALL_PLATFORMS = LEGACY_PLATFORMS + TARGET_PLATFORMS
 
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
 _EXTERNAL_ID_RE = re.compile(r"^[A-Za-z0-9-]+$")
+
+
+def map_in_order(fn: Callable[[_T], _R], items: Iterable[_T],
+                 workers: int = DETAIL_WORKERS) -> list[_R]:
+    """`[fn(x) for x in items]` run on `workers` threads, results in input
+    order. The first exception is re-raised and calls not yet started are
+    cancelled."""
+    items = list(items)
+    if not items:
+        return []
+    pool = ThreadPoolExecutor(max_workers=min(workers, len(items)))
+    futures = [pool.submit(fn, item) for item in items]
+    try:
+        return [f.result() for f in futures]
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def check_skip_ceiling(what: str, skipped: int, candidates: int) -> None:
+    """Raise FetchError when skipped postings exceed 10% of the board's
+    candidates AND number more than 3 (the board is likely blocking us)."""
+    if skipped > _SKIP_CEILING_MIN and skipped > _SKIP_CEILING_RATIO * candidates:
+        raise FetchError(
+            f"{what}: {skipped} of {candidates} postings returned 403/404/410; "
+            "the board is likely blocking us")
 
 
 def get_fetcher(platform: str) -> Callable[[str], list[dict]]:

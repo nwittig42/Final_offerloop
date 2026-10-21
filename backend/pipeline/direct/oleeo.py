@@ -5,7 +5,10 @@ https://evercore.tal.net/vx/mobile-0/appcentre-ext/brand-4/candidate/jobboard/va
 Walks up to MAX_PAGES listing pages, keeps vacancies with a candidate title
 (events are dropped by is_candidate_title), then fetches each vacancy page.
 
-Failure rule (FetchError): transport error, non-2xx, a non-HTML response, a
+A vacancy page returning 403/404/410 skips that vacancy (it is no longer
+viewable) unless too many do (`check_skip_ceiling`).
+
+Failure rule (FetchError): transport error, any other non-2xx, a non-HTML response, a
 bot-challenge page, a page that is not a tal.net page at all, or a vacancy
 page from which no description can be extracted. A genuine tal.net board with
 zero vacancy links is NOT an error (boards can be empty).
@@ -23,7 +26,8 @@ from urllib3.util.retry import Retry
 
 from backend.pipeline import slug_loader
 from backend.pipeline.fetcher import REQUEST_TIMEOUT, USER_AGENT, _polite_sleep
-from backend.pipeline.direct import FetchError, is_candidate_title, make_job_id
+from backend.pipeline.direct import (
+    SKIPPABLE_STATUSES, FetchError, check_skip_ceiling, is_candidate_title, make_job_id)
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +80,19 @@ def _clean_url(url: str) -> str:
     return _XF_SEGMENT.sub("", url)
 
 
-def _get_html(url: str, what: str) -> str:
+class _Gone(Exception):
+    """A vacancy page answered 403/404/410."""
+
+
+def _get_html(url: str, what: str, skippable: bool = False) -> str:
     _polite_sleep()
     try:
         resp = _SESSION.get(url, timeout=REQUEST_TIMEOUT)
+    except Exception as exc:
+        raise FetchError(f"Oleeo {what} failed: {exc}") from exc
+    if skippable and resp.status_code in SKIPPABLE_STATUSES:
+        raise _Gone(resp.status_code)
+    try:
         resp.raise_for_status()
         ctype = (resp.headers.get("Content-Type") or "").lower()
         body = resp.text
@@ -183,8 +196,15 @@ def fetch(slug: str) -> list[dict]:
 
     jobs: list[dict] = []
     skipped = 0
+    gone = 0
     for opp, (url, title) in found.items():
-        page = _get_html(url, f"[{slug}] vacancy {opp}")
+        try:
+            page = _get_html(url, f"[{slug}] vacancy {opp}", skippable=True)
+        except _Gone as exc:
+            gone += 1
+            logger.warning("Oleeo [%s] vacancy %s returned %s; skipping posting", slug, opp, exc)
+            check_skip_ceiling(f"Oleeo [{slug}]", gone, len(found))
+            continue
         description, location, department, region = _parse_vacancy(
             page, f"[{slug}] vacancy {opp}")
         if _is_non_us(region, title):
@@ -215,5 +235,6 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Oleeo [%s] -> %d jobs (%d non-US skipped)", slug, len(jobs), skipped)
+    logger.info("  Oleeo [%s] -> %d jobs (%d non-US skipped, %d gone)",
+                slug, len(jobs), skipped, gone)
     return jobs

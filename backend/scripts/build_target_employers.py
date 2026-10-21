@@ -102,7 +102,7 @@ HAND_LIST = [
     ("oleeo", "jefferies", "Jefferies",
      "https://jefferies.tal.net/vx/lang-en-GB/mobile-0/appcentre-ext/brand-4/candidate/jobboard/vacancy/2/adv/"),
     ("oleeo", "bofa-campus", "Bank of America",
-     "https://bankcampuscareers.tal.net/vx/lang-en-GB/mobile-0/brand-4/candidate/jobboard/vacancy/2/adv/"),
+     "https://bankcampuscareers.tal.net/vx/lang-en-GB/mobile-0/brand-4/candidate/jobboard/vacancy/1/adv/"),
 ]
 # Morgan Stanley's tenant is only kept if a live job names Morgan Stanley.
 COMPANY_CHECK = {"morgan-stanley": "Morgan Stanley"}

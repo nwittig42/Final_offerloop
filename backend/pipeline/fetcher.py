@@ -40,6 +40,12 @@ POOL_SIZE = {
     "greenhouse": 24,
     "lever": 16,
     "ashby": 12,
+    # Target-employer platforms: concurrent BOARDS in run_crawl_ats. Each
+    # Workday tenant is its own host, so 8 boards still means <= 4 detail
+    # calls in flight per host (direct.DETAIL_WORKERS).
+    "workday": 8,
+    "oracle": 4,
+    "oleeo": 4,
 }
 
 

@@ -621,7 +621,7 @@ def run_crawl_ats(
         state_map = {} if dry_run else crawl_state.read_state_batch(platform, slugs)
 
         fetch = direct.get_fetcher(platform)
-        # Target platforms: at most 4 concurrent boards.
+        # Concurrent boards per platform (target platforms: workday 8, oracle/oleeo 4).
         pool_size = fetcher.POOL_SIZE.get(platform, 4)
         with ThreadPoolExecutor(max_workers=pool_size) as pool:
             futures = {
