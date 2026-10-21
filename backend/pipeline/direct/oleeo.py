@@ -37,6 +37,11 @@ _NEXT_RE = re.compile(
 _DROP_BLOCKS = re.compile(r"<(script|style|noscript)\b.*?</\1\s*>|<!--.*?-->", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _LABEL_RE = re.compile(r'class="[^"]*hform_lbl_text[^"]*"[^>]*>(.*?)</span>', re.S | re.I)
+# Region label values that mean "not US": such vacancies are skipped on purpose.
+NON_US_REGIONS = frozenset({"emea", "apac", "europe", "asia", "asia pacific"})
+# Fallback when a vacancy has no Region label: clearly non-US places named in the title.
+NON_US_TITLE_PLACES = re.compile(
+    r"\b(london|tokyo|hong kong|singapore|sydney|paris|frankfurt|mumbai|toronto)\b", re.I)
 _LOCATION_KEYS = ("location", "region")
 _DEPT_KEYS = ("division", "business area", "business unit", "group", "department")
 
@@ -124,8 +129,8 @@ def _first(pairs: dict[str, str], keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _parse_vacancy(page: str, what: str) -> tuple[str, str, str]:
-    """(description, location, department) from a vacancy page."""
+def _parse_vacancy(page: str, what: str) -> tuple[str, str, str, str]:
+    """(description, location, department, region) from a vacancy page."""
     start = page.find('id="vac_desc"')
     if start < 0:
         start = page.find('role="main"')
@@ -138,7 +143,14 @@ def _parse_vacancy(page: str, what: str) -> tuple[str, str, str]:
     if len(description) < MIN_DESCRIPTION_CHARS:
         raise FetchError(f"Oleeo {what} has no extractable description")
     pairs = _label_values(main)
-    return description[:8000], _first(pairs, _LOCATION_KEYS), _first(pairs, _DEPT_KEYS)
+    return (description[:8000], _first(pairs, _LOCATION_KEYS), _first(pairs, _DEPT_KEYS),
+            pairs.get("region", ""))
+
+
+def _is_non_us(region: str, title: str) -> bool:
+    if region:
+        return region.strip().lower() in NON_US_REGIONS
+    return bool(NON_US_TITLE_PLACES.search(title))
 
 
 def fetch(slug: str) -> list[dict]:
@@ -170,9 +182,14 @@ def fetch(slug: str) -> list[dict]:
         logger.warning("Oleeo [%s] hit the %d-page cap; results may be truncated", slug, MAX_PAGES)
 
     jobs: list[dict] = []
+    skipped = 0
     for opp, (url, title) in found.items():
         page = _get_html(url, f"[{slug}] vacancy {opp}")
-        description, location, department = _parse_vacancy(page, f"[{slug}] vacancy {opp}")
+        description, location, department, region = _parse_vacancy(
+            page, f"[{slug}] vacancy {opp}")
+        if _is_non_us(region, title):
+            skipped += 1
+            continue
         try:
             job_id = make_job_id("oleeo", slug, opp)
         except ValueError as exc:
@@ -198,5 +215,5 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Oleeo [%s] -> %d jobs", slug, len(jobs))
+    logger.info("  Oleeo [%s] -> %d jobs (%d non-US skipped)", slug, len(jobs), skipped)
     return jobs

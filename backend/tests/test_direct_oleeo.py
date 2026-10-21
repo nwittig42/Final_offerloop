@@ -92,8 +92,30 @@ def test_location_falls_back_to_region_and_department_order():
             '<span class="hform_lbl_text">Group</span><div class="form_value">Banking</div>'
             '<span class="hform_lbl_text">Division</span><div class="form_value">IBD</div>'
             '</div>')
-    desc, loc, dept = oleeo._parse_vacancy(html, "t")
-    assert (loc, dept) == ("EMEA", "IBD")
+    desc, loc, dept, region = oleeo._parse_vacancy(html, "t")
+    assert (loc, dept, region) == ("EMEA", "IBD", "EMEA")
+
+
+def _vac_with_region(region):
+    return VACANCY.replace("\nAmericas\n", f"\n{region}\n")
+
+
+@pytest.mark.parametrize("region", ["EMEA", "APAC"])
+def test_non_us_region_vacancy_dropped(env, region):
+    _serve(env, [_board([(1, "Summer Analyst Program London")])], vacancy=_vac_with_region(region))
+    assert oleeo.fetch("jefferies") == []
+
+
+def test_americas_vacancy_kept(env):
+    _serve(env, [_board([(1991, "Summer Analyst Program")])])
+    assert [j["job_id"] for j in oleeo.fetch("jefferies")] == ["direct_oleeo_jefferies_1991"]
+
+
+def test_region_missing_falls_back_to_title_place(env):
+    no_region = VACANCY.replace("Region", "Territory")
+    _serve(env, [_board([(1, "Summer Analyst Program London"), (2, "Summer Analyst Program NYC")])],
+           vacancy=no_region)
+    assert [j["job_id"] for j in oleeo.fetch("jefferies")] == ["direct_oleeo_jefferies_2"]
 
 
 def test_pagination_cap(env):
