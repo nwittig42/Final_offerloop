@@ -825,7 +825,7 @@ def _normalize_jsearch_job(raw: dict) -> dict | None:
 def normalize_job(raw: dict) -> dict | None:
     """Normalize a raw job dict from any source. Auto-detects format."""
     if raw.get("source") in (
-        "greenhouse", "lever", "workday", "oracle", "oleeo", "goldman", "ashby", "fantasticjobs", "simplify",
+        "greenhouse", "lever", "workday", "oracle", "oleeo", "goldman", "manual", "ashby", "fantasticjobs", "simplify",
     ):
         return _normalize_board_job(raw)
     return _normalize_jsearch_job(raw)

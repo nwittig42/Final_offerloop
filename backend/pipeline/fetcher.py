@@ -47,6 +47,7 @@ POOL_SIZE = {
     "oracle": 4,
     "oleeo": 4,
     "goldman": 4,
+    "manual": 1,
 }
 
 

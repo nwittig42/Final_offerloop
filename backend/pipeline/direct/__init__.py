@@ -56,7 +56,7 @@ class FetchError(Exception):
 
 
 LEGACY_PLATFORMS = ("greenhouse", "lever", "ashby")
-TARGET_PLATFORMS = ("workday", "oracle", "oleeo", "goldman")
+TARGET_PLATFORMS = ("workday", "oracle", "oleeo", "goldman", "manual")
 ALL_PLATFORMS = LEGACY_PLATFORMS + TARGET_PLATFORMS
 
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")

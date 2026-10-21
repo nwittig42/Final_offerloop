@@ -110,7 +110,7 @@ jobs:
             fix-salaries)            python -m backend.pipeline.main --fix-salaries ;;
             crawl-ats-hot)           python -m backend.pipeline.main --crawl-ats --tier=hot ;;
             crawl-ats-cold-shard0)   python -m backend.pipeline.main --crawl-ats --tier=cold --shard=0/4 ;;
-            crawl-ats-targets)       python -m backend.pipeline.main --crawl-ats --tier=hot --platform=workday,oracle,oleeo,goldman ;;
+            crawl-ats-targets)       python -m backend.pipeline.main --crawl-ats --tier=hot --platform=workday,oracle,oleeo,goldman,manual ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
 
