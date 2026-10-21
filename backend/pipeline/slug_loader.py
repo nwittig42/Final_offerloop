@@ -27,10 +27,9 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data" / "ats_companies"
 SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "oracle", "oleeo")
-# Target-employer platforms: their CSV (`name,slug,url,analyst_entry`) is a
-# small curated list crawled as a whole. hot_slugs.txt / extras.txt don't
-# apply; "hot" and "all" return every CSV slug, "cold" returns none.
-TARGET_ATS = ("workday", "oracle", "oleeo")
+# workday/oracle/oleeo CSVs use `name,slug,url,analyst_entry`. Tiering is the
+# same as for the legacy platforms: target employers are listed in
+# hot_slugs.txt as `{platform}:{slug}`; other CSV rows are cold tier.
 
 
 def _csv_path(ats: str) -> Path:
@@ -149,14 +148,6 @@ def load_slugs(
         raise ValueError(f"unsupported ats: {ats!r}")
     if tier not in ("hot", "cold", "all"):
         raise ValueError(f"unsupported tier: {tier!r}")
-
-    if ats in TARGET_ATS:
-        if tier == "cold":
-            return []
-        candidates = [r["slug"] for r in _load_csv(ats)]
-        if shard is not None and tier != "hot":
-            candidates = [s for s in candidates if _in_shard(s, shard)]
-        return sorted(set(candidates))
 
     hot = _load_hot_slugs()[ats]
     extras = _load_extras()[ats]

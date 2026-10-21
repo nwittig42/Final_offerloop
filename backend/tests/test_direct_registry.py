@@ -114,6 +114,28 @@ def test_normalizer_passes_team_fields():
         assert spy.call_count == 2
 
 
+def test_target_platform_tiers_follow_hot_slugs(tmp_path, monkeypatch):
+    """Target employers are hot via hot_slugs.txt; other CSV tenants are cold."""
+    from backend.pipeline import slug_loader
+
+    (tmp_path / "workday.csv").write_text(
+        "name,slug,url,analyst_entry\n"
+        "Citi,citi,https://citi.wd5.myworkdayjobs.com/2,1\n"
+        "Acme,acme,https://acme.wd1.myworkdayjobs.com/careers,0\n"
+    )
+    (tmp_path / "hot_slugs.txt").write_text("workday:citi\n")
+    monkeypatch.setattr(slug_loader, "DATA_DIR", tmp_path)
+    slug_loader.clear_cache()
+    try:
+        assert slug_loader.load_slugs("workday", "hot") == ["citi"]
+        assert slug_loader.load_slugs("workday", "cold") == ["acme"]
+        assert slug_loader.load_slugs("workday", "all") == ["acme", "citi"]
+        assert slug_loader.get_record("workday", "citi")["analyst_entry"] is True
+        assert slug_loader.get_record("workday", "acme")["analyst_entry"] is False
+    finally:
+        slug_loader.clear_cache()
+
+
 # --------------------------------------------------------------------------
 # run_crawl_ats plumbing
 # --------------------------------------------------------------------------
