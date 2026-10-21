@@ -3,7 +3,6 @@
 // backend and refresh this query.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiService, type Org } from "@/services/api";
-import { getUniversityShortName } from "@/lib/universityUtils";
 
 export const ORGS_KEY = ["orgs"] as const;
 
@@ -42,14 +41,9 @@ export function useOrgs(enabled = true) {
   };
 }
 
-// Orgs at the student's school first; everything else after (school unknown
-// or spelled differently shouldn't hide an org they belong to).
-export function sortOrgsForSchool(orgs: Org[], school: string | null | undefined): Org[] {
-  if (!school) return orgs;
-  const short = getUniversityShortName(school);
-  const mine = (s: string) =>
-    s.toLowerCase() === school.toLowerCase() || (!!short && getUniversityShortName(s) === short);
-  return [...orgs].sort((a, b) => Number(mine(b.school)) - Number(mine(a.school)));
+// A to Z by name, the order the org picker lists them in.
+export function sortOrgsByName(orgs: Org[]): Org[] {
+  return [...orgs].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const DEFAULT_ACCENT = "#3A4E8C";

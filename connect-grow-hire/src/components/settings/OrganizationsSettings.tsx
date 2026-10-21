@@ -6,7 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { OrgMembershipEditor } from "@/components/orgs/OrgMembershipEditor";
 import { toast } from "@/hooks/use-toast";
 
-export default function OrganizationsSettings({ school }: { school: string | null }) {
+export default function OrganizationsSettings() {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -19,7 +19,6 @@ export default function OrganizationsSettings({ school }: { school: string | nul
 
   return (
     <OrgMembershipEditor
-      school={school}
       onOpenDirectory={(id) => navigate(`/directory/${id}`)}
       onJoined={(org) => toast({
         title: `You're in ${org.name}`,

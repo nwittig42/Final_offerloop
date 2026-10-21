@@ -1,21 +1,21 @@
 // "Organizations you're in" (OFF-42): the one place a student adds an org.
-// Type to filter the dropdown, pick yours, enter its password in the pop-up
-// (a miss lets them retry; dismissing closes it), and Find
+// The dropdown lists every org A to Z and narrows as you type. Pick yours,
+// enter its password in the pop-up (a miss lets them retry; dismissing
+// closes it), and a checkmark confirms it. From then on Find
 // recognizes the membership: the org's filter pill, its directory card, and
 // "TKE alumni" searches all start working. Used by Account Settings and the
 // onboarding org step.
 import { useState } from "react";
-import { ChevronsUpDown, Loader2, Plus, X } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, Plus, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Org } from "@/services/api";
 import { OrgJoinForm } from "@/components/orgs/OrgJoinForm";
-import { orgAccent, orgMonogram, sortOrgsForSchool, useOrgs } from "@/hooks/useOrgs";
+import { orgAccent, orgMonogram, sortOrgsByName, useOrgs } from "@/hooks/useOrgs";
 import { orgLogo } from "@/lib/orgLogos";
 
 interface OrgMembershipEditorProps {
-  school: string | null;
   // Shown on each joined org (Account Settings); omitted in onboarding.
   onOpenDirectory?: (orgId: string) => void;
   onJoined?: (org: Org) => void;
@@ -42,13 +42,20 @@ function Monogram({ org, size = 36 }: { org: Org; size?: number }) {
   );
 }
 
-export function OrgMembershipEditor({ school, onOpenDirectory, onJoined, onLeft, skipLabel, onSkip }: OrgMembershipEditorProps) {
+export function OrgMembershipEditor({ onOpenDirectory, onJoined, onLeft, skipLabel, onSkip }: OrgMembershipEditorProps) {
   const { orgs, memberships, joined, loading, isError, refetch, join, leave } = useOrgs();
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<Org | null>(null);
+  // Set when the password was right: the pop-up shows a checkmark, then closes.
+  const [justJoined, setJustJoined] = useState(false);
   const [leavingId, setLeavingId] = useState<string | null>(null);
 
-  const addable = sortOrgsForSchool(orgs.filter((o) => !memberships.includes(o.id)), school);
+  const addable = sortOrgsByName(orgs.filter((o) => !memberships.includes(o.id)));
+
+  const closePopup = () => {
+    setPicked(null);
+    setJustJoined(false);
+  };
 
   const remove = async (org: Org) => {
     setLeavingId(org.id);
@@ -79,7 +86,9 @@ export function OrgMembershipEditor({ school, onOpenDirectory, onJoined, onLeft,
               <Monogram org={o} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold text-[#0F172A]">{o.name}</div>
-                <div className="truncate text-[13px] text-[#64748B]">{o.school || "Member"}</div>
+                <div className="flex items-center gap-1 truncate text-[13px] font-medium text-[#15803D]">
+                  <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={3} /> You're a member
+                </div>
               </div>
               {onOpenDirectory && (
                 <button
@@ -149,9 +158,20 @@ export function OrgMembershipEditor({ school, onOpenDirectory, onJoined, onLeft,
           </PopoverContent>
         </Popover>
 
-        <Dialog open={!!picked} onOpenChange={(o) => { if (!o) setPicked(null); }}>
+        <Dialog open={!!picked} onOpenChange={(o) => { if (!o) closePopup(); }}>
           <DialogContent className="max-w-md rounded-[12px]">
-            {picked && (
+            {picked && justJoined && (
+              <div className="flex flex-col items-center py-4 text-center">
+                <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#16A34A] text-white animate-in zoom-in-50 duration-300">
+                  <Check className="h-8 w-8" strokeWidth={3} />
+                </span>
+                <DialogTitle className="mt-4 text-[18px]">You're in</DialogTitle>
+                <DialogDescription className="mt-1 text-[14px]">
+                  {picked.name} alumni now show up in Find.
+                </DialogDescription>
+              </div>
+            )}
+            {picked && !justJoined && (
               <>
                 <DialogHeader className="flex-row items-center gap-3 space-y-0 text-left">
                   <Monogram org={picked} />
@@ -169,10 +189,11 @@ export function OrgMembershipEditor({ school, onOpenDirectory, onJoined, onLeft,
                   onJoin={async (password) => {
                     await join.mutateAsync({ id: picked.id, password });
                     onJoined?.(picked);
-                    setPicked(null);
+                    setJustJoined(true);
+                    setTimeout(closePopup, 1400);
                   }}
                   onCancel={() => {
-                    setPicked(null);
+                    closePopup();
                     onSkip?.();
                   }}
                 />

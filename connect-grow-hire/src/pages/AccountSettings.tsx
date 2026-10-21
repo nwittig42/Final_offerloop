@@ -1435,7 +1435,7 @@ export default function AccountSettings() {
                     title="Organizations"
                     description="Groups you belong to. Members get the full alumni directory in Find."
                   >
-                    <OrganizationsSettings school={personalInfo.university || null} />
+                    <OrganizationsSettings />
                   </SettingsSection>
 
                   {/* Professional Background Section (working professionals only) */}

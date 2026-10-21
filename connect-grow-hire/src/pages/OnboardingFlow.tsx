@@ -474,7 +474,6 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
           {currentStep === "orgs" && (
             <div>
               <OrgMembershipEditor
-                school={pendingCompletion?.prefill.university || null}
                 skipLabel="Skip for now"
                 onSkip={handleOrgsDone}
               />
