@@ -353,31 +353,37 @@ def sync_board_jobs(
     }
 
 
+_DIRECT_ATS_PREFIXES = ("direct_greenhouse_", "direct_lever_", "direct_ashby_")
+
+
+def _ttl_deletable(doc) -> bool:
+    """Direct-ATS jobs are written once and never rewritten on unchanged
+    boards, so their expires_at lapses while they are still posted (and
+    kept_job_ids stops them ever being re-added). Their liveness comes from
+    sync_board_jobs' expired=True; delete them only then."""
+    if doc.id.startswith(_DIRECT_ATS_PREFIXES):
+        return (doc.to_dict() or {}).get("expired") is True
+    return True
+
+
 def delete_expired_jobs() -> int:
-    """Delete jobs where expires_at < now. Returns total deleted."""
+    """Delete jobs where expires_at < now, except live direct-ATS jobs.
+    Returns total deleted."""
     db = get_db()
     if not db:
         raise RuntimeError("Firestore DB not initialized")
 
     now = datetime.now(timezone.utc)
-    total_deleted = 0
+    query = db.collection(COLLECTION).where(filter=FieldFilter("expires_at", "<", now))
+    refs = [doc.reference for doc in query.stream() if _ttl_deletable(doc)]
 
-    while True:
-        query = (
-            db.collection(COLLECTION)
-            .where(filter=FieldFilter("expires_at", "<", now))
-            .limit(DELETE_BATCH_SIZE)
-        )
-        docs = list(query.stream())
-        if not docs:
-            break
-
+    for i in range(0, len(refs), DELETE_BATCH_SIZE):
+        chunk = refs[i : i + DELETE_BATCH_SIZE]
         batch = db.batch()
-        for doc in docs:
-            batch.delete(doc.reference)
+        for ref in chunk:
+            batch.delete(ref)
         batch.commit()
-        total_deleted += len(docs)
-        logger.info("  Deleted batch of %d expired jobs", len(docs))
+        logger.info("  Deleted batch of %d expired jobs", len(chunk))
 
-    logger.info("Total expired jobs deleted: %d", total_deleted)
-    return total_deleted
+    logger.info("Total expired jobs deleted: %d", len(refs))
+    return len(refs)
