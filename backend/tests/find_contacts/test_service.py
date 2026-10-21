@@ -115,6 +115,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(service, "find_slot_candidates", find_slot_candidates)
     monkeypatch.setattr(service, "find_work_email", find_work_email)
     monkeypatch.setattr(service, "fullenrich_enabled", lambda db: True)
+    monkeypatch.setattr(service, "cache_pdl_contacts", lambda *a, **k: 0)  # never touch PROD
     return seen
 
 
@@ -374,3 +375,22 @@ def test_posting_facts_not_written_to_deleted_job(db, calls, monkeypatch):
     monkeypatch.setattr(service, "read_posting", read_posting)
     service.find_contacts_for_job(db, "j1", None)
     assert "jobs/j1" not in db.store
+
+
+def test_vendor_finds_go_to_warehouse(db, calls, monkeypatch):
+    fed = []
+    monkeypatch.setattr(service, "cache_pdl_contacts", lambda people, **kw: fed.append((people, kw)))
+    service.find_contacts_for_job(db, "j1", "USC")
+    # Everyone we paid to find is kept, even if they lose their slot; warehouse
+    # hits are already there.
+    [(people, kw)] = fed
+    assert [p["FirstName"] for p in people] == ["Bob"]
+    assert "_found_by" not in people[0]
+    assert kw == {"shape": "app", "async_write": True}
+
+
+def test_warehouse_feed_failure_does_not_break_search(db, calls, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("firestore down")
+    monkeypatch.setattr(service, "cache_pdl_contacts", boom)
+    assert service.find_contacts_for_job(db, "j1", "USC")["status"] == "ready"

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from firebase_admin import firestore
 
+from app.services.firm_cache.writer import cache_pdl_contacts
 from app.services.find_contacts.playbooks import company_size, slot_specs
 from app.services.find_contacts.posting_reader import read_posting
 from app.services.find_contacts.scoring import fill_slots, mark_alumni
@@ -131,6 +132,20 @@ def _read_and_cache_facts(job_ref, job: dict, job_id: str) -> dict:
     return facts
 
 
+def _feed_warehouse(candidates: dict) -> None:
+    """Keep everyone the vendors turned up, so they outlive the job.
+    Warehouse hits are already there. Never breaks the search."""
+    fresh = [{k: v for k, v in c.items() if k != "_found_by"}
+             for slot in candidates.values() for c in slot or []
+             if c.get("_found_by") != "warehouse"]
+    if not fresh:
+        return
+    try:
+        cache_pdl_contacts(fresh, shape="app", async_write=True)
+    except Exception:
+        logger.warning("find_contacts: warehouse feed failed")
+
+
 def find_contacts_for_job(db, job_id: str, student_school: str | None) -> dict:
     job_ref = db.collection("jobs").document(job_id)
     snap = job_ref.get()
@@ -155,6 +170,7 @@ def find_contacts_for_job(db, job_id: str, student_school: str | None) -> dict:
     if not _refresh_lock(db, ref, token):
         return {"status": "searching"}
     candidates = find_slot_candidates(facts, specs, Budget())
+    _feed_warehouse(candidates)
     people = [{k: v for k, v in p.items() if k != "alumni"}
               for p in fill_slots(candidates, facts, specs, None)]
     found = {p["slot"]: p["found_by"] for p in people}
