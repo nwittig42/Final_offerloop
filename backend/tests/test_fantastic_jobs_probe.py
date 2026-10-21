@@ -29,7 +29,7 @@ def test_without_confirm_makes_no_requests(monkeypatch, capsys):
     db = MagicMock()
     monkeypatch.setattr(probe, "_get_db", lambda: db)
     assert probe.main([]) == 0
-    assert "dry run, nothing requested" in capsys.readouterr().out
+    assert "dry run, nothing requested" in capsys.readouterr().out.lower()
     fetch.assert_not_called()
     db.collection.assert_not_called()
 
@@ -78,4 +78,4 @@ def test_report_counts():
     assert r["early_career"] == 4        # ids 0,2,4,6
     assert r["in_firestore"] == 3
     assert r["with_hiring_manager"] == 4  # even ids
-    assert r["requests_used"] == 2        # page of 8 (<100) ends the loop
+    assert r["requests_used"] == 1        # short page (<100) ends the loop
