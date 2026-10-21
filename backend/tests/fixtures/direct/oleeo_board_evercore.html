@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quick Check Needed</title>
+    <script async defer src="/vx/oleeoProtect/main.js" type="module"></script>
+    <style>
+        :root {
+  --altcha-color-text: #595959;
+        }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 90%;
+            max-width: 500px;
+        }
+
+        h1 {
+            color: #0056b3;
+            margin-bottom: 20px;
+        }
+
+        p {
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+
+        #captcha-form {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        altcha-widget {
+            margin-bottom: 20px;
+        }
+
+      button[type="submit"] {
+        background-color: #3A833C;
+        color: white;
+        padding: 12px 25px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 16px;
+        transition: background-color 0.3s ease; 
+        display: block;
+        width: 100%;
+        max-width: 300px;
+        margin: 0 auto;
+      }
+        button[type="submit"]:hover {
+            background-color: #357938;
+        }
+
+        .cookie-notice {
+            font-size: 0.9em;
+            color: #555;
+            margin-top: 15px;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Quick Check Needed</h1>
+        <p>We just need to confirm you're a real person. Please check the box below and then click Continue.</p>
+        <form id="captcha-form" method="post">
+            <altcha-widget challengeurl="?oleeoProtectCaptcha=1" hidefooter="true"></altcha-widget>
+            <button type="submit">Continue</button>
+            <p class="cookie-notice">We use a small session cookie to keep our site running smoothly. This cookie doesn’t track any personal details or what you do online. By clicking "Continue" you agree to its use. Thanks for your patience.</p>
+        <input type="hidden" name="originalRequestToken" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJtZXRob2QiOiJHRVQiLCJ1cmwiOiIvdngvbW9iaWxlLTAvYXBwY2VudHJlLWV4dC9icmFuZC00L2NhbmRpZGF0ZS9qb2Jib2FyZC92YWNhbmN5LzEvYWR2LyIsImhlYWRlcnMiOnsiaG9zdCI6ImV2ZXJjb3JlLnRhbC5uZXQiLCJ1c2VyLWFnZW50IjoiT2ZmZXJsb29wSm9iQm90LzEuMCAoK2h0dHBzOi8vb2ZmZXJsb29wLmFpOyBjb250YWN0QG9mZmVybG9vcC5haSkiLCJjZi1qYTMtaGFzaCI6IjM3NWM2MTYyYTQ5MmRmYmYyNzk1OTA5MTEwY2U4NDI0IiwiYWNjZXB0IjoiKi8qIiwiY2YtYm90LXNjb3JlIjoiMSIsImFjY2VwdC1lbmNvZGluZyI6Imd6aXAsIGJyIiwieC1mb3J3YXJkZWQtZm9yIjoiNzYuMzIuMTE4LjIzNiwgMTI3LjAuMC4xIiwiY2RuLWxvb3AiOiJjbG91ZGZsYXJlOyBsb29wcz0xIiwiY2Ytd2FycC10YWctaWQiOiIwMjhjN2ZlNi1mYmMxLTQ2YmQtYWRkOC01ZTE1ZDhjNGM2ZGUiLCJjZi1kZXZpY2UtdHlwZSI6ImRlc2t0b3AiLCJjZi1jb25uZWN0aW5nLWlwIjoiNzYuMzIuMTE4LjIzNiIsImNmLXZpc2l0b3IiOiJ7XCJzY2hlbWVcIjpcImh0dHBzXCJ9IiwiY2YtaXBjb3VudHJ5IjoiVVMiLCJjZi12ZXJpZmllZC1ib3QiOiJmYWxzZSIsImNmLWphNCI6InQxM2Q0OTA3aDJfMGQ4ZmVhYzdiYzM3XzczOTVkYWUzYjJmMyIsImNmLXJheSI6ImE0ZTMzYjVhMGE0NWJlZWMtTEhSIiwiY2YtdGhyZWF0LXNjb3JlIjoiMCIsIngtd2NuLXZ4LXByb3h5IjoiMTkyLjE2OC45OS4yMTE6NDQzIiwieC1mb3J3YXJkZWQtcHJvdG8iOiJodHRwcyJ9LCJpYXQiOjE3OTI2MTY4NDYsImV4cCI6MTc5MjYxNzQ0Nn0.Z6TR2fyGBiqxbRQ5bGqaOFe7aVApbHaJGsxKPG1wse0"></form>
+    </div>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4e33b5a0a45beec',t:'MTc5MjYxNjg0Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
