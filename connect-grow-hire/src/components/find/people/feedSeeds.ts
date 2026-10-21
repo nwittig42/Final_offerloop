@@ -17,19 +17,34 @@ export interface FeedProfile {
 }
 
 // Keyword → the firms students in that lane most often network into.
-const LANES: { match: RegExp; firms: string[] }[] = [
-  { match: /invest(ment)? bank|\bib\b|banking|private equity|\bpe\b|hedge fund|asset management|sales (and|&) trading|capital markets|finance/i,
-    firms: ["Goldman Sachs", "JPMorgan Chase", "Morgan Stanley", "Evercore", "Blackstone", "Bank of America"] },
-  { match: /consult|strategy|management consulting/i,
-    firms: ["McKinsey & Company", "Boston Consulting Group", "Bain & Company", "Deloitte", "Accenture"] },
-  { match: /account|audit|\btax\b|\bcpa\b|assurance/i,
-    firms: ["Deloitte", "PwC", "EY", "KPMG"] },
-  { match: /software|engineer|computer science|\bcs\b|tech|product manag|data scien|machine learning|\bai\b/i,
-    firms: ["Google", "Meta", "Apple", "Amazon", "Microsoft"] },
-  { match: /market|brand|advertis|media|entertainment|consumer/i,
-    firms: ["Procter & Gamble", "Nike", "The Walt Disney Company", "Netflix", "L'Oréal"] },
-  { match: /real estate/i,
-    firms: ["CBRE", "JLL", "Blackstone"] },
+// `industry` and `roles` label each lane for onboarding's profile inference
+// (utils/onboardingInference.ts), which reads the same lanes.
+export interface Lane {
+  industry: string;
+  match: RegExp;
+  firms: string[];
+  roles: string[];
+}
+
+export const LANES: Lane[] = [
+  { industry: "Finance", match: /invest(ment)? bank|\bib\b|banking|private equity|\bpe\b|hedge fund|asset management|sales (and|&) trading|capital markets|finance/i,
+    firms: ["Goldman Sachs", "JPMorgan Chase", "Morgan Stanley", "Evercore", "Blackstone", "Bank of America"],
+    roles: ["Investment Banking Analyst", "Private Equity Analyst", "Sales & Trading Analyst"] },
+  { industry: "Consulting", match: /consult|strategy|management consulting/i,
+    firms: ["McKinsey & Company", "Boston Consulting Group", "Bain & Company", "Deloitte", "Accenture"],
+    roles: ["Consulting Analyst", "Strategy Analyst"] },
+  { industry: "Accounting", match: /account|audit|\btax\b|\bcpa\b|assurance/i,
+    firms: ["Deloitte", "PwC", "EY", "KPMG"],
+    roles: ["Audit Associate", "Tax Associate"] },
+  { industry: "Technology", match: /software|engineer|computer science|\bcs\b|tech|product manag|data scien|machine learning|\bai\b/i,
+    firms: ["Google", "Meta", "Apple", "Amazon", "Microsoft"],
+    roles: ["Software Engineer", "Product Manager", "Data Scientist"] },
+  { industry: "Marketing & Media", match: /market|brand|advertis|media|entertainment|consumer/i,
+    firms: ["Procter & Gamble", "Nike", "The Walt Disney Company", "Netflix", "L'Oréal"],
+    roles: ["Marketing Associate", "Brand Associate"] },
+  { industry: "Real Estate", match: /real estate/i,
+    firms: ["CBRE", "JLL", "Blackstone"],
+    roles: ["Real Estate Analyst"] },
 ];
 
 // Nothing to go on at all: a broad mix across the lanes students recruit for.

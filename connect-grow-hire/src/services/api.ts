@@ -3023,6 +3023,34 @@ export const enrichLinkedInOnboarding = async (linkedinUrl: string) => {
   return response.json();
 };
 
+/**
+ * LLM-interpret a career narrative into industries/roles (POST /api/extract-direction).
+ * Onboarding uses it as an optional refinement of rules-based inference, so
+ * every failure (no LLM configured, network, bad response) resolves to null.
+ */
+export const extractDirection = async (
+  narrative: string,
+): Promise<{ industries: string[]; roles: string[] } | null> => {
+  try {
+    const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE_URL}/extract-direction`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ narrative }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.success || !data.extracted) return null;
+    return {
+      industries: Array.isArray(data.extracted.industries) ? data.extracted.industries : [],
+      roles: Array.isArray(data.extracted.roles) ? data.extracted.roles : [],
+    };
+  } catch {
+    return null;
+  }
+};
+
 export const mergeLinkedInData = async () => {
   const { auth } = await import('../lib/firebase');
   const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;

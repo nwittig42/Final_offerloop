@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, Sparkles, FileText, Download } from "lucide-react";
 import {
   generateResumeBuilder,
@@ -7,6 +7,7 @@ import {
   downloadPdfBlob,
 } from "@/services/api";
 import { ResumePrefill, resumePrefillFromParse } from "@/utils/onboardingPrefill";
+import { BUILDER_DRAFT_VERSION, type BuilderDraft } from "@/services/onboardingProgress";
 import { OB, obFieldLabel, obPrimaryButton } from "./onboardingTheme";
 
 // Empty Harvard outline shown before the first generation.
@@ -46,23 +47,40 @@ const BUILDER_SECTIONS = [
 
 type SectionKey = (typeof BUILDER_SECTIONS)[number]["key"];
 
+const EMPTY_SECTIONS: Record<SectionKey, string> = {
+  education: "",
+  experience: "",
+  projects: "",
+  leadership: "",
+  skills: "",
+};
+
 interface OnboardingBuilderProps {
   onComplete: (prefill: ResumePrefill) => void;
   submitting: boolean;
+  /** Reads work saved before a refresh (or before leaving this step). */
+  loadDraft?: () => BuilderDraft | null;
+  /** Called on every change with the work so far (null once there's nothing to keep). */
+  onDraftChange?: (draft: BuilderDraft | null) => void;
 }
 
-export const OnboardingBuilder = ({ onComplete, submitting }: OnboardingBuilderProps) => {
-  const [sections, setSections] = useState<Record<SectionKey, string>>({
-    education: "",
-    experience: "",
-    projects: "",
-    leadership: "",
-    skills: "",
-  });
-  const [prompt, setPrompt] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
-  const [resume, setResume] = useState<object | null>(null);
-  const [html, setHtml] = useState("");
+export const OnboardingBuilder = ({ onComplete, submitting, loadDraft, onDraftChange }: OnboardingBuilderProps) => {
+  const [initialDraft] = useState(() => loadDraft?.() ?? null);
+  const [sections, setSections] = useState<Record<SectionKey, string>>(() => ({
+    ...EMPTY_SECTIONS,
+    ...(initialDraft?.sections || {}),
+  }));
+  const [prompt, setPrompt] = useState(initialDraft?.prompt || "");
+  const [history, setHistory] = useState<string[]>(initialDraft?.history || []);
+  const [resume, setResume] = useState<object | null>(initialDraft?.resume || null);
+  const [html, setHtml] = useState(initialDraft?.html || "");
+
+  // Save as the user types, so a refresh doesn't lose anything.
+  useEffect(() => {
+    if (!onDraftChange) return;
+    const empty = !resume && !prompt.trim() && !Object.values(sections).some((v) => v.trim());
+    onDraftChange(empty ? null : { version: BUILDER_DRAFT_VERSION, sections, prompt, history, resume, html });
+  }, [sections, prompt, history, resume, html, onDraftChange]);
   const [generating, setGenerating] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [downloading, setDownloading] = useState(false);
