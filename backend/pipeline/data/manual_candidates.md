@@ -1,13 +1,16 @@
 # Manual job candidates
 
-Rows in `manual_jobs.csv` were added only where the exact URL appeared in a web
-search result. No firm below was left unverified, but each seeded row points at
-a program landing page or the firm's student job board rather than one posting,
-and locations are a default of New York, NY. Nick: replace with per-role URLs
-(and the right office) when you can open the pages.
+All five rows in `manual_jobs.csv` use a URL that appeared verbatim in a web
+search result (Jefferies' page also returned HTTP 200). Nothing was left out as
+unverified. The rows point at each firm's own program or students page, not at
+a single posting, and the location is "United States" because no office is
+known. Nick: when you can open these pages, swap in per-posting URLs and cities.
 
-- McKinsey: https://www.mckinsey.com/careers/students/undergraduate-degree (blocks automated requests; not fetched). Find the specific Business Analyst application page for your target campus.
-- Bain: https://www.bain.com/careers/find-a-role/position/?jobid=10403 (Associate Consultant Internship; job id is cycle-specific and may be retired). Find the current US posting.
-- Evercore, Jefferies, Moelis: tal.net student boards, which serve a bot check. Open each board, pick a specific US summer analyst posting, and swap in its URL.
+- McKinsey: https://www.mckinsey.com/careers/students/undergraduate-degree (blocks automated requests; not fetched).
+- Bain: https://www.bain.com/careers/find-a-role/position/?jobid=10403 (job id is cycle-specific and may be retired; find the current US posting).
+- Evercore: https://www.evercore.com/careers/students-graduates/ (returns 403 to scripts; not fetched).
+- Jefferies: https://www.jefferies.com/careers/students-and-graduates/
+- Moelis: https://www.moelis.com/careers/explore-opportunities/ (returns 403 to scripts; not fetched).
 
-Goldman Sachs is crawled automatically (`goldman` platform); nothing manual needed.
+The firms' tal.net application boards serve a bot check and were deliberately not used.
+Goldman Sachs is crawled automatically (`goldman` platform).
