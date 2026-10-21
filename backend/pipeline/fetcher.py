@@ -145,6 +145,10 @@ def _fetch_greenhouse(slug: str) -> list[dict]:
             "salary_min": None,
             "salary_max": None,
             "salary_period": None,
+            "department": " / ".join(
+                d.get("name", "") for d in (job.get("departments") or []) if d and d.get("name")
+            ),
+            "team": "",
         })
 
     logger.info("  Greenhouse [%s] → %d jobs", slug, len(jobs))
@@ -217,6 +221,8 @@ def _fetch_lever(slug: str) -> list[dict]:
             "salary_min": None,
             "salary_max": None,
             "salary_period": None,
+            "department": categories.get("department") or "",
+            "team": categories.get("team") or "",
         })
 
     logger.info("  Lever [%s] → %d jobs", slug, len(jobs))
@@ -329,6 +335,8 @@ def _fetch_ashby(slug: str) -> list[dict]:
             "salary_max": sal_max,
             "salary_period": sal_period,
             "_employment_type": _ASHBY_TYPE_MAP.get(employment_type, ""),
+            "department": job.get("department") or "",
+            "team": job.get("team") or "",
         })
 
     logger.info("  Ashby [%s] → %d jobs", slug, len(jobs))
