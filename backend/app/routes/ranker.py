@@ -1002,7 +1002,13 @@ def candidate_outreach(candidate_id):
     find-then-draft; here the person is already chosen by hand, so this
     route must never go looking for "someone like them".
 
-    Request body: {"action": "draft"|"send", "deck_id": optional str}
+    Request body: {"action": "draft"|"send", "deck_id": optional str,
+                   "create_gmail_draft": optional bool (default true),
+                   "surface": optional str (event label)}
+
+    create_gmail_draft=false keeps the draft in the app only, even when
+    Gmail is connected: the first-use walkthrough lets the user edit the
+    email before anything reaches Gmail. Ignored for action=send.
 
     Pricing: NO additional charge. The reveal-email swipe already paid
     for "the verification and the written email" (see the reveal_person
@@ -1037,6 +1043,8 @@ def candidate_outreach(candidate_id):
     if action not in ("draft", "send"):
         return jsonify({"error": "action must be draft or send"}), 400
     deck_id = (data.get("deck_id") or "").strip()
+    create_gmail_draft = data.get("create_gmail_draft") is not False
+    surface = (str(data.get("surface") or "").strip()[:40]) or "ios_swipe_deck"
 
     candidate_id = (candidate_id or "").strip()
     if not candidate_id:
@@ -1232,7 +1240,7 @@ def candidate_outreach(candidate_id):
             except Exception as exc:
                 logger.warning("outreach: send failed uid=%s cid=%s: %s", uid, candidate_id, exc)
 
-    if creds and not sent:
+    if creds and not sent and (create_gmail_draft or action == "send"):
         try:
             from app.services.gmail_client import create_drafts_parallel
             draft_results = create_drafts_parallel(
@@ -1317,7 +1325,7 @@ def candidate_outreach(candidate_id):
         contact_email=to_email,
         model_version=model_version_for(uid),
         variant=ranker_variant(uid),
-        surface="ios_swipe_deck",
+        surface=surface,
         features_snapshot={"deck_id": deck_id, "action": action},
         attribution_source="ranker_deck",
         extra={"cost_credits": 0},
