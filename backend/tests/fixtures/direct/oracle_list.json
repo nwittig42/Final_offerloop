@@ -1,0 +1,1103 @@
+{
+ "items": [
+  {
+   "SearchId": 1,
+   "Keyword": "summer analyst",
+   "CorrectedKeyword": null,
+   "UseExactKeywordFlag": false,
+   "SuggestedKeyword": null,
+   "ExecuteSpellCheckFlag": true,
+   "Location": null,
+   "LocationId": null,
+   "Radius": 0,
+   "RadiusUnit": "MI",
+   "SelectedTitlesFacet": null,
+   "SelectedCategoriesFacet": null,
+   "SelectedPostingDatesFacet": null,
+   "SelectedLocationsFacet": null,
+   "LastSelectedFacet": null,
+   "Facets": "TITLES;LOCATIONS;LOCATION_LEVEL1;LOCATION_LEVEL2;LOCATION_LEVEL3;CATEGORIES;POSTING_DATES;WORK_LOCATIONS;FLEX_FIELDS;ORGANIZATIONS;WORKPLACE_TYPES",
+   "Offset": 0,
+   "Limit": 25,
+   "SortBy": "RELEVANCY",
+   "TotalJobsCount": 3,
+   "Latitude": null,
+   "Longitude": null,
+   "SiteNumber": "CX_1001",
+   "JobFamilyId": null,
+   "PostingStartDate": null,
+   "PostingEndDate": null,
+   "SelectedWorkLocationsFacet": null,
+   "RequisitionId": null,
+   "CandidateNumber": null,
+   "WorkLocationZipCode": null,
+   "WorkLocationCountryCode": null,
+   "SelectedFlexFieldsFacets": null,
+   "OrganizationId": null,
+   "SelectedOrganizationsFacet": null,
+   "UserTargetFacetName": null,
+   "UserTargetFacetInputTerm": null,
+   "HotJobFlag": null,
+   "WorkplaceType": null,
+   "SelectedWorkplaceTypesFacet": null,
+   "BotQRShortCode": null,
+   "requisitionList": [
+    {
+     "Id": "210772971",
+     "Title": "Graduating Student Opportunity: Internal Strategy and Process Consulting Associate I",
+     "PostedDate": "2026-08-10",
+     "PostingEndDate": null,
+     "Language": "US",
+     "PrimaryLocationCountry": "US",
+     "GeographyId": 300000020694866,
+     "HotJobFlag": false,
+     "WorkplaceTypeCode": null,
+     "JobFamily": "Process Improvement",
+     "JobFunction": "Project & Process Mgmt",
+     "WorkerType": null,
+     "ContractType": null,
+     "ManagerLevel": null,
+     "JobSchedule": null,
+     "JobShift": null,
+     "JobType": null,
+     "StudyLevel": null,
+     "DomesticTravelRequired": null,
+     "InternationalTravelRequired": null,
+     "WorkDurationYears": null,
+     "WorkDurationMonths": null,
+     "WorkHours": null,
+     "WorkDays": null,
+     "LegalEmployer": null,
+     "BusinessUnit": null,
+     "Department": null,
+     "Organization": null,
+     "BusinessUnitId": 300000086610208,
+     "LegalEmployerId": 300000087185180,
+     "OrganizationId": 300000164543587,
+     "MediaThumbURL": null,
+     "PrimaryLocation": "Columbus, OH, United States",
+     "Distance": 128.25845,
+     "TrendingFlag": false,
+     "BeFirstToApplyFlag": false,
+     "Relevancy": 128.25845336914062,
+     "WorkplaceType": "",
+     "ExternalQualificationsStr": null,
+     "ExternalResponsibilitiesStr": null
+    },
+    {
+     "Id": "210765547",
+     "Title": "2027 Internal Audit Analyst Program - Summer Intern Opportunity",
+     "PostedDate": "2026-07-08",
+     "PostingEndDate": null,
+     "Language": "US",
+     "PrimaryLocationCountry": "US",
+     "GeographyId": 300000020685544,
+     "HotJobFlag": false,
+     "WorkplaceTypeCode": null,
+     "JobFamily": "Seasonal Employee",
+     "JobFunction": "Administration",
+     "WorkerType": null,
+     "ContractType": null,
+     "ManagerLevel": null,
+     "JobSchedule": null,
+     "JobShift": null,
+     "JobType": null,
+     "StudyLevel": null,
+     "DomesticTravelRequired": null,
+     "InternationalTravelRequired": null,
+     "WorkDurationYears": null,
+     "WorkDurationMonths": null,
+     "WorkHours": null,
+     "WorkDays": null,
+     "LegalEmployer": null,
+     "BusinessUnit": null,
+     "Department": null,
+     "Organization": null,
+     "BusinessUnitId": 300000086610244,
+     "LegalEmployerId": 300000087185180,
+     "OrganizationId": 300000165222423,
+     "MediaThumbURL": null,
+     "PrimaryLocation": "Jersey City, NJ, United States",
+     "Distance": 114.17527,
+     "TrendingFlag": false,
+     "BeFirstToApplyFlag": false,
+     "Relevancy": 114.1752700805664,
+     "WorkplaceType": "",
+     "ExternalQualificationsStr": null,
+     "ExternalResponsibilitiesStr": null
+    },
+    {
+     "Id": "210792010",
+     "Title": "2027 Quantitative Research \u2013 Asset Management - Summer Analyst Internship - London",
+     "PostedDate": "2026-09-22",
+     "PostingEndDate": null,
+     "Language": "US",
+     "PrimaryLocationCountry": "GB",
+     "GeographyId": 300000057007721,
+     "HotJobFlag": false,
+     "WorkplaceTypeCode": null,
+     "JobFamily": "Seasonal Employee",
+     "JobFunction": "Program Analysts & Associate",
+     "WorkerType": null,
+     "ContractType": null,
+     "ManagerLevel": null,
+     "JobSchedule": null,
+     "JobShift": null,
+     "JobType": null,
+     "StudyLevel": null,
+     "DomesticTravelRequired": null,
+     "InternationalTravelRequired": null,
+     "WorkDurationYears": null,
+     "WorkDurationMonths": null,
+     "WorkHours": null,
+     "WorkDays": null,
+     "LegalEmployer": null,
+     "BusinessUnit": null,
+     "Department": null,
+     "Organization": null,
+     "BusinessUnitId": 300000086610172,
+     "LegalEmployerId": 300000087151266,
+     "OrganizationId": 300000165237998,
+     "MediaThumbURL": null,
+     "PrimaryLocation": "LONDON, LONDON, United Kingdom",
+     "Distance": 92.63196,
+     "TrendingFlag": false,
+     "BeFirstToApplyFlag": false,
+     "Relevancy": 92.6319580078125,
+     "WorkplaceType": "",
+     "ExternalQualificationsStr": null,
+     "ExternalResponsibilitiesStr": null
+    }
+   ],
+   "categoriesFacet": [
+    {
+     "Id": 300000086144116,
+     "Name": "Seasonal Employee",
+     "TotalCount": 90
+    },
+    {
+     "Id": 300000086143853,
+     "Name": "Client Advisory",
+     "TotalCount": 46
+    },
+    {
+     "Id": 300000086153065,
+     "Name": "Analysts",
+     "TotalCount": 35
+    },
+    {
+     "Id": 300000086144190,
+     "Name": "Auditing",
+     "TotalCount": 34
+    },
+    {
+     "Id": 300000086144023,
+     "Name": "Private Bankers",
+     "TotalCount": 20
+    },
+    {
+     "Id": 300000086250047,
+     "Name": "Client Sales",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000086250565,
+     "Name": "Investors",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000086153200,
+     "Name": "Communications",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000086153391,
+     "Name": "Associates",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000086251864,
+     "Name": "Product Management",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000086249937,
+     "Name": "Administration",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000086251877,
+     "Name": "Client Management",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000086251949,
+     "Name": "Relationship Sales",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000086152593,
+     "Name": "Business Management",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000086153329,
+     "Name": "Trusts & Estates",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000086143922,
+     "Name": "Recruiting",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000086152508,
+     "Name": "Predictive Science",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000086153186,
+     "Name": "Capital Advisory",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000086249661,
+     "Name": "Account Service",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000086251667,
+     "Name": "Wealth Advisory",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300007929924879,
+     "Name": "Process Improvement",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000086143741,
+     "Name": "Treasury",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086143850,
+     "Name": "AI Research",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086152822,
+     "Name": "Events Management",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086249690,
+     "Name": "Credit Review",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086249881,
+     "Name": "Client Service",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086249991,
+     "Name": "Control Officers",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086251909,
+     "Name": "Project Management",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000086143955,
+     "Name": "Home Lending Operations",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086144003,
+     "Name": "Data Management",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086144334,
+     "Name": "Specialty Operations",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086152548,
+     "Name": "Benefits & Employee Services",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086152753,
+     "Name": "Software Engineering",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086152826,
+     "Name": "Financial Analysis",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086153031,
+     "Name": "Operational Risk",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086249595,
+     "Name": "Data & Analytics",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086250137,
+     "Name": "Data & Analytics Rotation",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086250752,
+     "Name": "Relationship Manager",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000086251612,
+     "Name": "General Audit & Ops",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000921822354,
+     "Name": "Trading Services",
+     "TotalCount": 1
+    }
+   ],
+   "locationsFacet": [
+    {
+     "Id": 300000000289738,
+     "Name": "United States",
+     "TotalCount": 85
+    },
+    {
+     "Id": 300000000289276,
+     "Name": "United Kingdom",
+     "TotalCount": 58
+    },
+    {
+     "Id": 300000057005324,
+     "Name": "LONDON, United Kingdom",
+     "TotalCount": 53
+    },
+    {
+     "Id": 300000057007721,
+     "Name": "LONDON, LONDON, United Kingdom",
+     "TotalCount": 42
+    },
+    {
+     "Id": 300000000289330,
+     "Name": "Hong Kong",
+     "TotalCount": 41
+    },
+    {
+     "Id": 300000020657211,
+     "Name": "TX, United States",
+     "TotalCount": 34
+    },
+    {
+     "Id": 300000020278279,
+     "Name": "Hong Kong Island, Hong Kong",
+     "TotalCount": 31
+    },
+    {
+     "Id": 300000020278285,
+     "Name": "Central and Western, Hong Kong Island, Hong Kong",
+     "TotalCount": 31
+    },
+    {
+     "Id": 300000020709331,
+     "Name": "Plano, TX, United States",
+     "TotalCount": 31
+    },
+    {
+     "Id": 300000020657200,
+     "Name": "NY, United States",
+     "TotalCount": 29
+    },
+    {
+     "Id": 300000000289639,
+     "Name": "Singapore",
+     "TotalCount": 28
+    },
+    {
+     "Id": 300000020694566,
+     "Name": "New York, NY, United States",
+     "TotalCount": 28
+    },
+    {
+     "Id": 300000020657203,
+     "Name": "OH, United States",
+     "TotalCount": 27
+    },
+    {
+     "Id": 300000020694866,
+     "Name": "Columbus, OH, United States",
+     "TotalCount": 26
+    },
+    {
+     "Id": 300000020333146,
+     "Name": "Singapore, Singapore",
+     "TotalCount": 23
+    },
+    {
+     "Id": 300000020657198,
+     "Name": "NJ, United States",
+     "TotalCount": 23
+    },
+    {
+     "Id": 300000020685544,
+     "Name": "Jersey City, NJ, United States",
+     "TotalCount": 22
+    },
+    {
+     "Id": 300000000289216,
+     "Name": "Germany",
+     "TotalCount": 17
+    },
+    {
+     "Id": 300000020657181,
+     "Name": "IL, United States",
+     "TotalCount": 15
+    },
+    {
+     "Id": 300000020701539,
+     "Name": "Chicago, IL, United States",
+     "TotalCount": 15
+    },
+    {
+     "Id": 300000000289270,
+     "Name": "France",
+     "TotalCount": 13
+    },
+    {
+     "Id": 300000020657175,
+     "Name": "DE, United States",
+     "TotalCount": 13
+    },
+    {
+     "Id": 300000036802490,
+     "Name": "Paris, France",
+     "TotalCount": 13
+    },
+    {
+     "Id": 300000076862711,
+     "Name": "Frankfurt a. Main, Germany",
+     "TotalCount": 13
+    },
+    {
+     "Id": 300000036867971,
+     "Name": "Paris, Paris, France",
+     "TotalCount": 12
+    },
+    {
+     "Id": 300000000289177,
+     "Name": "Switzerland",
+     "TotalCount": 10
+    },
+    {
+     "Id": 300000000289576,
+     "Name": "Philippines",
+     "TotalCount": 9
+    },
+    {
+     "Id": 300000020683471,
+     "Name": "Wilmington, DE, United States",
+     "TotalCount": 9
+    },
+    {
+     "Id": 300000000289249,
+     "Name": "Spain",
+     "TotalCount": 8
+    },
+    {
+     "Id": 300000000289447,
+     "Name": "Luxembourg",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000020657172,
+     "Name": "CA, United States",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000020657177,
+     "Name": "FL, United States",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000020361132,
+     "Name": "National Capital Region, Philippines",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000020361305,
+     "Name": "Metro Manila, National Capital Region, Philippines",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000000289192,
+     "Name": "China",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000043618723,
+     "Name": "Luxembourg, Luxembourg",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000000289054,
+     "Name": "United Arab Emirates",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000000289081,
+     "Name": "Argentina",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000020278281,
+     "Name": "Kowloon, Hong Kong",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000020333038,
+     "Name": "Dubai, United Arab Emirates",
+     "TotalCount": 5
+    }
+   ],
+   "postingDatesFacet": [
+    {
+     "Id": 7,
+     "Name": "Less than 7 days",
+     "TotalCount": 17
+    },
+    {
+     "Id": 30,
+     "Name": "Less than 30 days",
+     "TotalCount": 71
+    },
+    {
+     "Id": 31,
+     "Name": "Greater than 30 days",
+     "TotalCount": 258
+    }
+   ],
+   "titlesFacet": [
+    {
+     "Id": "PAA",
+     "Name": "Program Analysts & Associate",
+     "TotalCount": 121
+    },
+    {
+     "Id": "CLM",
+     "Name": "Client Management",
+     "TotalCount": 101
+    },
+    {
+     "Id": "AUD",
+     "Name": "Internal Audit",
+     "TotalCount": 37
+    },
+    {
+     "Id": "ADM",
+     "Name": "Administration",
+     "TotalCount": 13
+    },
+    {
+     "Id": "OPS",
+     "Name": "Operations",
+     "TotalCount": 11
+    },
+    {
+     "Id": "D&A",
+     "Name": "Data & Analytics",
+     "TotalCount": 10
+    },
+    {
+     "Id": "MKT",
+     "Name": "Marketing & Communications",
+     "TotalCount": 9
+    },
+    {
+     "Id": "PPM",
+     "Name": "Project & Process Mgmt",
+     "TotalCount": 8
+    },
+    {
+     "Id": "PRO",
+     "Name": "Product",
+     "TotalCount": 7
+    },
+    {
+     "Id": "FIN",
+     "Name": "Finance",
+     "TotalCount": 4
+    },
+    {
+     "Id": "HRS",
+     "Name": "Human Resources",
+     "TotalCount": 4
+    },
+    {
+     "Id": "O&C",
+     "Name": "Oversight & Control",
+     "TotalCount": 2
+    },
+    {
+     "Id": "PIM",
+     "Name": "Product/Investment Mgmt",
+     "TotalCount": 1
+    },
+    {
+     "Id": "RSK",
+     "Name": "Risk",
+     "TotalCount": 1
+    }
+   ],
+   "workLocationsFacet": [
+    {
+     "Id": 300000161078910,
+     "Name": "32173-25 Bank Street",
+     "TotalCount": 22
+    },
+    {
+     "Id": 300000161082606,
+     "Name": "33432-CapitaSpring",
+     "TotalCount": 21
+    },
+    {
+     "Id": 300000161067089,
+     "Name": "03618-60 Victoria Embankment",
+     "TotalCount": 19
+    },
+    {
+     "Id": 300000161064854,
+     "Name": "02968-NOC 4",
+     "TotalCount": 18
+    },
+    {
+     "Id": 300000161110891,
+     "Name": "54101-1111 Polaris",
+     "TotalCount": 11
+    },
+    {
+     "Id": 300000161117503,
+     "Name": "59636-Legacy West C",
+     "TotalCount": 11
+    },
+    {
+     "Id": 300000161082876,
+     "Name": "33184-TaunusTurm",
+     "TotalCount": 9
+    },
+    {
+     "Id": 300000161065225,
+     "Name": "10468-Chase Tower Chicago",
+     "TotalCount": 8
+    },
+    {
+     "Id": 300000161067083,
+     "Name": "03363-277 Park",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000161067336,
+     "Name": "03596-Piramide Building",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300000161068741,
+     "Name": "04065-EBBC C",
+     "TotalCount": 7
+    },
+    {
+     "Id": 300035128317753,
+     "Name": "00997-One Cabot Square",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000161072552,
+     "Name": "33171-OneChangi",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000161082701,
+     "Name": "33467-Rue du Rhone (RDR)",
+     "TotalCount": 5
+    },
+    {
+     "Id": 300000161072449,
+     "Name": "33498-21 Marche Saint Honore",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000161082677,
+     "Name": "33462-Cordusio 3",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000161126808,
+     "Name": "60064-270 Park",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000161067288,
+     "Name": "03619-John Carpenter Street",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000161067300,
+     "Name": "03597-Place Vendome 14",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000161067389,
+     "Name": "03640-Place Vendome 12",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000161079411,
+     "Name": "41037-237 Park",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000161082665,
+     "Name": "33418-Atrium Garden",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000161082731,
+     "Name": "33416-Capital Dock",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000161100439,
+     "Name": "52381-One Christina Center",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300059023003239,
+     "Name": "01284-Placeholder Hamburg Long Term",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000160289918,
+     "Name": "02042-560 Mission Street",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000161064872,
+     "Name": "02936-Easton - Vision Drive",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000161065574,
+     "Name": "01211-Dorset Building",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000161080620,
+     "Name": "31076-Kanyon Office Block",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000161096225,
+     "Name": "51117-Brickell Ave and SE 15th Rd",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000161127581,
+     "Name": "59693-Legacy West A",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000161127611,
+     "Name": "59635-Legacy West B",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300006902393218,
+     "Name": "00164-1900 North Akard Street",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300008368642314,
+     "Name": "00228-World Trade Center - Tower 10",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300018688307470,
+     "Name": "00028-Sveavagen 20",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300048533922851,
+     "Name": "01135-Buenos Aires CEL",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000160289954,
+     "Name": "02037-50 Rowes Wharf",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000161065568,
+     "Name": "01428-3 Lochside View",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000161067221,
+     "Name": "03354-5 Manhattan West",
+     "TotalCount": 1
+    },
+    {
+     "Id": 300000161067425,
+     "Name": "03661-TD Bank Tower",
+     "TotalCount": 1
+    }
+   ],
+   "flexFieldsFacet": [],
+   "organizationsFacet": [
+    {
+     "Id": 300000165237998,
+     "Name": "377426-GT SEP PROGRAM - UK",
+     "TotalCount": 6
+    },
+    {
+     "Id": 300000164151038,
+     "Name": "146941-CB PAYMENTS - IPS- GASED",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000164168824,
+     "Name": "326269-EUROPE EQ CASH - FBL",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000164615316,
+     "Name": "021863-CONSUMER/BUSINESS BANKING",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000164806680,
+     "Name": "171658-PRODUCT MANAGEMENT-21662",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300004199181253,
+     "Name": "390714-ASIA TAIWAN-TAIWAN TEAM (SC)",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300007715182004,
+     "Name": "398129-CAMPUS RECRUITING MEXICO",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300037441020784,
+     "Name": "485760-ASIA HKP - HONG KONG PROF (SC)",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300038931547779,
+     "Name": "485795-PB CHINA PROF - SG (PC)",
+     "TotalCount": 4
+    },
+    {
+     "Id": 300000164289578,
+     "Name": "170342-CADP PROGRAM - EMEA-15659",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000164477431,
+     "Name": "021838-ASSET & WEALTH MGT",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000164543587,
+     "Name": "272015-PERFORMANCE CONSULTING",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000164899387,
+     "Name": "022074-INTERNAL COMMUNICATIONS",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000164922795,
+     "Name": "255522-PB TAIWAN BANKER-44594  (SC)",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000165061780,
+     "Name": "376225-FUNCTIONS EC RECRUIT ARGENTINA",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000165105649,
+     "Name": "021927-CIB TECH AUDIT - NAMR",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000165328791,
+     "Name": "366355-FUNCTIONS EC EMERGING TALENT NAMR",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300004199181385,
+     "Name": "390713-ASIA CHINA (SC)",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300004861181439,
+     "Name": "392905-WM FO & SUPPORT GERMANY",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300009579572930,
+     "Name": "402859-GT SEP PROGRAM - US",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300027300428753,
+     "Name": "461249-JPPREMM EURP O010223068FRANC",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300037441140974,
+     "Name": "485758-PB CHINA PROF - 44594  (SC)",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300053205249093,
+     "Name": "542670-ASIA SEA  -  SINGAPORE BANKER (SC)",
+     "TotalCount": 3
+    },
+    {
+     "Id": 300000164194199,
+     "Name": "256286-QTR - EQUITIES HONG KONG",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164196251,
+     "Name": "222253-GCB PUBLIC SECTOR EMEA",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164213817,
+     "Name": "145225-SWITZERLAND - GVA (PC)",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164223566,
+     "Name": "362552-GFG CHINA (SC)",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164254613,
+     "Name": "145223-BANKER MIDDLE EAST",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164303955,
+     "Name": "123284-AM-US FUNDS-401K-SALES-USA-0874",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164389595,
+     "Name": "028988-GADP - US",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164413257,
+     "Name": "147701-PB HONG KONG BANKER-44594 (PC)",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164419203,
+     "Name": "337066-ITS SGTC - 3247",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164459721,
+     "Name": "123295-AM-US FUNDS-IBD-INTERNAL SALES-USA-0874",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164615072,
+     "Name": "179942-NORTH AMERICA RECRUITING",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164653262,
+     "Name": "085501-COMMERCIAL BANK",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164677022,
+     "Name": "370726-ICB-IPLAT-F&BM-UK",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164754495,
+     "Name": "295651-WM EMEA RUSSIA LUX (PC)",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164823194,
+     "Name": "154050-ASSOCIATE TEAM",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164823535,
+     "Name": "258972-EUROPE EQ CASH SALES - GERMANY",
+     "TotalCount": 2
+    },
+    {
+     "Id": 300000164834061,
+     "Name": "244989-ONSHORE DUBAI DIFC",
+     "TotalCount": 2
+    }
+   ],
+   "workplaceTypesFacet": [
+    {
+     "Id": "ORA_ON_SITE",
+     "Name": "On-site",
+     "TotalCount": 329
+    }
+   ]
+  }
+ ],
+ "count": 1,
+ "hasMore": false,
+ "limit": 200,
+ "offset": 0,
+ "links": [
+  {
+   "rel": "self",
+   "href": "https://jpmc.fa.oraclecloud.com:443/hcmRestApi/resources/11.13.18.05/recruitingCEJobRequisitions",
+   "name": "recruitingCEJobRequisitions",
+   "kind": "collection"
+  },
+  {
+   "rel": "action",
+   "href": "https://jpmc.fa.oraclecloud.com:443/hcmRestApi/resources/11.13.18.05/recruitingCEJobRequisitions/action/getRequisitionsLocationCoordinates",
+   "name": "getRequisitionsLocationCoordinates",
+   "kind": "other"
+  },
+  {
+   "rel": "action",
+   "href": "https://jpmc.fa.oraclecloud.com:443/hcmRestApi/resources/11.13.18.05/recruitingCEJobRequisitions/action/getRequisitionDetailsForMap",
+   "name": "getRequisitionDetailsForMap",
+   "kind": "other"
+  }
+ ]
+}
