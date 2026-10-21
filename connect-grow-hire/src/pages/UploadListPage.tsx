@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { MainContentWrapper } from "@/components/MainContentWrapper";
 import ContactImport from "@/components/ContactImport";
+import { EliteGate } from "@/components/EliteGate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -295,6 +296,10 @@ const UploadListPage = () => {
         <AppSidebar />
         <MainContentWrapper>
           <AppHeader title="Upload a List" />
+          <EliteGate
+            feature="Upload List"
+            description="Upload a CSV or paste LinkedIn URLs and we'll find everyone's email and add them to My Network. Upgrade to Elite to unlock it."
+          >
           <div className="flex-1 overflow-y-auto">
             <div className="max-w-[760px] mx-auto px-6 py-10">
               {step !== 1 && <StepIndicator current={stepIndicatorValue} />}
@@ -639,6 +644,7 @@ const UploadListPage = () => {
               )}
             </div>
           </div>
+          </EliteGate>
         </MainContentWrapper>
       </div>
     </SidebarProvider>
