@@ -2,7 +2,7 @@
 // Every living alum, free to browse: name, class year, job, LinkedIn, and
 // their email when we have it. Contact drafts an intro the same way Find
 // does (which also saves them to Contacts). For alumni with no email yet,
-// Contact is where finding their info will hook in.
+// Contact first finds it from their LinkedIn, like the Chrome extension.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,6 +38,26 @@ function shade(hex: string, f: number): string {
 }
 
 type Sort = "complete" | "recent" | "oldest" | "name";
+
+// Same cadence as the extension: FullEnrich's waterfall can run minutes.
+const EMAIL_POLL_EVERY_MS = 5000;
+const EMAIL_POLL_MAX_TRIES = 84;
+
+// Their email from a LinkedIn URL, or null when none exists. Saves them to
+// Contacts on the way (import-linkedin), and a background lookup that comes
+// back empty refunds its credits.
+async function findEmailFromLinkedIn(linkedinUrl: string): Promise<string | null> {
+  const res = await apiService.importLinkedInContact(linkedinUrl);
+  if (res.contact?.email) return res.contact.email;
+  if (!res.email_pending || !res.contact_id) return null;
+  for (let i = 0; i < EMAIL_POLL_MAX_TRIES; i++) {
+    await new Promise((r) => setTimeout(r, EMAIL_POLL_EVERY_MS));
+    const s = await apiService.getContactEmailStatus(res.contact_id).catch(() => null);
+    if (s?.status === "found") return s.email;
+    if (s?.status === "miss") return null;
+  }
+  return null;
+}
 
 // How much of a profile we can show: photo, then a job, then nothing.
 const completeness = (m: DirectoryMember) => (m.photoUrl ? 2 : 0) + (m.company || m.title ? 1 : 0);
@@ -106,12 +126,27 @@ export default function OrgDirectoryPage() {
 
   const contact = useCallback(async (person: Person) => {
     const setState = (s: ContactState) => setContactStates((m) => ({ ...m, [person.id]: s }));
-    const email = person.email;
+    let email = person.email;
     if (!email) {
-      // TODO(OFF-42): kick off the find-their-info pipeline here once it's
-      // merged. Until then there's nothing to draft to.
-      toast({ title: `We don't have ${person.firstName}'s contact info yet`, description: "Looking it up from here is coming soon." });
-      return;
+      if (!person.linkedinUrl) {
+        toast({ title: `No way to reach ${person.firstName} yet`, description: "The directory has no email or LinkedIn for them." });
+        return;
+      }
+      // No email in the directory: find it from their LinkedIn the way the
+      // Chrome extension does (OFF-51), then draft below as usual.
+      setState("finding");
+      try {
+        email = await findEmailFromLinkedIn(person.linkedinUrl);
+      } catch (e: any) {
+        setState("idle");
+        toast({ title: `Couldn't look ${person.firstName} up`, description: e?.message || "Try again.", variant: "destructive" });
+        return;
+      }
+      if (!email) {
+        setState("no_email");
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
     }
     setState("working");
     try {

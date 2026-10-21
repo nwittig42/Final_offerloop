@@ -1599,6 +1599,32 @@ class ApiService {
     });
   }
 
+  /**
+   * Find someone from their LinkedIn URL and save them to Contacts, the same
+   * call the Chrome extension makes (OFF-51). No draft here: the email comes
+   * back now (shelf or Hunter) or `email_pending` means FullEnrich is still
+   * running, and getContactEmailStatus finishes it. Costs reveal_email
+   * credits; a pending miss is refunded.
+   */
+  async importLinkedInContact(linkedinUrl: string): Promise<{
+    status: string; contact_id: string; email_found: boolean; email_pending: boolean;
+    contact: { email: string | null; firstName: string; lastName: string; company: string; jobTitle: string };
+    credits_remaining?: number; message?: string;
+  }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest('/contacts/import-linkedin', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ linkedin_url: linkedinUrl, create_draft: false, email_mode: 'fast' }),
+    });
+  }
+
+  /** Poll a pending email lookup started by importLinkedInContact. */
+  async getContactEmailStatus(contactId: string): Promise<{ status: "found" | "miss" | "pending"; email: string | null; refunded: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(`/contacts/${encodeURIComponent(contactId)}/email-status`, { method: 'GET', headers });
+  }
+
   /** Download a .eml draft file (fallback delivery for users without Gmail). */
   async downloadEml(payload: { to: string; subject: string; body: string; firstName?: string; company?: string }): Promise<void> {
     // Raw fetch (not makeRequest) so we control blob + Content-Disposition
