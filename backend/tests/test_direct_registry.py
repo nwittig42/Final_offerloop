@@ -221,3 +221,25 @@ def test_target_platforms_never_auto_apply(job_id, url):
     from app.services.auto_apply.ats_detector import is_eligible
 
     assert is_eligible({"job_id": job_id, "apply_url": url}) is False
+
+
+def test_totals_report_early_career():
+    from backend.pipeline import quality_gate
+
+    calls, sync, _, patches = _crawl_patches(
+        {"workday": lambda slug: [
+            _raw("workday", title="2027 Summer Analyst Program"),
+            _raw("workday", title="Senior Vice President"),
+        ]}
+    )
+
+    def fake_gate(docs, mode="hot"):
+        for d, t in zip(docs, (1, 3)):
+            d["relevance_tier"] = t
+        return docs, []
+
+    patches.append(patch.object(quality_gate, "apply", side_effect=fake_gate))
+    result = _run(patches, platforms=("workday",), dry_run=True)
+    assert result["tier1"] == 1 and result["tier3"] == 1
+    assert result["early_career"] == 1
+    assert result["per_platform"]["workday"]["early_career"] == 1

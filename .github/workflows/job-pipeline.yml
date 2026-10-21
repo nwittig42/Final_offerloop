@@ -6,6 +6,7 @@ on:
     - cron: '15 * * * *'      # Firecrawl enrichment once an hour (fits GitHub free tier; ~1800 min/month)
     - cron: '45 * * * *'      # PDL title enrichment, offset 30min from Firecrawl (~1-2 min/run with MAX_PER_RUN=100)
     - cron: '30 */6 * * *'    # Perplexity deadline extraction every 6h (~50 jobs/run, ~$1/day at $0.005/call)
+    - cron: '20 */6 * * *'    # target-employer boards (workday/oracle/oleeo hot tier) every 6h
     - cron: '0 3 * * *'       # cleanup once daily at 03:00 UTC
   workflow_dispatch:
     inputs:
@@ -26,6 +27,7 @@ on:
           - fix-salaries
           - crawl-ats-hot
           - crawl-ats-cold-shard0
+          - crawl-ats-targets
 
 jobs:
   run:
@@ -69,6 +71,8 @@ jobs:
             MODE="title-enrich-only"
           elif [ "${{ github.event.schedule }}" = "30 */6 * * *" ]; then
             MODE="extract-deadlines"
+          elif [ "${{ github.event.schedule }}" = "20 */6 * * *" ]; then
+            MODE="crawl-ats-targets"
           else
             MODE="full"
           fi
@@ -96,6 +100,7 @@ jobs:
             fix-salaries)            python -m backend.pipeline.main --fix-salaries ;;
             crawl-ats-hot)           python -m backend.pipeline.main --crawl-ats --tier=hot ;;
             crawl-ats-cold-shard0)   python -m backend.pipeline.main --crawl-ats --tier=cold --shard=0/4 ;;
+            crawl-ats-targets)       python -m backend.pipeline.main --crawl-ats --tier=hot --platform=workday,oracle,oleeo ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
 

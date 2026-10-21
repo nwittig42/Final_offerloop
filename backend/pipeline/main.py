@@ -668,7 +668,10 @@ def run_crawl_ats(
     totals["board_hash_skip_rate_pct"] = round(
         100 * totals["board_hash_matched"] / max(totals["slugs_crawled"], 1), 1
     )
+    # early_career = tier1 + tier2 (the target-employer metric).
+    totals["early_career"] = totals["tier1"] + totals["tier2"]
     for p, p_stats in totals["per_platform"].items():
+        p_stats["early_career"] = p_stats["tier1"] + p_stats["tier2"]
         p_stats["board_hash_skip_rate_pct"] = round(
             100 * p_stats["board_hash_matched"] / max(p_stats["slugs_crawled"], 1), 1
         )
