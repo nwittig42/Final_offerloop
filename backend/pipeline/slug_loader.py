@@ -26,7 +26,11 @@ from typing import Iterable, Optional
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data" / "ats_companies"
-SUPPORTED_ATS = ("greenhouse", "lever", "ashby")
+SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "oracle", "oleeo")
+# Target-employer platforms: their CSV (`name,slug,url,analyst_entry`) is a
+# small curated list crawled as a whole. hot_slugs.txt / extras.txt don't
+# apply; "hot" and "all" return every CSV slug, "cold" returns none.
+TARGET_ATS = ("workday", "oracle", "oleeo")
 
 
 def _csv_path(ats: str) -> Path:
@@ -88,8 +92,9 @@ def _load_extras() -> dict[str, frozenset[str]]:
 
 
 @lru_cache(maxsize=None)
-def _load_csv(ats: str) -> tuple[dict[str, str], ...]:
-    """Parse the jobhive CSV for one ATS. Returns tuple of {name, slug, url} dicts.
+def _load_csv(ats: str) -> tuple[dict, ...]:
+    """Parse the CSV for one ATS. Returns tuple of {name, slug, url, analyst_entry}
+    dicts (`analyst_entry` is a bool; False for CSVs without the column).
 
     Tuple (not list) so lru_cache returns an immutable view.
     """
@@ -110,6 +115,7 @@ def _load_csv(ats: str) -> tuple[dict[str, str], ...]:
                 "slug": slug,
                 "name": (row.get("name") or "").strip(),
                 "url": (row.get("url") or "").strip(),
+                "analyst_entry": (row.get("analyst_entry") or "").strip() == "1",
             })
     logger.info("%s csv loaded: %d records", ats, len(records))
     return tuple(records)
@@ -143,6 +149,14 @@ def load_slugs(
         raise ValueError(f"unsupported ats: {ats!r}")
     if tier not in ("hot", "cold", "all"):
         raise ValueError(f"unsupported tier: {tier!r}")
+
+    if ats in TARGET_ATS:
+        if tier == "cold":
+            return []
+        candidates = [r["slug"] for r in _load_csv(ats)]
+        if shard is not None and tier != "hot":
+            candidates = [s for s in candidates if _in_shard(s, shard)]
+        return sorted(set(candidates))
 
     hot = _load_hot_slugs()[ats]
     extras = _load_extras()[ats]
@@ -183,6 +197,17 @@ def get_company_name(ats: str, slug: str) -> str:
     return slug.replace("-", " ").replace("_", " ").title()
 
 
+@lru_cache(maxsize=None)
+def _record_map(ats: str) -> dict[str, dict]:
+    return {r["slug"]: r for r in _load_csv(ats)}
+
+
+def get_record(ats: str, slug: str) -> dict | None:
+    """The CSV row {name, slug, url, analyst_entry} for (ats, slug), or None."""
+    rec = _record_map(ats).get(slug)
+    return dict(rec) if rec else None
+
+
 def load_all_records(ats: str) -> Iterable[dict[str, str]]:
     """Full {slug, name, url} records for one ATS — used by the seed script."""
     return _load_csv(ats)
@@ -194,3 +219,4 @@ def clear_cache() -> None:
     _load_extras.cache_clear()
     _load_csv.cache_clear()
     _name_map.cache_clear()
+    _record_map.cache_clear()

@@ -687,7 +687,7 @@ _FJ_PASSTHROUGH_FIELDS = (
 
 
 def _normalize_board_job(raw: dict) -> dict | None:
-    """Normalize a pre-structured job from Greenhouse/Lever/Ashby/Fantastic.jobs."""
+    """Normalize a pre-structured job from a direct ATS board or Fantastic.jobs."""
     job_id = raw.get("job_id")
     title = raw.get("title")
     company_raw = raw.get("company")
@@ -750,6 +750,9 @@ def _normalize_board_job(raw: dict) -> dict | None:
         "posted_at": posted_at,
         "fetched_at": now,
         "expires_at": now + timedelta(days=14),
+        "department": raw.get("department") or "",
+        "team": raw.get("team") or "",
+        "analyst_entry": bool(raw.get("analyst_entry")),
     }
     for field in _FJ_PASSTHROUGH_FIELDS:
         if field in raw:
@@ -821,7 +824,9 @@ def _normalize_jsearch_job(raw: dict) -> dict | None:
 
 def normalize_job(raw: dict) -> dict | None:
     """Normalize a raw job dict from any source. Auto-detects format."""
-    if raw.get("source") in ("greenhouse", "lever", "workday", "ashby", "fantasticjobs", "simplify"):
+    if raw.get("source") in (
+        "greenhouse", "lever", "workday", "oracle", "oleeo", "ashby", "fantasticjobs", "simplify",
+    ):
         return _normalize_board_job(raw)
     return _normalize_jsearch_job(raw)
 

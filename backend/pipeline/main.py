@@ -19,6 +19,7 @@ Usage:
     python pipeline/main.py --backfill-title-enrich   # Backfill title enrichment for legacy jobs
     python pipeline/main.py --crawl-ats --tier=hot                  # Direct-ATS crawl of hot-tier slugs (~270 curated)
     python pipeline/main.py --crawl-ats --tier=cold --shard=0/4     # Cold-tier shard 0 of 4 (~2400 slugs)
+    python pipeline/main.py --crawl-ats --platform=workday,oracle --dry-run  # Target platforms, no Firestore writes
     python pipeline/main.py --health-snapshot                       # Read-only current-state metrics → pipeline_runs
 """
 from dotenv import load_dotenv
@@ -43,6 +44,7 @@ sys.path.insert(0, _BACKEND_DIR)
 
 from flask import Flask
 from backend.app.extensions import init_firebase
+from backend.pipeline.direct import LEGACY_PLATFORMS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -480,29 +482,56 @@ def _parse_shard() -> tuple[int, int] | None:
     return None
 
 
-def run_crawl_ats(tier: str = "hot", shard: tuple[int, int] | None = None) -> dict:
+def _parse_platforms() -> tuple[str, ...] | None:
+    """Parse --platform=workday,oracle. None when the flag is absent."""
+    from backend.pipeline import direct
+
+    for arg in sys.argv:
+        if arg.startswith("--platform="):
+            names = tuple(
+                p.strip().lower() for p in arg.split("=", 1)[1].split(",") if p.strip()
+            )
+            unknown = [p for p in names if p not in direct.ALL_PLATFORMS]
+            if unknown or not names:
+                raise SystemExit(
+                    f"--platform: unknown {unknown or names!r}; "
+                    f"choose from {', '.join(direct.ALL_PLATFORMS)}"
+                )
+            return names
+    return None
+
+
+def run_crawl_ats(
+    tier: str = "hot",
+    shard: tuple[int, int] | None = None,
+    platforms: tuple[str, ...] = LEGACY_PLATFORMS,
+    dry_run: bool = False,
+) -> dict:
     """Direct-ATS scale-up crawler (Phase 0 orchestrator).
 
-    For each platform (greenhouse / lever / ashby):
+    For each platform (default: greenhouse / lever / ashby; see
+    `direct.ALL_PLATFORMS` for the rest):
       1. Load slugs from slug_loader for the requested tier + shard
       2. Batch-read prior crawl state for those slugs
-      3. Parallel per-platform pool: fetch → normalize → sync_board_jobs
+      3. Parallel per-platform pool: fetch → normalize → gate → sync_board_jobs
       4. Aggregate results
 
     Cold tier runs the strict positive-allowlist quality gate; hot tier runs
     the original drop-list. Both stamp relevance_tier on kept docs.
+
+    dry_run: fetch, normalize and gate as usual, but skip every Firestore
+    read/write (crawl state, sync_board_jobs, mark_failure) and log 5 sample
+    kept titles per board.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from backend.pipeline import fetcher, writer, slug_loader, crawl_state
+    from backend.pipeline import direct, fetcher, writer, slug_loader, crawl_state
     from backend.pipeline.normalizer import normalize_job, _is_non_us_non_remote
     from backend.pipeline.quality_gate import apply as apply_quality_gate
 
+    unknown = [p for p in platforms if p not in direct.ALL_PLATFORMS]
+    if unknown:
+        raise ValueError(f"unknown platforms {unknown!r}")
     gate_mode = tier if tier in ("hot", "cold") else "hot"
-    platforms = {
-        "greenhouse": fetcher._fetch_greenhouse,
-        "lever": fetcher._fetch_lever,
-        "ashby": fetcher._fetch_ashby,
-    }
 
     def _empty_platform_stats() -> dict:
         return {
@@ -529,15 +558,24 @@ def run_crawl_ats(tier: str = "hot", shard: tuple[int, int] | None = None) -> di
         "tier1": 0,
         "tier2": 0,
         "tier3": 0,
+        "dry_run": dry_run,
         "per_platform": {p: _empty_platform_stats() for p in platforms},
     }
 
-    def _crawl_one(platform: str, slug: str, prior_state):
-        """Fetch → normalize → gate → sync. Returns sync result + tier counts."""
-        raw = platforms[platform](slug)
+    def _crawl_one(platform: str, fetch, slug: str, prior_state):
+        """Fetch → normalize → gate → sync. Returns sync result + tier counts.
+
+        A fetcher that can't read the whole board raises (FetchError for the
+        target platforms); the caller marks the board failed and nothing on
+        it is synced or expired.
+        """
+        raw = fetch(slug)
+        record = slug_loader.get_record(platform, slug) if platform in direct.TARGET_PLATFORMS else None
         # normalize per-slug (mirror the pieces of normalize_all we need)
         normalized: list[dict] = []
         for r in raw:
+            if record and "analyst_entry" not in r:
+                r["analyst_entry"] = record["analyst_entry"]
             doc = normalize_job(r)
             if not doc or _is_non_us_non_remote(doc):
                 continue
@@ -552,7 +590,20 @@ def run_crawl_ats(tier: str = "hot", shard: tuple[int, int] | None = None) -> di
             key = f"tier{d.get('relevance_tier') or 3}"
             if key in tiers:
                 tiers[key] += 1
-        result = writer.sync_board_jobs(platform, slug, kept, prior_state=prior_state)
+        if dry_run:
+            logger.info(
+                "[dry-run %s/%s] %d kept of %d fetched; sample: %s",
+                platform, slug, len(kept), len(raw),
+                [d.get("title") for d in kept[:5]],
+            )
+            result = {
+                "board_hash_matched": False,
+                "snapshot_count": len(kept),
+                "written": 0,
+                "expired": 0,
+            }
+        else:
+            result = writer.sync_board_jobs(platform, slug, kept, prior_state=prior_state)
         result.update(tiers)
         return result
 
@@ -567,12 +618,14 @@ def run_crawl_ats(tier: str = "hot", shard: tuple[int, int] | None = None) -> di
             continue
 
         # One batched read up front — 5-6 Firestore round-trips even for a 2500-slug shard.
-        state_map = crawl_state.read_state_batch(platform, slugs)
+        state_map = {} if dry_run else crawl_state.read_state_batch(platform, slugs)
 
-        pool_size = fetcher.POOL_SIZE.get(platform, 8)
+        fetch = direct.get_fetcher(platform)
+        # Target platforms: at most 4 concurrent boards.
+        pool_size = fetcher.POOL_SIZE.get(platform, 4)
         with ThreadPoolExecutor(max_workers=pool_size) as pool:
             futures = {
-                pool.submit(_crawl_one, platform, slug, state_map.get(slug)): slug
+                pool.submit(_crawl_one, platform, fetch, slug, state_map.get(slug)): slug
                 for slug in slugs
             }
             for future in as_completed(futures):
@@ -584,10 +637,11 @@ def run_crawl_ats(tier: str = "hot", shard: tuple[int, int] | None = None) -> di
                     logger.warning("[%s/%s] slug %s failed: %s", platform, tier, slug, e)
                     totals["slugs_failed"] += 1
                     p_stats["slugs_failed"] += 1
-                    try:
-                        crawl_state.mark_failure(platform, slug, state_map.get(slug))
-                    except Exception:
-                        pass
+                    if not dry_run:
+                        try:
+                            crawl_state.mark_failure(platform, slug, state_map.get(slug))
+                        except Exception:
+                            pass
                     continue
                 # Aggregate + per-platform in one pass
                 totals["slugs_crawled"] += 1
@@ -665,7 +719,12 @@ if __name__ == "__main__":
         elif "--crawl-ats" in sys.argv:
             tier = _parse_tier(default="hot")
             shard = _parse_shard()
-            mode, runner = f"crawl-ats-{tier}", (lambda: run_crawl_ats(tier=tier, shard=shard))
+            platforms = _parse_platforms() or LEGACY_PLATFORMS
+            dry_run = "--dry-run" in sys.argv
+            mode = f"crawl-ats-{tier}" + ("-dry-run" if dry_run else "")
+            runner = lambda: run_crawl_ats(  # noqa: E731
+                tier=tier, shard=shard, platforms=platforms, dry_run=dry_run
+            )
         elif "--health-snapshot" in sys.argv:
             mode, runner = "health-snapshot", run_health_snapshot
         elif "--include-fantastic-7d" in sys.argv:

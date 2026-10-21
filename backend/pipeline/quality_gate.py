@@ -77,6 +77,19 @@ _MIN_DESCRIPTION_CHARS = 50
 # fall/spring intern reqs stay open 60+ days before closing.
 _MAX_AGE_DAYS = 90
 
+# Sources whose crawl diffs the full board every run and expires jobs that
+# disappear, so they don't need the age drop. Bank programs often stay open
+# well past 90 days.
+BOARD_DIFF_SOURCES = frozenset({"workday", "oracle", "oleeo", "goldman", "manual"})
+
+# Recruiting events posted as jobs (coffee chats, info sessions, ...).
+_EVENT_TITLE = re.compile(
+    r"coffee chat|info(rmation)? session|webinar|insight day|open day|"
+    r"networking event|virtual event",
+    re.I,
+)
+_ANALYST_TITLE = re.compile(r"\banalyst\b", re.I)
+
 
 # ---------------------------------------------------------------------------
 # Relevance tier + cold-tier positive allowlist (Phase 0 — 2026-07-14)
@@ -169,6 +182,22 @@ def _matches_cold_allowlist(doc: dict) -> bool:
     return True
 
 
+def is_candidate_title(title: str, analyst_entry: bool) -> bool:
+    """True if the title reads as early-career for a direct target-employer board.
+
+    A plain "Analyst" title counts only on boards flagged `analyst_entry`
+    (banks where Analyst is the entry-level rank). Senior titles and
+    recruiting events never count.
+    """
+    title = title or ""
+    if not (
+        _EARLY_CAREER_TITLE.search(title)
+        or (analyst_entry and _ANALYST_TITLE.search(title))
+    ):
+        return False
+    return not (_SENIOR_TITLE.search(title) or _EVENT_TITLE.search(title))
+
+
 def compute_relevance_tier(doc: dict) -> int:
     """Assign a 1-3 tier to a kept posting. Higher = worse fit for feed.
 
@@ -181,7 +210,9 @@ def compute_relevance_tier(doc: dict) -> int:
              default via tier filter.
     """
     title = doc.get("title") or ""
-    is_early = bool(_EARLY_CAREER_TITLE.search(title))
+    is_early = bool(_EARLY_CAREER_TITLE.search(title)) or (
+        bool(doc.get("analyst_entry")) and is_candidate_title(title, True)
+    )
     in_target = bool(_TARGET_FUNCTION_TITLE.search(title))
 
     if is_early and in_target:
@@ -270,8 +301,9 @@ def evaluate(doc: dict, *, mode: str = "hot") -> tuple[bool, str | None]:
         if doc.get("source") != "simplify":
             return False, "description_too_short"
 
-    # 7. Stale posting (>60 days old)
-    if _is_too_old(doc.get("posted_at")):
+    # 7. Stale posting (>90 days old). Board-diff sources are exempt: their
+    #    crawl expires a job once it leaves the board.
+    if doc.get("source") not in BOARD_DIFF_SOURCES and _is_too_old(doc.get("posted_at")):
         return False, "too_old"
 
     # 8. Cold-tier only: must match early-career positive allowlist.

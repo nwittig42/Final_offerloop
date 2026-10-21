@@ -9,7 +9,7 @@ from typing import Optional
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from backend.app.extensions import get_db
-from backend.pipeline import crawl_state
+from backend.pipeline import crawl_state, direct
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +353,7 @@ def sync_board_jobs(
     }
 
 
-_DIRECT_ATS_PREFIXES = ("direct_greenhouse_", "direct_lever_", "direct_ashby_")
+_DIRECT_ATS_PREFIXES = tuple(f"direct_{p}_" for p in direct.ALL_PLATFORMS)
 
 
 def _ats_board(doc_id: str) -> Optional[tuple[str, str]]:
