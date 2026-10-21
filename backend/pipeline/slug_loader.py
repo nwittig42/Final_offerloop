@@ -26,7 +26,7 @@ from typing import Iterable, Optional
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data" / "ats_companies"
-SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "oracle", "oleeo")
+SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workday", "oracle", "oleeo", "goldman")
 # workday/oracle/oleeo CSVs use `name,slug,url,analyst_entry`. Tiering is the
 # same as for the legacy platforms: target employers are listed in
 # hot_slugs.txt as `{platform}:{slug}`; other CSV rows are cold tier.

@@ -46,6 +46,7 @@ POOL_SIZE = {
     "workday": 8,
     "oracle": 4,
     "oleeo": 4,
+    "goldman": 4,
 }
 
 

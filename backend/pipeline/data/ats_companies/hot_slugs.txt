@@ -544,3 +544,4 @@ workday:zoom  # Zoom
 oracle:jpmorgan  # JPMorgan Chase
 oracle:lazard  # Lazard
 oleeo:bofa-campus  # Bank of America
+goldman:goldman-sachs  # Goldman Sachs
