@@ -1,0 +1,43 @@
+{
+ "total": 90,
+ "jobPostings": [
+  {
+   "title": "Services - Summer Analyst, Singapore, 2027",
+   "externalPath": "/job/Singapore--Singapore/Services---Summer-Analyst--Singapore--2027_26978591",
+   "locationsText": "Singapore  Singapore",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "26978591"
+   ]
+  },
+  {
+   "title": "Services - Summer Analyst, China, 2027",
+   "externalPath": "/job/Shanghai-Shanghai-China/Services---Summer-Analyst--China--2027_26978889",
+   "locationsText": "Shanghai Shanghai China",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "26978889"
+   ]
+  },
+  {
+   "title": "Internal Audit - Summer Analyst, Warsaw, 2027",
+   "externalPath": "/job/Warsaw--Poland/Internal-Audit---Summer-Analyst--Warsaw--2027_26991713",
+   "locationsText": "Warsaw  Poland",
+   "postedOn": "Posted 28 Days Ago",
+   "bulletFields": [
+    "26991713"
+   ]
+  },
+  {
+   "title": "Services - Summer Analyst, UK - London, 2027",
+   "externalPath": "/job/London--United-Kingdom/Services---Summer-Analyst--UK---London--2027_26995475",
+   "locationsText": "London  United Kingdom",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "26995475"
+   ]
+  }
+ ],
+ "facets": [],
+ "userAuthenticated": false
+}
