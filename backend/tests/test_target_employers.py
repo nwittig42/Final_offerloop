@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def _write_fixture_csvs(tmp_path):
     (tmp_path / "workday.csv").write_text(
@@ -78,3 +80,39 @@ def test_script_slugify():
     from backend.scripts.build_target_employers import slugify
 
     assert slugify("J.P. Morgan Chase & Co.") == "jp-morgan-chase-co"
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("The Walt Disney Company", 0),
+    ("Stanley Black & Decker", 0),
+    ("Ensemble Health Partners", 0),
+    ("Barclays", 1),
+    ("BlackRock", 1),
+    ("PIMCO", 1),
+    ("PJT Partners", 1),
+    ("EY", 1),
+    ("T. Rowe Price", 1),
+    ("S&P Global", 1),
+    ("Goldman Sachs", 1),
+])
+def test_analyst_entry_classifier(name, expected):
+    from backend.scripts.build_target_employers import analyst_entry
+
+    assert analyst_entry(name) == expected
+
+
+def test_tenant_site_prefers_public():
+    from backend.scripts.build_target_employers import simplify_workday_tenants
+
+    def item(url, active=True):
+        return {"url": url, "company_name": "Acme", "active": active}
+
+    tenants = simplify_workday_tenants([
+        item("https://acme.wd1.myworkdayjobs.com/acme_private/job/x_1"),
+        item("https://acme.wd1.myworkdayjobs.com/acme_private/job/x_2"),
+        item("https://acme.wd1.myworkdayjobs.com/AcmeCareers/job/x_3", active=False),
+        item("https://solo.wd1.myworkdayjobs.com/invitation-only/job/x_4"),
+    ])
+    assert tenants["acme.wd1.myworkdayjobs.com"]["site"] == "AcmeCareers"
+    assert tenants["acme.wd1.myworkdayjobs.com"]["public_site"] is True
+    assert tenants["solo.wd1.myworkdayjobs.com"]["public_site"] is False

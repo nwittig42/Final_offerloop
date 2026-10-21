@@ -466,7 +466,6 @@ workday:elevance-health  # Elevance Health
 workday:fidelity-investments  # Fidelity Investments
 workday:fiserv  # Fiserv
 workday:fox  # FOX
-workday:franklin-templeton  # Franklin Templeton
 workday:fti-consulting  # FTI Consulting
 workday:gartner  # Gartner
 workday:ge-aerospace  # GE Aerospace
@@ -510,7 +509,6 @@ workday:procter-gamble  # Procter & Gamble
 workday:prologis  # Prologis
 workday:prudential-financial  # Prudential Financial
 workday:pwc  # PwC
-workday:raymond-james-financial  # Raymond James Financial
 workday:royal-bank-of-canada  # Royal Bank of Canada
 workday:rsm  # RSM
 workday:rtx  # RTX
