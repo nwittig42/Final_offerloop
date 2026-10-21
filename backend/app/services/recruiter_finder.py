@@ -165,10 +165,13 @@ def _run_engine_tier_search(company: str, titles: List[str], location: Optional[
     """
     try:
         from app.services.engine_search import engine_search_contacts
+        from app.utils.locations import office_city_or_none
+        city = office_city_or_none(location)
         parsed = {
             "companies": [{"name": company}],
             "title_variations": [t for t in (titles or []) if t][:6],
-            "locations": ([location] if location else []),
+            "locations": ([city] if city else []),
+            "skip_title_guard": True,
         }
         contacts, _rl, _saved, _meta = engine_search_contacts(
             parsed, max(1, size), allow_vendor=allow_vendor,
@@ -476,7 +479,7 @@ def determine_job_type(job_title: str, job_description: str = "") -> str:
     
     # Check for intern first (highest priority)
     for keyword in JOB_TYPE_KEYWORDS["intern"]:
-        if keyword in combined_text:
+        if re.search(rf"\b{re.escape(keyword)}\b", combined_text):
             return "intern"
     
     # Check other job types
@@ -484,7 +487,7 @@ def determine_job_type(job_title: str, job_description: str = "") -> str:
         if job_type == "intern":
             continue
         for keyword in keywords:
-            if keyword in combined_text:
+            if re.search(rf"\b{re.escape(keyword)}\b", combined_text):
                 return job_type
     
     return "general"

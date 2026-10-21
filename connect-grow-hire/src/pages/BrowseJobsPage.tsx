@@ -29,6 +29,10 @@ import {
   FindHumansModal,
   type FindHumansJob,
 } from "@/components/jobs/FindHumansModal";
+import {
+  FindContactsModal,
+  type FindContactsJob,
+} from "@/components/jobs/FindContactsModal";
 import { ApplicationProfileModal } from "@/components/jobs/ApplicationProfileModal";
 import { IconClose } from "@/components/jobs/icons";
 import { JobBoardSearchBar, jobPillClass } from "@/components/jobs/JobBoardSearchBar";
@@ -89,6 +93,7 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
   const [findHumansJob, setFindHumansJob] = useState<FindHumansJob | null>(null);
   const [findHumansKind, setFindHumansKind] = useState<"employee" | "hiring-manager">("hiring-manager");
   const [findHumansCount, setFindHumansCount] = useState(3);
+  const [findContactsJob, setFindContactsJob] = useState<FindContactsJob | null>(null);
 
   // Auto-apply (mirrors the personalized board's flow): one in-flight job at a
   // time drives the card's "Applying…" state; PROFILE_REQUIRED opens the
@@ -301,11 +306,10 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
     () => ({
       onOpen: setDetailJob,
       onToggleSave: toggleSave,
-      onFindHiringManager: (j) => openFindHumans(j, "hiring-manager", 3),
-      onFindTeam: (j) => openFindHumans(j, "employee", 5),
+      onFindContacts: (j) => setFindContactsJob({ id: j.id, title: j.title, company: j.company }),
       onAutoApply: handleAutoApply,
     }),
-    [toggleSave, openFindHumans, handleAutoApply]
+    [toggleSave, handleAutoApply]
   );
 
   const pillActiveKey = useMemo(() => {
@@ -460,6 +464,12 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
         job={findHumansJob}
         kind={findHumansKind}
         count={findHumansCount}
+      />
+
+      <FindContactsModal
+        open={!!findContactsJob}
+        onOpenChange={(o) => !o && setFindContactsJob(null)}
+        job={findContactsJob}
       />
 
       <ApplicationProfileModal

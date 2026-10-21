@@ -257,7 +257,11 @@ def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     companies = parsed.get("companies") or []
     company_names = [c.get("name") for c in companies if isinstance(c, dict) and c.get("name")]
-    title_variations = _distinctive_variations(parsed.get("title_variations") or [])
+    title_variations = list(parsed.get("title_variations") or [])
+    # The distinctive-title guard is built for prompt search; callers with
+    # curated title tiers (hiring-manager finder) opt out.
+    if not parsed.get("skip_title_guard"):
+        title_variations = _distinctive_variations(title_variations)
     schools = parsed.get("schools") or []
     locations = parsed.get("locations") or []
 
@@ -719,3 +723,81 @@ def _synthesize_id(email: str, linkedin: str, first: str, last: str, company: st
 def _contact_key(contact: Dict[str, Any]) -> str:
     """Dedup key — prefer LinkedIn URL, fall back to pdlId."""
     return (contact.get("LinkedIn") or "").strip().lower() or contact.get("pdlId", "")
+
+
+# ---------------------------------------------------------------------------
+# Direct people queries (Find contacts). These bypass _distinctive_variations
+# and never require a job location as a person location.
+# ---------------------------------------------------------------------------
+
+
+def _current_company_clauses(company: str) -> List[Dict[str, Any]]:
+    return [
+        {"term": {"experience.active_experience": 1}},
+        {"match_phrase": {"experience.company_name": company}},
+    ]
+
+
+def search_people(
+    company: str,
+    titles: List[str],
+    keywords: Optional[List[str]] = None,
+    city: Optional[str] = None,
+    page_size: int = 10,
+) -> List[int]:
+    """ES ids of current employees of `company` holding any of `titles`.
+
+    Every keyword must appear in the current role's position_title or
+    department, or in the headline (bank titles are often just "Vice
+    President"; the group shows up in department or headline).
+    `city` (optional) is a match_phrase on location_full.
+    """
+    def current_role(extra: Dict[str, Any]) -> Dict[str, Any]:
+        return {"nested": {"path": "experience", "query": {"bool": {
+            "must": _current_company_clauses(company) + [extra]}}}}
+
+    must: List[Dict[str, Any]] = [current_role({
+        "bool": {
+            "should": [{"match_phrase": {"experience.position_title": t}} for t in titles],
+            "minimum_should_match": 1,
+        }
+    })]
+    for kw in keywords or []:
+        must.append({"bool": {"should": [
+            current_role({"bool": {"should": [
+                {"match_phrase": {"experience.position_title": kw}},
+                {"match_phrase": {"experience.department": kw}},
+            ], "minimum_should_match": 1}}),
+            {"match_phrase": {"headline": kw}},
+        ], "minimum_should_match": 1}})
+    if city:
+        must.append({"match_phrase": {"location_full": city}})
+    return _search_ids({"query": {"bool": {"must": must}}}, page_size=page_size)
+
+
+def collect_contacts(ids: List[int], limit: int) -> List[Dict[str, Any]]:
+    """Collect at most `limit` profiles and normalize them to contacts."""
+    profiles = _collect_profiles_parallel(list(ids)[:limit])
+    contacts = [_normalize_to_contact(p) for p in profiles]
+    return [c for c in contacts if c]
+
+
+def find_person_by_name(full_name: str, company: str) -> Optional[Dict[str, Any]]:
+    """Look up one named person currently at `company`; None if not found."""
+    nested = {
+        "nested": {
+            "path": "experience",
+            "query": {"bool": {"must": _current_company_clauses(company)}},
+        }
+    }
+    query = {"query": {"bool": {"must": [
+        {"match_phrase": {"full_name": full_name}},
+        nested,
+    ]}}}
+    ids = _search_ids(query, page_size=1)
+    if not ids:
+        return None
+    profiles = _collect_profiles_parallel(ids[:1])
+    if not profiles:
+        return None
+    return _normalize_to_contact(profiles[0], target_company=company)
