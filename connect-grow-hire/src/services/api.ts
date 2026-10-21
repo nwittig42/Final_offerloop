@@ -1520,6 +1520,16 @@ class ApiService {
     return this.makeRequest(`/orgs/${encodeURIComponent(orgId)}/members`, { method: 'GET', headers });
   }
 
+  /** Put an email Contact just found onto the alum's directory card (OFF-51).
+   * The server takes the address from the saved contact, not from us. */
+  async saveOrgFoundEmail(orgId: string, personKey: string, contactId: string): Promise<{ ok: boolean; email: string }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(
+      `/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(personKey)}/found-email`,
+      { method: 'POST', headers, body: JSON.stringify({ contact_id: contactId }) },
+    );
+  }
+
   /**
    * Send a Gmail draft that was created server-side during a search.
    * Used by the Find-page draft review row's "Send" button. Returns

@@ -14,6 +14,7 @@ from firebase_admin import firestore
 from app.extensions import get_db, require_firebase_auth
 from app.services.org_directory import (
     MEMBERSHIPS_FIELD, _org_public, active_org_ids, check_org_password, directory_contacts, directory_row, list_orgs,
+    save_found_email,
 )
 
 # Wrong-password throttle, per user per org, kept in Firestore so it holds
@@ -129,3 +130,29 @@ def org_members(org_id):
     except Exception as e:
         print(f"[Orgs] members failed for {org_id}: {e}")
         return jsonify({"error": "Could not load the directory"}), 500
+
+
+@orgs_bp.route("/<org_id>/members/<person_key>/found-email", methods=["POST"])
+@require_firebase_auth
+def org_member_found_email(org_id, person_key):
+    """After Contact found an alum's email from their LinkedIn (OFF-51),
+    put it on their directory card. Body: {contact_id}, the contact the
+    lookup saved, so the address comes from our lookup, not the client."""
+    db = get_db()
+    org = _member_org(db, org_id)
+    if org is None:
+        return jsonify({"error": "not_a_member"}), 403
+    contact_id = str((request.get_json(silent=True) or {}).get("contact_id") or "").strip()
+    if not contact_id or "/" in contact_id:
+        return jsonify({"error": "contact_id required"}), 400
+    snap = _user_ref(db).collection("contacts").document(contact_id).get()
+    if not snap.exists:
+        return jsonify({"error": "contact_not_found"}), 404
+    try:
+        email, reason = save_found_email(db, org, person_key, snap.to_dict() or {})
+    except Exception as e:
+        print(f"[Orgs] found-email failed for {org_id}/{person_key}: {e}")
+        return jsonify({"error": "Could not save the email"}), 500
+    if email is None:
+        return jsonify({"error": reason}), 404 if reason == "not_in_directory" else 400
+    return jsonify({"ok": True, "email": email})

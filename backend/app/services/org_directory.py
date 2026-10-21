@@ -308,7 +308,9 @@ def member_contact(member: dict, org: dict, wh: dict | None = None, include_unre
     work_email = (member.get("workEmail") or "").strip()
     # A "lost" member's directory email is the address TKE itself flagged as stale.
     dir_email = "" if member.get("link_membershipStatus") == "lost" else (member.get("email") or "").strip()
-    email = work_email or dir_email
+    # Found by a member's Contact click from their LinkedIn (OFF-51).
+    found_email = (member.get("foundEmail") or "").strip()
+    email = work_email or found_email or dir_email
     wh = wh or {}
     linkedin = (member.get("linkedinUrl") or "").strip() or (wh.get("linkedin_url") or "").strip()
     if not email and not linkedin and not include_unreachable:
@@ -345,7 +347,7 @@ def member_contact(member: dict, org: dict, wh: dict | None = None, include_unre
         "Phone": "",
         "PhotoUrl": member.get("photoUrl") or wh.get("photo_url") or "",
         "JoinedYear": None,
-        "EmailSource": "fullenrich" if work_email else ("org_directory" if dir_email else ""),
+        "EmailSource": "fullenrich" if work_email else ("lookup" if found_email else ("org_directory" if dir_email else "")),
         "EmailVerified": bool(work_email and member.get("workEmailStatus") == "DELIVERABLE"),
         "DataVersion": "org_directory",
         "source": "org_directory",
@@ -457,6 +459,43 @@ def directory_contacts(db, org: dict, include_unreachable: bool = False) -> list
         seen.add(key)
         out.append(c)
     return rank(out)
+
+
+def _linkedin_slug(url: str) -> str:
+    m = re.search(r"linkedin\.com/in/([^/?#]+)", (url or "").lower())
+    return m.group(1) if m else ""
+
+
+def save_found_email(db, org: dict, person_key: str, contact: dict) -> tuple[str | None, str]:
+    """Put an email a member found (OFF-51: Contact on an alum with no email
+    runs the LinkedIn lookup) onto that alum's directory card, for every
+    member. `contact` is the finder's own saved contact doc, so the address
+    is one our lookup returned, never one the client typed; its LinkedIn
+    must be this alum's. Returns (email, "") or (None, reason)."""
+    email = (contact.get("email") or "").strip()
+    if "@" not in email:
+        return None, "no_email"
+    row = next((c for c in directory_contacts(db, org, include_unreachable=True) if c["PersonKey"] == person_key), None)
+    if row is None:
+        return None, "not_in_directory"
+    if row["Email"]:
+        return row["Email"], ""  # someone got there first; theirs stays
+    slug = _linkedin_slug(row["LinkedIn"])
+    if not slug or slug != _linkedin_slug(contact.get("linkedinUrl") or ""):
+        return None, "linkedin_mismatch"
+
+    from datetime import datetime, timezone
+    db.collection(PEOPLE_COLLECTION).document(person_key).set({
+        "foundEmail": email,
+        "foundEmailSource": contact.get("emailSource") or "",
+        "foundEmailAt": datetime.now(timezone.utc).isoformat(),
+    }, merge=True)
+    # This process's cache shows it now; other workers within MEMBERS_TTL_SEC.
+    with _cache_lock:
+        for m in (_members_cache.get(org["id"]) or (0, []))[1]:
+            if m.get("personKey") == person_key:
+                m["foundEmail"] = email
+    return email, ""
 
 
 def directory_row(contact: dict) -> dict:

@@ -290,3 +290,39 @@ def test_unreachable_alumni_only_in_the_browsable_directory():
     # Deceased and undergrads stay out either way.
     assert od.member_contact(_member(link_membershipStatus="deceased"), TKE, include_unreachable=True) is None
     assert od.member_contact(_member(link_membershipType="undergrad"), TKE, include_unreachable=True) is None
+
+
+def test_found_email_fills_the_card_only_for_the_right_linkedin(monkeypatch):
+    m = _member(email="", link_membershipStatus="lost", linkedinUrl="https://www.linkedin.com/in/Jamie-Park/",
+                personKey="tke:jp")
+    monkeypatch.setattr(od, "load_org_members", lambda db, org_id: [m])
+    monkeypatch.setattr(od, "warehouse_by_name", lambda db, school: {})
+    db = MagicMock()
+    found = {"email": "jpark@gs.com", "emailSource": "fullenrich_deliverable",
+             "linkedinUrl": "https://linkedin.com/in/jamie-park"}
+
+    # A contact for someone else's LinkedIn can't write to this card.
+    assert od.save_found_email(db, TKE, "tke:jp", {**found, "linkedinUrl": "https://linkedin.com/in/other"}) == (None, "linkedin_mismatch")
+    assert od.save_found_email(db, TKE, "tke:nobody", found) == (None, "not_in_directory")
+    assert od.save_found_email(db, TKE, "tke:jp", {**found, "email": ""}) == (None, "no_email")
+    db.collection.assert_not_called()
+
+    assert od.save_found_email(db, TKE, "tke:jp", found) == ("jpark@gs.com", "")
+    db.collection.assert_called_with(od.PEOPLE_COLLECTION)
+    db.collection().document.assert_called_with("tke:jp")
+    written = db.collection().document().set.call_args[0][0]
+    assert written["foundEmail"] == "jpark@gs.com"
+
+    # Once found, the card shows it.
+    c = od.member_contact({**m, "foundEmail": "jpark@gs.com"}, TKE, include_unreachable=True)
+    assert c["Email"] == "jpark@gs.com" and c["EmailSource"] == "lookup"
+
+
+def test_found_email_never_overwrites_an_existing_one(monkeypatch):
+    m = _member(personKey="tke:jp", linkedinUrl="https://linkedin.com/in/jamie-park")
+    monkeypatch.setattr(od, "load_org_members", lambda db, org_id: [m])
+    monkeypatch.setattr(od, "warehouse_by_name", lambda db, school: {})
+    db = MagicMock()
+    got = od.save_found_email(db, TKE, "tke:jp", {"email": "x@y.com", "linkedinUrl": "https://linkedin.com/in/jamie-park"})
+    assert got == ("jamie@gmail.com", "")
+    db.collection.assert_not_called()

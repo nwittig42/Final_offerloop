@@ -43,20 +43,21 @@ type Sort = "complete" | "recent" | "oldest" | "name";
 const EMAIL_POLL_EVERY_MS = 5000;
 const EMAIL_POLL_MAX_TRIES = 84;
 
-// Their email from a LinkedIn URL, or null when none exists. Saves them to
-// Contacts on the way (import-linkedin), and a background lookup that comes
-// back empty refunds its credits.
-async function findEmailFromLinkedIn(linkedinUrl: string): Promise<string | null> {
+// Their email from a LinkedIn URL, or null when none exists, plus the
+// contact it was saved on (import-linkedin adds them to Contacts). A
+// background lookup that comes back empty refunds its credits.
+async function findEmailFromLinkedIn(linkedinUrl: string): Promise<{ email: string | null; contactId: string }> {
   const res = await apiService.importLinkedInContact(linkedinUrl);
-  if (res.contact?.email) return res.contact.email;
-  if (!res.email_pending || !res.contact_id) return null;
+  const contactId = res.contact_id;
+  if (res.contact?.email) return { email: res.contact.email, contactId };
+  if (!res.email_pending || !contactId) return { email: null, contactId };
   for (let i = 0; i < EMAIL_POLL_MAX_TRIES; i++) {
     await new Promise((r) => setTimeout(r, EMAIL_POLL_EVERY_MS));
-    const s = await apiService.getContactEmailStatus(res.contact_id).catch(() => null);
-    if (s?.status === "found") return s.email;
-    if (s?.status === "miss") return null;
+    const s = await apiService.getContactEmailStatus(contactId).catch(() => null);
+    if (s?.status === "found") return { email: s.email, contactId };
+    if (s?.status === "miss") return { email: null, contactId };
   }
-  return null;
+  return { email: null, contactId };
 }
 
 // How much of a profile we can show: photo, then a job, then nothing.
@@ -126,7 +127,7 @@ export default function OrgDirectoryPage() {
 
   const contact = useCallback(async (person: Person) => {
     const setState = (s: ContactState) => setContactStates((m) => ({ ...m, [person.id]: s }));
-    let email = person.email;
+    let email: string | null = person.email;
     if (!email) {
       if (!person.linkedinUrl) {
         toast({ title: `No way to reach ${person.firstName} yet`, description: "The directory has no email or LinkedIn for them." });
@@ -135,8 +136,9 @@ export default function OrgDirectoryPage() {
       // No email in the directory: find it from their LinkedIn the way the
       // Chrome extension does (OFF-51), then draft below as usual.
       setState("finding");
+      let contactId = "";
       try {
-        email = await findEmailFromLinkedIn(person.linkedinUrl);
+        ({ email, contactId } = await findEmailFromLinkedIn(person.linkedinUrl));
       } catch (e: any) {
         setState("idle");
         toast({ title: `Couldn't look ${person.firstName} up`, description: e?.message || "Try again.", variant: "destructive" });
@@ -147,6 +149,13 @@ export default function OrgDirectoryPage() {
         return;
       }
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+      // Show it on their card now, and save it there for every member.
+      const found = email;
+      queryClient.setQueryData<{ org: any; members: DirectoryMember[] }>(["orgMembers", orgId], (d) => d && {
+        ...d,
+        members: d.members.map((m) => (m.personKey === person.id ? { ...m, email: found, hasEmail: true } : m)),
+      });
+      if (contactId) apiService.saveOrgFoundEmail(orgId, person.id, contactId).catch(() => {});
     }
     setState("working");
     try {
@@ -167,7 +176,7 @@ export default function OrgDirectoryPage() {
       setState("idle");
       toast({ title: "Couldn't contact them", description: e?.message || "Try again.", variant: "destructive" });
     }
-  }, [emailTemplate, queryClient]);
+  }, [emailTemplate, queryClient, orgId]);
 
   const org = data?.org;
   // Orgs with a logo (TKE) get the branded page: their color as the
