@@ -13,11 +13,15 @@ import os
 import re
 import sys
 
+import requests
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from backend.pipeline.fetcher import (  # noqa: E402
     FANTASTICJOBS_DEFAULT_PARAMS,
-    _fj_fetch_page,
+    FANTASTICJOBS_BASE_URL,
+    REQUEST_TIMEOUT,
+    _fantasticjobs_headers,
     _normalize_fj_job,
 )
 
@@ -33,7 +37,7 @@ def _get_db():
 
 
 def _title_filter() -> str:
-    return " OR ".join(f'"{t}"' for t in EARLY_CAREER_TERMS)
+    return " | ".join(f"'{t}'" for t in EARLY_CAREER_TERMS)
 
 
 def _count_in_firestore(db, urls: list) -> int:
@@ -51,22 +55,42 @@ def _count_in_firestore(db, urls: list) -> int:
     return sum(1 for u in urls if u in found)
 
 
-def run_probe(confirm: bool, max_requests: int, fetch_page=None, db=None) -> dict:
-    """Page the API (at most max_requests calls) and return report counts."""
+def run_probe(confirm: bool, max_requests: int, http_get=None, db=None) -> dict:
+    """Page the API with exactly one HTTP call per request (no retry, no sleep).
+
+    Stops at max_requests, on a short page, or immediately on any non-200
+    (429 sets rate_limited). Does not use fetcher._fj_fetch_page because that
+    retries a 429 after sleeping, which could double the request count.
+    """
     report = {"jobs_returned": 0, "early_career": 0, "in_firestore": None,
-              "with_hiring_manager": 0, "requests_used": 0}
+              "with_hiring_manager": 0, "requests_used": 0,
+              "rate_limited": False, "error": None}
     if not confirm:
         return report
-    fetch_page = fetch_page or _fj_fetch_page
+    http_get = http_get or requests.get
+    headers = _fantasticjobs_headers()
     jobs = []
     offset = 0
     while report["requests_used"] < max_requests:
-        params = {"limit": str(PAGE_SIZE), "offset": offset, "agency": "false",
-                  "title_filter": _title_filter(), "location_filter": "United States"}
-        page = fetch_page(params, f"probe:{offset}")
+        params = {**FANTASTICJOBS_DEFAULT_PARAMS, "limit": str(PAGE_SIZE), "offset": offset,
+                  "agency": "false", "advanced_title_filter": _title_filter(),
+                  "location_filter": "United States"}
         report["requests_used"] += 1
+        try:
+            resp = http_get(FANTASTICJOBS_BASE_URL, headers=headers, params=params,
+                            timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 429:
+                report["rate_limited"] = True
+                break
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # stop on any failure; never retry
+            report["error"] = str(exc)
+            break
+        raw = data if isinstance(data, list) else data.get("data", [])
+        page = [j for j in raw if j.get("id") and j.get("title")]
         jobs.extend(_normalize_fj_job(j) for j in page)
-        if len(page) < PAGE_SIZE:
+        if len(raw) < PAGE_SIZE:
             break
         offset += PAGE_SIZE
 
@@ -103,6 +127,10 @@ def main(argv=None) -> int:
     print(f"Already in Firestore (apply_url): {_pct(r['in_firestore'] or 0, n)}")
     print(f"With ai_hiring_manager_name:      {_pct(r['with_hiring_manager'], n)}")
     print(f"Requests used:                    {r['requests_used']} / {args.max_requests}")
+    if r["rate_limited"]:
+        print("Stopped early: HTTP 429 rate limited (not retried).")
+    if r["error"]:
+        print(f"Stopped early: {r['error']}")
     return 0
 
 

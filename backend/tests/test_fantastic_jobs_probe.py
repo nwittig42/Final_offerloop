@@ -16,7 +16,7 @@ def _page(n, start=0):
 def test_no_key_exits_cleanly(monkeypatch, capsys):
     monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
     fetch = MagicMock()
-    monkeypatch.setattr(probe, "_fj_fetch_page", fetch)
+    monkeypatch.setattr(probe.requests, "get", fetch)
     assert probe.main(["--confirm"]) == 0
     assert "RAPIDAPI_KEY" in capsys.readouterr().out
     fetch.assert_not_called()
@@ -25,7 +25,7 @@ def test_no_key_exits_cleanly(monkeypatch, capsys):
 def test_without_confirm_makes_no_requests(monkeypatch, capsys):
     monkeypatch.setenv("RAPIDAPI_KEY", "k")
     fetch = MagicMock()
-    monkeypatch.setattr(probe, "_fj_fetch_page", fetch)
+    monkeypatch.setattr(probe.requests, "get", fetch)
     db = MagicMock()
     monkeypatch.setattr(probe, "_get_db", lambda: db)
     assert probe.main([]) == 0
@@ -34,20 +34,42 @@ def test_without_confirm_makes_no_requests(monkeypatch, capsys):
     db.collection.assert_not_called()
 
 
+def _resp(rows, status=200):
+    m = MagicMock()
+    m.status_code = status
+    m.json.return_value = rows
+    return m
+
+
 def test_stops_at_max_requests():
-    fetch = MagicMock(side_effect=lambda params, label: _page(100, params["offset"]))
-    r = probe.run_probe(confirm=True, max_requests=3, fetch_page=fetch, db=None)
+    fetch = MagicMock(side_effect=lambda url, headers, params, timeout: _resp(_page(100, params["offset"])))
+    r = probe.run_probe(confirm=True, max_requests=3, http_get=fetch, db=None)
     assert fetch.call_count == 3
     assert r["requests_used"] == 3
     assert r["jobs_returned"] == 300
 
 
 def test_request_carries_title_filter():
-    fetch = MagicMock(return_value=[])
-    probe.run_probe(confirm=True, max_requests=1, fetch_page=fetch, db=None)
-    params = fetch.call_args[0][0]
-    for t in ("intern", "internship", "analyst", "new grad", "early career", "summer"):
-        assert t in params["title_filter"]
+    fetch = MagicMock(return_value=_resp([]))
+    probe.run_probe(confirm=True, max_requests=1, http_get=fetch, db=None)
+    params = fetch.call_args.kwargs["params"]
+    assert params["advanced_title_filter"] == (
+        "'intern' | 'internship' | 'analyst' | 'new grad' | 'early career' | 'summer'")
+    assert "title_filter" not in params
+
+
+def test_429_consumes_one_request_and_ends_run():
+    fetch = MagicMock(return_value=_resp([], status=429))
+    r = probe.run_probe(confirm=True, max_requests=3, http_get=fetch, db=None)
+    assert fetch.call_count == 1
+    assert r["requests_used"] == 1
+    assert r["rate_limited"] is True
+
+
+def test_http_never_called_beyond_cap():
+    fetch = MagicMock(side_effect=lambda url, headers, params, timeout: _resp(_page(100, params["offset"])))
+    probe.run_probe(confirm=True, max_requests=3, http_get=fetch, db=None)
+    assert fetch.call_count == 3
 
 
 def _db_with(existing_urls):
@@ -70,10 +92,9 @@ def _db_with(existing_urls):
 
 
 def test_report_counts():
-    pages = [_page(8), []]  # 8 jobs: titles cycle -> intern, senior, analyst, designer x2
-    fetch = MagicMock(side_effect=lambda params, label: pages.pop(0) if pages else [])
+    fetch = MagicMock(return_value=_resp(_page(8)))
     db = _db_with({"https://x.test/0", "https://x.test/1", "https://x.test/2"})
-    r = probe.run_probe(confirm=True, max_requests=10, fetch_page=fetch, db=db)
+    r = probe.run_probe(confirm=True, max_requests=10, http_get=fetch, db=db)
     assert r["jobs_returned"] == 8
     assert r["early_career"] == 4        # ids 0,2,4,6
     assert r["in_firestore"] == 3
