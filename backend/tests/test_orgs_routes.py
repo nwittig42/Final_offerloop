@@ -103,6 +103,19 @@ def test_join_with_right_password_writes_active_membership(client):
     db.attempts_ref.delete.assert_called_once()  # success clears the throttle
 
 
+def test_dry_run_join_checks_the_password_but_joins_nothing(client):
+    # The onboarding preview: right password says ok, membership untouched.
+    db, user_ref = _db(_snap({"joinable": True}), [], password_hash=PW_HASH)
+    r = _call(client, db, "post", "/api/orgs/usc_tke/join", {"password": "tke-1899", "dry_run": True})
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "memberships": []}
+    user_ref.set.assert_not_called()
+    # A wrong one is still refused and still counts toward the throttle.
+    db, user_ref = _db(_snap({"joinable": True}), [], password_hash=PW_HASH)
+    r = _call(client, db, "post", "/api/orgs/usc_tke/join", {"password": "nope", "dry_run": True})
+    assert r.status_code == 403 and r.get_json()["error"] == "wrong_password"
+    db.attempts_ref.set.assert_called_once()
+
+
 def test_join_wrong_or_missing_password_is_refused_and_counted(client):
     for body in ({"password": "nope"}, {}, {"password": ""}):
         db, user_ref = _db(_snap({"joinable": True}), [], password_hash=PW_HASH)

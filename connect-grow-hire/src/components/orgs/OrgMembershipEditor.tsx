@@ -24,6 +24,8 @@ interface OrgMembershipEditorProps {
   // on; elsewhere it just closes the pop-up.
   skipLabel?: string;
   onSkip?: () => void;
+  // The onboarding dry run: starts in no orgs, joining only checks the password.
+  preview?: boolean;
 }
 
 function Monogram({ org, size = 36 }: { org: Org; size?: number }) {
@@ -42,8 +44,8 @@ function Monogram({ org, size = 36 }: { org: Org; size?: number }) {
   );
 }
 
-export function OrgMembershipEditor({ onOpenDirectory, onJoined, onLeft, skipLabel, onSkip }: OrgMembershipEditorProps) {
-  const { orgs, memberships, joined, loading, isError, refetch, join, leave } = useOrgs();
+export function OrgMembershipEditor({ onOpenDirectory, onJoined, onLeft, skipLabel, onSkip, preview = false }: OrgMembershipEditorProps) {
+  const { orgs, memberships, joined, loading, isError, refetch, join, leave } = useOrgs(true, preview);
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<Org | null>(null);
   // Set when the password was right: the pop-up shows a checkmark, then closes.

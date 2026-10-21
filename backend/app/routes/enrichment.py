@@ -129,6 +129,9 @@ def enrich_linkedin_for_onboarding():
       - Structures via LLM into resumeParsed format
       - Writes to Firestore, returns academics for auto-fill
 
+    Dry run: { "linkedin_url": "...", "dry_run": true } enriches and returns
+    the same auto-fill but writes nothing (the onboarding preview).
+
     Merge-only mode: { "merge_only": true }
       - Re-merges stored linkedinResumeParsed into current resumeParsed
       - Used after resume upload to backfill LinkedIn-only fields
@@ -257,22 +260,25 @@ def enrich_linkedin_for_onboarding():
             # No resume — LinkedIn becomes the resumeParsed
             enrichment_update['resumeParsed'] = linkedin_parsed
 
-        try:
-            user_ref.set(enrichment_update, merge=True, timeout=15.0)
-            # LinkedIn instead of (or on top of) a resume: same head start
-            # on the People deck as a resume upload.
+        # dry_run (the onboarding preview) returns the auto-fill without
+        # saving anything to the account.
+        if not data.get('dry_run'):
             try:
-                from app.services.people_deck_cache import schedule_build
-                schedule_build(uid, "linkedin")
-            except Exception:
-                logger.debug("[LinkedIn Enrich] people deck build not queued")
-        except Exception as write_err:
-            logger.error(f"[LinkedIn Enrich] Firestore write failed: {write_err}")
-            return jsonify({
-                'success': False,
-                'enriched': False,
-                'error': 'Enrichment fetched but could not save — please retry.',
-            }), 200
+                user_ref.set(enrichment_update, merge=True, timeout=15.0)
+                # LinkedIn instead of (or on top of) a resume: same head start
+                # on the People deck as a resume upload.
+                try:
+                    from app.services.people_deck_cache import schedule_build
+                    schedule_build(uid, "linkedin")
+                except Exception:
+                    logger.debug("[LinkedIn Enrich] people deck build not queued")
+            except Exception as write_err:
+                logger.error(f"[LinkedIn Enrich] Firestore write failed: {write_err}")
+                return jsonify({
+                    'success': False,
+                    'enriched': False,
+                    'error': 'Enrichment fetched but could not save — please retry.',
+                }), 200
 
         # Extract profile + academics for frontend auto-fill
         edu = linkedin_parsed.get('education', {}) if isinstance(linkedin_parsed, dict) else {}

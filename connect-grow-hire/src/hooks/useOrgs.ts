@@ -1,13 +1,16 @@
 // Org alumni directories (OFF-42): which orgs exist and which the student
 // has joined. Join (with the org's password) and leave write through the
-// backend and refresh this query.
+// backend and refresh this query. In preview (the onboarding dry run) the
+// student starts in no orgs, and joining only checks the password.
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiService, type Org } from "@/services/api";
 
 export const ORGS_KEY = ["orgs"] as const;
 
-export function useOrgs(enabled = true) {
+export function useOrgs(enabled = true, preview = false) {
   const queryClient = useQueryClient();
+  const [previewJoined, setPreviewJoined] = useState<string[]>([]);
   const query = useQuery({
     queryKey: ORGS_KEY,
     queryFn: () => apiService.getOrgs(),
@@ -22,13 +25,16 @@ export function useOrgs(enabled = true) {
       prev ? { ...prev, memberships: res.memberships } : prev,
     );
   const join = useMutation({
-    mutationFn: ({ id, password }: { id: string; password: string }) => apiService.joinOrg(id, password),
-    onSuccess,
+    mutationFn: ({ id, password }: { id: string; password: string }) => apiService.joinOrg(id, password, preview),
+    onSuccess: (res, { id }) => (preview ? setPreviewJoined((j) => [...j, id]) : onSuccess(res)),
   });
-  const leave = useMutation({ mutationFn: (id: string) => apiService.leaveOrg(id), onSuccess });
+  const leave = useMutation({
+    mutationFn: async (id: string) => (preview ? { memberships: previewJoined.filter((j) => j !== id) } : apiService.leaveOrg(id)),
+    onSuccess: (res) => (preview ? setPreviewJoined(res.memberships) : onSuccess(res)),
+  });
 
   const orgs = query.data?.orgs ?? [];
-  const memberships = query.data?.memberships ?? [];
+  const memberships = preview ? previewJoined : query.data?.memberships ?? [];
   return {
     orgs,
     memberships,

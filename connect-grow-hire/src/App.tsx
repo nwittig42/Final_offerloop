@@ -356,7 +356,7 @@ const AppRoutes: React.FC = () => {
         path="/dev/onboarding-preview"
         element={
           <Suspense fallback={<PageLoader />}>
-            <OnboardingFlow onComplete={() => { /* preview only — no save */ }} />
+            <OnboardingFlow preview onComplete={() => {}} />
           </Suspense>
         }
       />

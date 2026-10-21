@@ -1500,12 +1500,13 @@ class ApiService {
 
   // Needs the org's join password. A failure throws with the backend code
   // as the message: wrong_password, too_many_attempts or join_closed.
-  async joinOrg(orgId: string, password: string): Promise<{ ok: boolean; memberships: string[] }> {
+  // dryRun (the onboarding preview) only checks the password.
+  async joinOrg(orgId: string, password: string, dryRun = false): Promise<{ ok: boolean; memberships: string[] }> {
     const headers = await this.getAuthHeaders();
     return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/join`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify(dryRun ? { password, dry_run: true } : { password }),
     });
   }
 
@@ -3046,7 +3047,8 @@ export async function trackSuggestionEvent(
   }
 }
 
-export const enrichLinkedInOnboarding = async (linkedinUrl: string) => {
+// dryRun (the onboarding preview) gets the auto-fill without saving it.
+export const enrichLinkedInOnboarding = async (linkedinUrl: string, dryRun = false) => {
   const { auth } = await import('../lib/firebase');
   const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -3054,7 +3056,7 @@ export const enrichLinkedInOnboarding = async (linkedinUrl: string) => {
   const response = await fetch(`${API_BASE_URL}/enrich-linkedin-onboarding`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ linkedin_url: linkedinUrl }),
+    body: JSON.stringify(dryRun ? { linkedin_url: linkedinUrl, dry_run: true } : { linkedin_url: linkedinUrl }),
   });
   return response.json();
 };

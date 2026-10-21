@@ -57,7 +57,8 @@ def get_orgs():
 @orgs_bp.route("/<org_id>/join", methods=["POST"])
 @require_firebase_auth
 def join_org(org_id):
-    """Join with the org's password. Right password = instant active member."""
+    """Join with the org's password. Right password = instant active member.
+    dry_run (the onboarding preview) checks the password and joins nothing."""
     db = get_db()
     if not _joinable(db, org_id):
         return jsonify({"error": "Organization not found"}), 404
@@ -81,6 +82,8 @@ def join_org(org_id):
 
     if attempts_snap.exists:
         attempts_ref.delete()
+    if (request.get_json(silent=True) or {}).get("dry_run") is True:
+        return jsonify({"ok": True, "memberships": []})
     ref.set({MEMBERSHIPS_FIELD: {org_id: {
         "status": "active",
         "joinedAt": datetime.now(timezone.utc).isoformat(),

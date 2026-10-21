@@ -40,9 +40,19 @@ const ORGS_RAIL_STEP = { label: "Your organizations", optional: true };
 
 interface OnboardingFlowProps {
   onComplete: (data: unknown) => void;
+  // /dev/onboarding-preview: a dry run as a brand-new user. Nothing is saved
+  // (profile, credits, resume, orgs), and finishing starts over.
+  preview?: boolean;
 }
 
-export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
+// Pinned over every step of the preview so it's never mistaken for the real thing.
+const PREVIEW_BADGE = (
+  <div className="pointer-events-none fixed left-1/2 top-3 z-[60] -translate-x-1/2 rounded-full bg-[#1D1D1F]/90 px-4 py-1.5 text-[12px] font-semibold text-white shadow-lg">
+    Preview · nothing is saved
+  </div>
+);
+
+export const OnboardingFlow = ({ onComplete, preview = false }: OnboardingFlowProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { completeOnboarding, refreshUser, user, signOut } = useFirebaseAuth();
@@ -65,13 +75,14 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   // updates so Find shows the org as soon as onboarding ends.
   // While the list is still loading (or failed), show the step anyway: the
   // editor has its own loading and retry states, and "Skip for now" still works.
-  const { orgs, memberships, loading: orgsLoading, isError: orgsError } = useOrgs(!!user);
+  const { orgs, memberships, loading: orgsLoading, isError: orgsError } = useOrgs(!!user, preview);
   const hasOrgStep = orgsLoading || orgsError || orgs.length > 0;
   const RAIL_STEPS = hasOrgStep ? [...BASE_RAIL_STEPS, ORGS_RAIL_STEP] : BASE_RAIL_STEPS;
 
   // Onboarding analytics: fire-and-forget step events.
   const loggedSteps = useRef<Set<string>>(new Set());
   const logOnboardingEvent = (event: "viewed" | "completed", step: string, skipped = false) => {
+    if (preview) return;
     auth.currentUser
       ?.getIdToken()
       .then((token) => {
@@ -152,6 +163,13 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     step: string,
   ) => {
     if (submitting) return;
+    if (preview) {
+      toast.success("Preview finished. Nothing was saved.");
+      setPendingCompletion(null);
+      setSource(null);
+      setCurrentStep("slides");
+      return;
+    }
     setSubmitting(true);
     try {
       logOnboardingEvent("completed", step);
@@ -202,7 +220,8 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
     // the next "Sign in" starts fresh at Google instead of resuming this
     // half-onboarded account. ?signedOut=true stops PublicRoute from bouncing
     // back to /onboarding while auth state clears.
-    if (currentStep === "slides") {
+    if (currentStep === "slides" && preview) navigate("/find");
+    else if (currentStep === "slides") {
       await signOut();
       navigate("/?signedOut=true", { replace: true });
     } else if (currentStep === "source") setCurrentStep("slides");
@@ -214,6 +233,8 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   // Slides bypass the Slate Split shell entirely (full-bleed navy).
   if (currentStep === "slides") {
     return (
+      <>
+      {preview && PREVIEW_BADGE}
       <OnboardingSlides
         onDone={handleSlidesDone}
         onViewSlide={(i) => {
@@ -224,6 +245,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
           }
         }}
       />
+      </>
     );
   }
 
@@ -271,6 +293,7 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
   return (
     // Full-page Slate Split: the rail and pane fill the whole viewport (no card container).
     <div className="min-h-screen flex" style={{ background: "#fff", fontFamily: OB.fontBody }}>
+      {preview && PREVIEW_BADGE}
       <style>{`
         @keyframes obPaneIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .ob-pane-anim { animation: obPaneIn .35s cubic-bezier(0.16,1,0.3,1); }
@@ -466,16 +489,18 @@ export const OnboardingFlow = ({ onComplete }: OnboardingFlowProps) => {
               }}
               initialLinkedinUrl={source?.linkedinUrl}
               submitting={submitting}
+              preview={preview}
             />
           )}
           {currentStep === "builder" && (
-            <OnboardingBuilder onComplete={handleBuilderComplete} submitting={submitting} />
+            <OnboardingBuilder onComplete={handleBuilderComplete} submitting={submitting} preview={preview} />
           )}
           {currentStep === "orgs" && (
             <div>
               <OrgMembershipEditor
                 skipLabel="Skip for now"
                 onSkip={handleOrgsDone}
+                preview={preview}
               />
               <button
                 type="button"
