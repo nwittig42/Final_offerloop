@@ -336,6 +336,7 @@ def log_onboarding_event():
             "confirm", "direction",  # transitional names
             "welcome", "academics", "goals", "location",  # legacy
             "slides", "resume_builder", "builder", "inbox",  # resume-first flow + inbox-connect step
+            "intro", "orgs",  # onboarding v2: single intro screen; org step (was 400ing)
         }
 
         if event not in valid_events:

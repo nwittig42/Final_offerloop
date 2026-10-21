@@ -103,6 +103,12 @@ def get_user_name(user_data: dict) -> str:
 def get_user_school(user_data: dict) -> str:
     """Extract university from user document with fallback chain."""
     academics = user_data.get("academics") or {}
+    # Onboarding v2's confirm step lets the user say "I'm not in school" even
+    # when their resume names one. That explicit choice beats the parse: only a
+    # school they set themselves afterwards (Settings, Find's school prompt)
+    # counts.
+    if user_data.get("universityOptOut") is True and (user_data.get("onboarding") or {}).get("profileConfirmedAt"):
+        return academics.get("university") or user_data.get("university") or ""
     resume_edu = (user_data.get("resumeParsed") or {}).get("education") or {}
     if not isinstance(resume_edu, dict):
         resume_edu = {}

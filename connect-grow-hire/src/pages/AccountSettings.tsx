@@ -448,7 +448,8 @@ export default function AccountSettings() {
       // Auto-fill empty profile fields from resume data
       const userSnap = await getDoc(userRef);
       const existing = userSnap.exists() ? userSnap.data() : {};
-      if (!existing.university && !existing.academics?.university && result.data.university) {
+      // ...except a school after the user said they're not in school.
+      if (!existing.university && !existing.academics?.university && !existing.universityOptOut && result.data.university) {
         resumeUpdate.university = result.data.university;
         resumeUpdate['academics.university'] = result.data.university;
         setPersonalInfo(prev => ({ ...prev, university: result.data.university }));
@@ -645,6 +646,22 @@ export default function AccountSettings() {
         degree: academicInfo.currentDegree,
         university: personalInfo.university,
       };
+
+      // The people ranker reads goals.careerTrack / goals.dreamCompanies before
+      // the top-level fields, and onboarding fills both. Keep goals in step so
+      // a change here isn't shadowed by what onboarding inferred, and mark a
+      // changed field as the user's own (fieldProvenance).
+      const existingGoals = existingData?.goals || {};
+      updates['goals.careerTrack'] = goalsInfo.careerTrack;
+      updates['goals.dreamCompanies'] = goalsInfo.dreamCompanies;
+      const prevCompanies = existingGoals.dreamCompanies || existingData?.dreamCompanies || [];
+      if (JSON.stringify(goalsInfo.dreamCompanies) !== JSON.stringify(prevCompanies)) {
+        updates['goals.dreamCompaniesSource'] = 'settings';
+        updates['fieldProvenance.targetCompanies'] = 'explicit';
+      }
+      if (goalsInfo.careerTrack !== (existingGoals.careerTrack || existingData?.careerTrack || '')) {
+        updates['fieldProvenance.careerTrack'] = 'explicit';
+      }
 
       updates.userType = userType;
 

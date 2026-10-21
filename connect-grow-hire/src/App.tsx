@@ -83,6 +83,7 @@ function ToContacts() {
 const RecruitingTimelinePage = React.lazy(() => import("./pages/RecruitingTimelinePage"));
 // New Lovable Onboarding Flow
 const OnboardingFlow = React.lazy(() => import("./pages/OnboardingFlow").then(m => ({ default: m.OnboardingFlow })));
+const GetStartedPage = React.lazy(() => import("./pages/GetStartedPage"));
 // Dev-only preview routes (no auth) for design iteration on the new Profile page
 // and onboarding flow. See docs/PROFILE_ONBOARDING_SPEC.md.
 const ProfilePreview = React.lazy(() => import("./pages/ProfilePreview"));
@@ -327,6 +328,17 @@ const AppRoutes: React.FC = () => {
         }
       />
       <Route path="/onboarding/*" element={<Navigate to="/onboarding" replace />} />
+      {/* Onboarding → first-use walkthrough hand-off (Milestone 2 fills it in) */}
+      <Route
+        path="/get-started"
+        element={
+          <ProtectedRoute>
+            <Suspense fallback={<PageLoader />}>
+              <GetStartedPage />
+            </Suspense>
+          </ProtectedRoute>
+        }
+      />
 
       {/* Profile (Phase 2) — the dedicated free-flow profile page. Same
           component as the dev preview, just protected and routed at /profile.
@@ -349,6 +361,14 @@ const AppRoutes: React.FC = () => {
         element={
           <Suspense fallback={<PageLoader />}>
             <ProfilePreview />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/dev/get-started-preview"
+        element={
+          <Suspense fallback={<PageLoader />}>
+            <GetStartedPage />
           </Suspense>
         }
       />
