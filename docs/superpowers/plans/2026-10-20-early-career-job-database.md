@@ -1,3 +1,5 @@
+> **Superseded 2026-10-21** by `2026-10-21-target-employer-job-sources.md`. Tasks 1, 4 and 5 below are carried over there as Tasks 3, 11 and 12.
+
 # Early-Career Job Database Implementation Plan (OFF-48)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
