@@ -328,7 +328,7 @@ const AppRoutes: React.FC = () => {
         }
       />
       <Route path="/onboarding/*" element={<Navigate to="/onboarding" replace />} />
-      {/* Onboarding → first-use walkthrough hand-off (Milestone 2 fills it in) */}
+      {/* Onboarding → first-use walkthrough: matches, pick one, first email */}
       <Route
         path="/get-started"
         element={
@@ -368,7 +368,7 @@ const AppRoutes: React.FC = () => {
         path="/dev/get-started-preview"
         element={
           <Suspense fallback={<PageLoader />}>
-            <GetStartedPage />
+            <GetStartedPage preview />
           </Suspense>
         }
       />

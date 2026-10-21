@@ -2140,9 +2140,19 @@ async markOutboxThreadRead(contactId: string): Promise<{ thread: OutboxThread } 
 /** Ranked people to reach out to, sourced from the user's school and dream
  *  companies (or one company, with `company`). `exclude` = candidate ids already shown, so "load more" extends
  *  the list instead of replaying it. Echo deck_id on feedback/outreach. */
-async getRankerCandidates(params?: { limit?: number; exclude?: string[]; company?: string }): Promise<RankerDeckResponse> {
+async getRankerCandidates(params?: {
+  limit?: number; exclude?: string[]; company?: string;
+  /** Event label (default "web_find"). */
+  surface?: string;
+  /** false: never start the FullEnrich email prefetch or a Coresignal dig for this deck. */
+  allowPaidLookups?: boolean;
+}): Promise<RankerDeckResponse> {
   const headers = await this.getAuthHeaders();
-  const qs = new URLSearchParams({ surface: "web_find" });
+  const qs = new URLSearchParams({ surface: params?.surface || "web_find" });
+  if (params?.allowPaidLookups === false) {
+    qs.set("prefetch", "0");
+    qs.set("dig", "0");
+  }
   if (params?.limit) qs.set("limit", String(params.limit));
   // company= scopes the deck to one firm; when nobody is on file there the
   // backend goes and finds people at it (the "dig") before answering.
@@ -2163,22 +2173,33 @@ async sendRankerFeedback(body: { candidateId: string; signal: "right" | "left" |
 }
 
 /** Find a candidate's verified email (8 credits, refunded on a miss). */
-async revealRankerEmail(candidateId: string, deckId?: string): Promise<{ email: string | null; verified: boolean; cached: boolean; charged: boolean }> {
+async revealRankerEmail(candidateId: string, deckId?: string, surface = "web_find"): Promise<{ email: string | null; verified: boolean; cached: boolean; charged: boolean; reason?: string }> {
   const headers = await this.getAuthHeaders();
   return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/reveal-email`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deck_id: deckId, surface: "web_find" }),
+    body: JSON.stringify({ deck_id: deckId, surface }),
   });
 }
 
 /** Write to a candidate after a reveal. No extra charge; saves them to Contacts. */
-async rankerOutreach(candidateId: string, action: "draft" | "send", deckId?: string): Promise<{ drafted: boolean; sent: boolean }> {
+async rankerOutreach(
+  candidateId: string,
+  action: "draft" | "send",
+  deckId?: string,
+  /** createGmailDraft: false keeps the draft in the app only (the walkthrough). */
+  opts?: { createGmailDraft?: boolean; surface?: string },
+): Promise<{ drafted: boolean; sent: boolean }> {
   const headers = await this.getAuthHeaders();
   return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/outreach`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, deck_id: deckId }),
+    body: JSON.stringify({
+      action,
+      deck_id: deckId,
+      ...(opts?.createGmailDraft === false ? { create_gmail_draft: false } : {}),
+      ...(opts?.surface ? { surface: opts.surface } : {}),
+    }),
   });
 }
 

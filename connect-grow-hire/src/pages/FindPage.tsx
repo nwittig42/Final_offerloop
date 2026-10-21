@@ -32,6 +32,7 @@ import { neverEmailed, useBookmarks } from "@/components/find/people/useBookmark
 import {
   personFromRanker, personFromSearch, type Person,
 } from "@/components/find/people/peopleModel";
+import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder";
 
 // First screen loads 40 people; scrolling near the bottom pulls 20 more.
 const FIRST_PAGE = 40;
@@ -401,6 +402,7 @@ const FindPage: React.FC = () => {
           <GoalsPromptBanner />
           <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#F5F5F7]">
             <div className="mx-auto max-w-[1320px] px-6 pb-16 pt-4 sm:px-10">
+              {user?.uid && !IS_DEV_PREVIEW && <FirstEmailReminder uid={user.uid} />}
               <div className="mt-4" data-tour="tour-search-form">
                 <PeopleSearchBar
                   query={query}
