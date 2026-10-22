@@ -30,7 +30,9 @@ __all__ = [
     "is_candidate_title",
     "get_fetcher",
     "make_job_id",
-    "crawled_hosts",
+    "Snapshot",
+    "is_partial",
+    "normalize_apply_url",
     "DETAIL_WORKERS",
     "SKIPPABLE_STATUSES",
     "map_in_order",
@@ -53,6 +55,20 @@ _SKIP_CEILING_MIN = 3
 
 class FetchError(Exception):
     """A board could not be read in full. Never return a partial list instead."""
+
+
+class Snapshot(list):
+    """A fetcher's job list plus `partial`: True when a search/page cap was
+    hit, so live postings may be missing. The crawler then writes new jobs
+    but expires nothing on that board. A plain list means a full read."""
+
+    def __init__(self, jobs=(), partial: bool = False):
+        super().__init__(jobs)
+        self.partial = partial
+
+
+def is_partial(jobs) -> bool:
+    return bool(getattr(jobs, "partial", False))
 
 
 LEGACY_PLATFORMS = ("greenhouse", "lever", "ashby")
@@ -80,8 +96,13 @@ def map_in_order(fn: Callable[[_T], _R], items: Iterable[_T],
 
 
 def check_skip_ceiling(what: str, skipped: int, candidates: int) -> None:
-    """Raise FetchError when skipped postings exceed 10% of the board's
-    candidates AND number more than 3 (the board is likely blocking us)."""
+    """Raise FetchError when every candidate posting was skipped, or when
+    skipped postings exceed 10% of the board's candidates AND number more
+    than 3 (the board is likely blocking us)."""
+    if skipped > 0 and skipped == candidates:
+        raise FetchError(
+            f"{what}: all {candidates} postings returned 403/404/410; "
+            "the board is likely blocking us")
     if skipped > _SKIP_CEILING_MIN and skipped > _SKIP_CEILING_RATIO * candidates:
         raise FetchError(
             f"{what}: {skipped} of {candidates} postings returned 403/404/410; "
@@ -115,24 +136,22 @@ def make_job_id(platform: str, slug: str, external_id: str) -> str:
     return f"direct_{platform}_{slug}_{external_id}"
 
 
-def crawled_hosts() -> frozenset[str]:
-    """Hostnames of the HOT-tier target-platform boards (CSV rows whose
-    `{platform}:{slug}` is in hot_slugs.txt), i.e. the boards the scheduled
-    crawl actually visits. Simplify listings on these hosts are skipped as
-    duplicates. Cold-tier rows are excluded: they are crawled only on manual
-    dispatch, so their Simplify listings must be kept.
+_WORKDAY_LOCALE_RE = re.compile(r"^[a-z]{2}-[a-z]{2}$", re.I)
+_OLEEO_XF_RE = re.compile(r"^xf-")
 
-    Empty when the CSVs don't exist yet.
-    """
-    from backend.pipeline import slug_loader
 
-    hosts: set[str] = set()
-    for platform in TARGET_PLATFORMS:
-        hot = set(slug_loader.load_slugs(platform, "hot"))
-        for rec in slug_loader.load_all_records(platform):
-            if rec.get("slug") not in hot:
-                continue
-            host = (urlparse(rec.get("url") or "").hostname or "").lower()
-            if host:
-                hosts.add(host)
-    return frozenset(hosts)
+def normalize_apply_url(url: str) -> str:
+    """Comparable form of an apply URL: lowercase scheme and host, no query
+    string or fragment, no trailing slash, no Workday locale path segment
+    (/en-US/) and no Oleeo session segment (/xf-.../). '' for no URL."""
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return ""
+    parts = [p for p in parsed.path.split("/") if p]
+    if host.endswith(".myworkdayjobs.com"):
+        parts = [p for p in parts if not _WORKDAY_LOCALE_RE.match(p)]
+    elif host.endswith(".tal.net"):
+        parts = [p for p in parts if not _OLEEO_XF_RE.match(p)]
+    scheme = (parsed.scheme or "https").lower()
+    return f"{scheme}://{host}/" + "/".join(parts) if parts else f"{scheme}://{host}"

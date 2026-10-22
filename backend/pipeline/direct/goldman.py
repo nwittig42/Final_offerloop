@@ -3,8 +3,9 @@
 One POST query lists every CAMPUS-experience role (summer analyst / new
 analyst / summer associate programs) with its description, so there are no
 per-posting detail calls. Keeps US roles with a candidate title. Any failure,
-or a page set that doesn't add up to the reported totalCount, raises
-FetchError; a partial list is never returned.
+a repeated roleId, or a page set whose distinct roleIds don't add up to the
+reported totalCount raises FetchError. Hitting MAX_PAGES before totalCount
+marks the snapshot partial (`Snapshot.partial`), so nothing is expired.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from requests.adapters import HTTPAdapter
 from backend.pipeline import slug_loader
 from backend.pipeline.fetcher import (
     POOL_SIZE, REQUEST_TIMEOUT, USER_AGENT, _polite_sleep, _strip_html)
-from backend.pipeline.direct import FetchError, is_candidate_title, make_job_id
+from backend.pipeline.direct import FetchError, Snapshot, is_candidate_title, make_job_id
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +102,24 @@ def fetch(slug: str) -> list[dict]:
 
     rows: list[dict] = []
     total = None
+    partial = False
     for page_number in range(MAX_PAGES):
         page = _page(page_number)
         total = page["total"]
         rows.extend(r for r in page["items"] if isinstance(r, dict))
         if len(rows) >= total or not page["items"]:
             break
-    if total is None or len(rows) != total:
-        raise FetchError(f"Goldman [{slug}] listed {len(rows)} of {total} roles")
+    else:
+        partial = len(rows) < (total or 0)
+        if partial:
+            logger.warning("Goldman [%s] hit the %d-page cap (%d of %d roles); "
+                           "snapshot is partial, nothing will be expired",
+                           slug, MAX_PAGES, len(rows), total)
+    distinct = len({str(r.get("roleId")) for r in rows})
+    if distinct != len(rows):
+        raise FetchError(f"Goldman [{slug}] listed {len(rows) - distinct} repeated roles")
+    if total is None or (not partial and distinct != total):
+        raise FetchError(f"Goldman [{slug}] listed {distinct} of {total} distinct roles")
 
     jobs: list[dict] = []
     seen_ids: set[str] = set()
@@ -148,5 +159,6 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Goldman [%s] -> %d jobs (of %d campus roles)", slug, len(jobs), total)
-    return jobs
+    logger.info("  Goldman [%s] -> %d jobs (of %d campus roles)%s",
+                slug, len(jobs), total, " [partial]" if partial else "")
+    return Snapshot(jobs, partial=partial)

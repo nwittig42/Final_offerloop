@@ -3,7 +3,9 @@
 Board record URL: https://{host}/hcmUI/CandidateExperience/{lang}/sites/{site}.
 Searches each early-career term, keeps US rows with a candidate title, then
 fetches the detail for each survivor (DETAIL_WORKERS at a time, results in list
-order). A detail call returning 403/404/410 skips that posting unless too many
+order). A term that hits MAX_PER_TERM (TotalJobsCount above the cap, or a
+full last page at the cap) marks the snapshot partial (`Snapshot.partial`).
+A detail call returning 403/404/410 skips that posting unless too many
 do (`check_skip_ceiling`); any other failure raises FetchError.
 """
 from __future__ import annotations
@@ -21,8 +23,8 @@ from backend.pipeline import slug_loader
 from backend.pipeline.fetcher import (
     POOL_SIZE, REQUEST_TIMEOUT, USER_AGENT, _polite_sleep, _strip_html)
 from backend.pipeline.direct import (
-    DETAIL_WORKERS, SKIPPABLE_STATUSES, FetchError, check_skip_ceiling, is_candidate_title,
-    make_job_id, map_in_order)
+    DETAIL_WORKERS, SKIPPABLE_STATUSES, FetchError, Snapshot, check_skip_ceiling,
+    is_candidate_title, make_job_id, map_in_order)
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +103,10 @@ def fetch(slug: str) -> list[dict]:
     analyst_entry = bool(rec.get("analyst_entry"))
 
     rows: dict[str, dict] = {}  # Id -> list row, first seen wins
+    partial = False
     for term in SEARCH_TERMS:
         offset = 0
+        total = None
         while offset < MAX_PER_TERM:
             _polite_sleep()
             url = (f"{base}/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList"
@@ -112,7 +116,10 @@ def fetch(slug: str) -> list[dict]:
                 resp = _SESSION.get(url, timeout=REQUEST_TIMEOUT)
             except requests.RequestException as exc:
                 raise FetchError(f"Oracle [{slug}] list failed: {exc}") from exc
-            page = _first_item(_json(resp), "list").get("requisitionList") or []
+            first = _first_item(_json(resp), "list")
+            if offset == 0 and isinstance(first.get("TotalJobsCount"), int):
+                total = first["TotalJobsCount"]
+            page = first.get("requisitionList") or []
             if not isinstance(page, list):
                 raise FetchError(f"Oracle [{slug}] list malformed")
             for row in page:
@@ -124,8 +131,14 @@ def fetch(slug: str) -> list[dict]:
                 break
             offset += PAGE_SIZE
         else:
-            logger.warning("Oracle [%s] term %r hit the %d-result cap; results may be truncated",
-                           slug, term, MAX_PER_TERM)
+            # Only an offset-0 total of exactly the cap proves nothing was cut
+            # off; a missing, larger or inconsistent total means truncation.
+            if total != MAX_PER_TERM:
+                partial = True
+                logger.warning(
+                    "Oracle [%s] term %r hit the %d-result cap (total %s); "
+                    "snapshot is partial, nothing will be expired",
+                    slug, term, MAX_PER_TERM, total)
 
     def detail(rid: str) -> dict | None:
         """Detail item for one requisition, or None when it 403/404/410s."""
@@ -187,5 +200,6 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Oracle [%s] -> %d jobs (%d gone)", slug, len(jobs), skipped)
-    return jobs
+    logger.info("  Oracle [%s] -> %d jobs (%d gone)%s",
+                slug, len(jobs), skipped, " [partial]" if partial else "")
+    return Snapshot(jobs, partial=partial)

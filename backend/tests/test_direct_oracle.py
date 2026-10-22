@@ -148,11 +148,44 @@ def test_cap_at_100_warns(env, caplog):
         _resp(_detail()) if "ById" in url else
         _resp(full) if "keyword=intern," in url else _resp(_page([])))
     with caplog.at_level("WARNING"):
-        oracle.fetch("jpmorgan")
+        jobs = oracle.fetch("jpmorgan")
     offsets = [c.args[0].rsplit("offset=", 1)[1] for c in env.get.call_args_list
                if "keyword=intern," in c.args[0]]
     assert offsets == ["0", "25", "50", "75"]
-    assert any("cap" in r.message.lower() for r in caplog.records)
+    assert any("cap" in r.message.lower() and "jpmorgan" in r.message
+               and "intern" in r.message for r in caplog.records)
+    assert jobs.partial is True
+
+
+def _capped_env(env, total):
+    def page(offset):
+        rows = [_row(offset + i) for i in range(25)]
+        return {"items": [{"TotalJobsCount": total, "requisitionList": rows}]}
+
+    def get(url, **kw):
+        if "ById" in url:
+            return _resp(_detail())
+        if "keyword=intern," in url:
+            return _resp(page(int(url.rsplit("offset=", 1)[1])))
+        return _resp(_page([]))
+    env.get.side_effect = get
+
+
+def test_total_above_cap_marks_partial(env):
+    _capped_env(env, total=340)
+    assert oracle.fetch("jpmorgan").partial is True
+
+
+def test_total_exactly_at_cap_is_full(env):
+    _capped_env(env, total=100)
+    assert oracle.fetch("jpmorgan").partial is False
+
+
+def test_uncapped_board_is_full(env):
+    env.get.side_effect = lambda url, **kw: (
+        _resp(_detail()) if "ById" in url else _resp(_page([_row(1)])))
+    jobs = oracle.fetch("jpmorgan")
+    assert jobs.partial is False and len(jobs) == 1
 
 
 def test_any_failure_raises(env):

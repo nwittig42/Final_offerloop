@@ -4,6 +4,8 @@ Board record URL: the job-board listing page, e.g.
 https://evercore.tal.net/vx/mobile-0/appcentre-ext/brand-4/candidate/jobboard/vacancy/1/adv/
 Walks up to MAX_PAGES listing pages, keeps vacancies with a candidate title
 (events are dropped by is_candidate_title), then fetches each vacancy page.
+Hitting the MAX_PAGES cap marks the snapshot partial (`Snapshot.partial`), so
+the crawl expires nothing on that board.
 
 A vacancy page returning 403/404/410 skips that vacancy (it is no longer
 viewable) unless too many do (`check_skip_ceiling`).
@@ -27,7 +29,8 @@ from urllib3.util.retry import Retry
 from backend.pipeline import slug_loader
 from backend.pipeline.fetcher import REQUEST_TIMEOUT, USER_AGENT, _polite_sleep
 from backend.pipeline.direct import (
-    SKIPPABLE_STATUSES, FetchError, check_skip_ceiling, is_candidate_title, make_job_id)
+    SKIPPABLE_STATUSES, FetchError, Snapshot, check_skip_ceiling, is_candidate_title,
+    make_job_id)
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,9 @@ _NEXT_RE = re.compile(
 _DROP_BLOCKS = re.compile(r"<(script|style|noscript)\b.*?</\1\s*>|<!--.*?-->", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _LABEL_RE = re.compile(r'class="[^"]*hform_lbl_text[^"]*"[^>]*>(.*?)</span>', re.S | re.I)
-# Region label values that mean "not US": such vacancies are skipped on purpose.
-NON_US_REGIONS = frozenset({"emea", "apac", "europe", "asia", "asia pacific"})
+# Region label values that mean "US" (allowlist): any other Region value
+# (EMEA, APAC, Latin America, Middle East, ...) is skipped on purpose.
+US_REGIONS = re.compile(r"\b(americas|north america|us|usa|united states)\b", re.I)
 # Fallback when a vacancy has no Region label: clearly non-US places named in the title.
 NON_US_TITLE_PLACES = re.compile(
     r"\b(london|tokyo|hong kong|singapore|sydney|paris|frankfurt|mumbai|toronto)\b", re.I)
@@ -90,6 +94,11 @@ def _get_html(url: str, what: str, skippable: bool = False) -> str:
         resp = _SESSION.get(url, timeout=REQUEST_TIMEOUT)
     except Exception as exc:
         raise FetchError(f"Oleeo {what} failed: {exc}") from exc
+    # A bot challenge is often served with a 403: check for it before
+    # treating the status as "posting gone".
+    raw = resp.text if isinstance(getattr(resp, "text", None), str) else ""
+    if "oleeoProtect" in raw or "Quick Check Needed" in raw:
+        raise FetchError(f"Oleeo {what} blocked by a bot challenge")
     if skippable and resp.status_code in SKIPPABLE_STATUSES:
         raise _Gone(resp.status_code)
     try:
@@ -161,8 +170,8 @@ def _parse_vacancy(page: str, what: str) -> tuple[str, str, str, str]:
 
 
 def _is_non_us(region: str, title: str) -> bool:
-    if region:
-        return region.strip().lower() in NON_US_REGIONS
+    if region.strip():
+        return not US_REGIONS.search(region)
     return bool(NON_US_TITLE_PLACES.search(title))
 
 
@@ -178,6 +187,7 @@ def fetch(slug: str) -> list[dict]:
 
     found: dict[str, tuple[str, str]] = {}  # opp id -> (url, title), first seen wins
     page_url: str | None = board_url
+    partial = False
     for page_no in range(MAX_PAGES):
         page = _get_html(page_url, f"[{slug}] board page {page_no + 1}")
         for opp, url, title in _vacancies(page, page_url, host):
@@ -192,7 +202,9 @@ def fetch(slug: str) -> list[dict]:
         if not page_url:
             break
     else:
-        logger.warning("Oleeo [%s] hit the %d-page cap; results may be truncated", slug, MAX_PAGES)
+        partial = True
+        logger.warning("Oleeo [%s] hit the %d-page cap; snapshot is partial, "
+                       "nothing will be expired", slug, MAX_PAGES)
 
     jobs: list[dict] = []
     skipped = 0
@@ -235,6 +247,6 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Oleeo [%s] -> %d jobs (%d non-US skipped, %d gone)",
-                slug, len(jobs), skipped, gone)
-    return jobs
+    logger.info("  Oleeo [%s] -> %d jobs (%d non-US skipped, %d gone)%s",
+                slug, len(jobs), skipped, gone, " [partial]" if partial else "")
+    return Snapshot(jobs, partial=partial)

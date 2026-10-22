@@ -229,3 +229,47 @@ def test_details_fetched_concurrently_in_stable_order(env):
     expected = [f"direct_workday_citi_{p.rsplit('_', 1)[-1]}" for p in paths]
     assert orders == [expected] * 3
     assert 2 <= state["max"] <= workday.DETAIL_WORKERS
+
+
+def _capped(env, total):
+    """`intern` returns full pages up to the cap, reporting `total` at offset 0."""
+    def post(url, json=None, **kw):
+        if json["searchText"] != "intern":
+            return _resp(_page())
+        off = json["offset"]
+        items = [{"title": f"Summer Analyst {off + i}",
+                  "externalPath": f"/job/x/Summer-Analyst_{off + i}",
+                  "locationsText": "X"} for i in range(20)]
+        return _resp({"total": total if off == 0 else 0, "jobPostings": items})
+    env.post.side_effect = post
+    env.get.side_effect = lambda url, **kw: _resp(_detail_for(url))
+
+
+def test_search_cap_marks_snapshot_partial(env, caplog):
+    _capped(env, total=250)
+    with caplog.at_level("WARNING"):
+        jobs = workday.fetch("citi")
+    assert len(jobs) == 100 and jobs.partial is True
+    assert any("cap" in r.getMessage() and "citi" in r.getMessage()
+               and "intern" in r.getMessage() for r in caplog.records)
+
+
+def test_total_exactly_at_cap_is_full(env):
+    _capped(env, total=100)
+    assert workday.fetch("citi").partial is False
+
+
+def test_uncapped_board_is_full(env):
+    env.post.return_value = _resp(_page(("2027 Summer Analyst", "/job/b/S_2")))
+    env.get.return_value = _resp(DETAIL)
+    jobs = workday.fetch("citi")
+    assert jobs.partial is False and isinstance(jobs, list)
+
+
+def test_all_details_gone_on_small_board_raises(env):
+    """A 1-3 posting board whose details ALL 403 looks like a block, not an
+    empty board: raise so nothing is expired."""
+    _three_postings(env)
+    env.get.side_effect = lambda url, **kw: _resp(status=403)
+    with pytest.raises(FetchError, match="all 3"):
+        workday.fetch("citi")

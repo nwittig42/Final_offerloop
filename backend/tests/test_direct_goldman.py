@@ -111,3 +111,32 @@ def test_real_csv_row_loads():
     rec = slug_loader.get_record("goldman", "goldman-sachs")
     assert rec and rec["name"] == "Goldman Sachs" and rec["analyst_entry"] in ("1", 1, True)
     assert "goldman-sachs" in slug_loader.load_slugs("goldman", "hot")
+
+
+def test_repeated_page_summing_to_total_raises(env, monkeypatch):
+    """Page 1 served twice: row count equals totalCount, but the distinct
+    roleIds don't."""
+    monkeypatch.setattr(goldman, "PAGE_SIZE", 3)
+    items = PAGE["data"]["roleSearch"]["items"][:3]
+    page = {"data": {"roleSearch": {"totalCount": 6, "items": items}}}
+    env.post.side_effect = [_resp(copy.deepcopy(page)) for _ in range(2)]
+    with pytest.raises(FetchError, match="repeated"):
+        goldman.fetch("goldman-sachs")
+
+
+def test_max_pages_marks_partial(env, monkeypatch, caplog):
+    monkeypatch.setattr(goldman, "PAGE_SIZE", 1)
+    monkeypatch.setattr(goldman, "MAX_PAGES", 2)
+    items = PAGE["data"]["roleSearch"]["items"]
+    env.post.side_effect = [
+        _resp({"data": {"roleSearch": {"totalCount": len(items), "items": [copy.deepcopy(items[i])]}}})
+        for i in range(2)]
+    with caplog.at_level("WARNING"):
+        jobs = goldman.fetch("goldman-sachs")
+    assert jobs.partial is True
+    assert any("cap" in r.getMessage() and "goldman-sachs" in r.getMessage() for r in caplog.records)
+
+
+def test_full_listing_not_partial(env):
+    env.post.return_value = _resp(copy.deepcopy(PAGE))
+    assert goldman.fetch("goldman-sachs").partial is False

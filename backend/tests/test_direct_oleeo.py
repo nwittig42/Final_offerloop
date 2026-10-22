@@ -103,7 +103,7 @@ def _vac_with_region(region):
     return VACANCY.replace("\nAmericas\n", f"\n{region}\n")
 
 
-@pytest.mark.parametrize("region", ["EMEA", "APAC"])
+@pytest.mark.parametrize("region", ["EMEA", "APAC", "Latin America", "Middle East", "Asia-Pacific"])
 def test_non_us_region_vacancy_dropped(env, region):
     _serve(env, [_board([(1, "Summer Analyst Program London")])], vacancy=_vac_with_region(region))
     assert oleeo.fetch("jefferies") == []
@@ -127,6 +127,7 @@ def test_pagination_cap(env):
     assert oleeo.fetch("jefferies") == []
     board_gets = [c.args[0] for c in env.get.call_args_list]
     assert len(board_gets) == 5
+    assert oleeo.fetch("jefferies").partial is True
     assert board_gets[1].endswith("/vacancy/2/adv/?start=50")
 
 
@@ -239,3 +240,32 @@ def test_bofa_campus_csv_points_at_programs_board():
     from backend.pipeline import slug_loader
     rec = slug_loader.get_record("oleeo", "bofa-campus")
     assert rec["url"] == BOFA_PROGRAMS_URL
+
+
+@pytest.mark.parametrize("region", ["Americas", "North America", "US", "USA", "United States"])
+def test_us_region_allowlist_kept(env, region):
+    _serve(env, [_board([(1, "Summer Analyst Program")])], vacancy=_vac_with_region(region))
+    assert [j["job_id"] for j in oleeo.fetch("jefferies")] == ["direct_oleeo_jefferies_1"]
+
+
+def test_board_without_cap_is_full(env):
+    _serve(env, [_board([(1991, "Summer Analyst Program")])])
+    assert oleeo.fetch("jefferies").partial is False
+
+
+def test_403_challenge_page_on_vacancy_raises(env):
+    """A vacancy 403 whose body is a bot challenge is a block, not 'gone'."""
+    board = _board([(i, f"Summer Analyst Program {i}") for i in range(10)])
+    env.get.side_effect = lambda url, **kw: (
+        _resp(CAPTCHA, status=403) if "/opp/2-" in url else
+        _resp(VACANCY) if "/opp/" in url else _resp(board))
+    with pytest.raises(FetchError, match="bot challenge"):
+        oleeo.fetch("jefferies")
+
+
+def test_all_vacancies_gone_on_small_board_raises(env):
+    board = _board([(1, "Summer Analyst Program A"), (2, "Summer Analyst Program B")])
+    env.get.side_effect = lambda url, **kw: (
+        _resp("gone", status=403) if "/opp/" in url else _resp(board))
+    with pytest.raises(FetchError, match="all 2"):
+        oleeo.fetch("jefferies")

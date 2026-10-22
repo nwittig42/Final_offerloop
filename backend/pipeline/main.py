@@ -567,9 +567,11 @@ def run_crawl_ats(
 
         A fetcher that can't read the whole board raises (FetchError for the
         target platforms); the caller marks the board failed and nothing on
-        it is synced or expired.
+        it is synced or expired. A capped (partial) snapshot syncs with
+        partial=True: new jobs are written, nothing is expired.
         """
         raw = fetch(slug)
+        partial = direct.is_partial(raw)
         record = slug_loader.get_record(platform, slug) if platform in direct.TARGET_PLATFORMS else None
         # normalize per-slug (mirror the pieces of normalize_all we need)
         normalized: list[dict] = []
@@ -603,7 +605,15 @@ def run_crawl_ats(
                 "expired": 0,
             }
         else:
-            result = writer.sync_board_jobs(platform, slug, kept, prior_state=prior_state)
+            prior_kept = (prior_state or {}).get("kept_job_ids") or []
+            if platform in direct.TARGET_PLATFORMS and not kept and prior_kept:
+                # An empty read of a board that had jobs is far likelier a
+                # block than an empty board: never let it expire everything.
+                raise direct.FetchError(
+                    f"empty snapshot ({len(raw)} fetched, 0 kept) but {len(prior_kept)} "
+                    "jobs last crawl; marking failed instead of syncing")
+            result = writer.sync_board_jobs(
+                platform, slug, kept, prior_state=prior_state, partial=partial)
         result.update(tiers)
         return result
 
@@ -680,10 +690,47 @@ def run_crawl_ats(
     return totals
 
 
+def _crawl_ats_mode(tier: str, platforms: tuple[str, ...] | None, dry_run: bool) -> str:
+    """pipeline_runs mode name for a --crawl-ats run. The target-employer
+    crawl (--platform with only target platforms) logs as crawl-ats-targets so
+    it isn't confused with the legacy hot crawl."""
+    from backend.pipeline import direct
+
+    if platforms is None:
+        mode = f"crawl-ats-{tier}"
+    elif all(p in direct.TARGET_PLATFORMS for p in platforms):
+        mode = "crawl-ats-targets"
+    else:
+        mode = f"crawl-ats-{tier}-" + "-".join(platforms)
+    return mode + ("-dry-run" if dry_run else "")
+
+
+def _execute(mode: str, runner, log_run: bool = True) -> int:
+    """Run `runner`, write the pipeline_runs log unless `log_run` is False
+    (--dry-run), and return the process exit code."""
+    started = datetime.now(timezone.utc)
+    try:
+        result = runner()
+        if not isinstance(result, dict):
+            result = {"total": int(result) if isinstance(result, (int, float)) else 0}
+        if log_run:
+            _write_run_log(mode, started, result, error=None)
+        else:
+            logger.info("--dry-run: pipeline_runs log skipped (%s)", mode)
+        return 0
+    except Exception as e:
+        logger.exception("Pipeline run failed: %s", e)
+        if log_run:
+            _write_run_log(mode, started, None, error=f"{type(e).__name__}: {e}")
+        return 1
+
+
 if __name__ == "__main__":
     app = _bootstrap_app()
 
     with app.app_context():
+        # --dry-run promises no Firestore writes, so it skips pipeline_runs too.
+        log_run = "--dry-run" not in sys.argv
         if "--cleanup" in sys.argv:
             mode, runner = "cleanup", run_cleanup
         elif "--fix-salaries" in sys.argv:
@@ -722,9 +769,10 @@ if __name__ == "__main__":
         elif "--crawl-ats" in sys.argv:
             tier = _parse_tier(default="hot")
             shard = _parse_shard()
-            platforms = _parse_platforms() or LEGACY_PLATFORMS
+            platform_flag = _parse_platforms()
+            platforms = platform_flag or LEGACY_PLATFORMS
             dry_run = "--dry-run" in sys.argv
-            mode = f"crawl-ats-{tier}" + ("-dry-run" if dry_run else "")
+            mode = _crawl_ats_mode(tier, platform_flag, dry_run)
             runner = lambda: run_crawl_ats(  # noqa: E731
                 tier=tier, shard=shard, platforms=platforms, dry_run=dry_run
             )
@@ -743,13 +791,5 @@ if __name__ == "__main__":
             # --include-fantastic-7d when running an intentional backfill.
             mode, runner = "full", (lambda: run_pipeline(skip_fantastic=True))
 
-        started = datetime.now(timezone.utc)
-        try:
-            result = runner()
-            if not isinstance(result, dict):
-                result = {"total": int(result) if isinstance(result, (int, float)) else 0}
-            _write_run_log(mode, started, result, error=None)
-        except Exception as e:
-            logger.exception("Pipeline run failed: %s", e)
-            _write_run_log(mode, started, None, error=f"{type(e).__name__}: {e}")
+        if _execute(mode, runner, log_run) != 0:
             sys.exit(1)

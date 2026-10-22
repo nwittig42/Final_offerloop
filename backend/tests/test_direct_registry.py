@@ -257,3 +257,94 @@ def test_totals_report_early_career():
     assert result["tier1"] == 1 and result["tier3"] == 1
     assert result["early_career"] == 1
     assert result["per_platform"]["workday"]["early_career"] == 1
+
+
+# --------------------------------------------------------------------------
+# Final-review fixes: partial snapshots, empty-by-block guard, run log
+# --------------------------------------------------------------------------
+
+def test_partial_snapshot_passed_to_sync():
+    from backend.pipeline.direct import Snapshot
+
+    calls, sync, _, patches = _crawl_patches({"workday": lambda slug: Snapshot(
+        [_raw("workday", title="2027 Summer Analyst Program")], partial=True)})
+    _run(patches, platforms=("workday",))
+    assert sync.call_args.kwargs["partial"] is True
+
+
+def test_plain_list_syncs_as_full():
+    calls, sync, _, patches = _crawl_patches({})
+    _run(patches)  # legacy fetchers return plain lists
+    assert all(c.kwargs["partial"] is False for c in sync.call_args_list)
+
+
+def _with_prior(patches, prior):
+    from backend.pipeline import crawl_state
+
+    patches[3] = patch.object(crawl_state, "read_state_batch", return_value={"acme": prior})
+    return patches
+
+
+def test_empty_target_snapshot_with_prior_jobs_marks_failure():
+    calls, sync, mark_failure, patches = _crawl_patches({"workday": lambda slug: []})
+    prior = {"kept_job_ids": ["direct_workday_acme_1"]}
+    result = _run(_with_prior(patches, prior), platforms=("workday",))
+    sync.assert_not_called()
+    mark_failure.assert_called_once_with("workday", "acme", prior)
+    assert result["slugs_failed"] == 1
+
+
+def test_empty_target_snapshot_without_prior_jobs_syncs():
+    calls, sync, mark_failure, patches = _crawl_patches({"workday": lambda slug: []})
+    _run(_with_prior(patches, {"kept_job_ids": []}), platforms=("workday",))
+    sync.assert_called_once()
+    mark_failure.assert_not_called()
+
+
+def test_empty_legacy_snapshot_still_syncs():
+    """The guard is target-platform only: legacy behaviour is unchanged."""
+    calls, sync, mark_failure, patches = _crawl_patches({})
+    _run(_with_prior(patches, {"kept_job_ids": ["direct_greenhouse_acme_1"]}),
+         platforms=("greenhouse",))
+    sync.assert_called_once()
+    mark_failure.assert_not_called()
+
+
+def test_skip_ceiling_all_skipped_raises():
+    from backend.pipeline.direct import FetchError, check_skip_ceiling
+
+    with pytest.raises(FetchError):
+        check_skip_ceiling("x", 1, 1)
+    with pytest.raises(FetchError):
+        check_skip_ceiling("x", 3, 3)
+    check_skip_ceiling("x", 0, 0)
+    check_skip_ceiling("x", 2, 3)
+
+
+@pytest.mark.parametrize("platforms,dry_run,expected", [
+    (None, False, "crawl-ats-hot"),
+    (("workday", "oracle", "oleeo", "goldman", "manual"), False, "crawl-ats-targets"),
+    (("workday",), True, "crawl-ats-targets-dry-run"),
+    (("greenhouse", "workday"), False, "crawl-ats-hot-greenhouse-workday"),
+])
+def test_crawl_ats_run_log_mode(platforms, dry_run, expected):
+    from backend.pipeline.main import _crawl_ats_mode
+
+    assert _crawl_ats_mode("hot", platforms, dry_run) == expected
+
+
+def test_dry_run_skips_run_log():
+    from backend.pipeline import main
+
+    with patch.object(main, "_write_run_log") as log:
+        assert main._execute("crawl-ats-targets-dry-run", lambda: {"total": 1}, log_run=False) == 0
+        assert main._execute("x", lambda: 1 / 0, log_run=False) == 1
+    log.assert_not_called()
+
+
+def test_live_run_writes_run_log():
+    from backend.pipeline import main
+
+    with patch.object(main, "_write_run_log") as log:
+        assert main._execute("crawl-ats-targets", lambda: {"total": 1}) == 0
+    assert log.call_args.args[0] == "crawl-ats-targets"

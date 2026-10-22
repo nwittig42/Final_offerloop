@@ -3,7 +3,9 @@
 Board record URL: https://{tenant}.{wdN}.myworkdayjobs.com[/{locale}]/{site}.
 Searches each early-career term, drops non-candidate titles and postings whose
 list `locationsText` is clearly non-US, then fetches the detail for each
-survivor (DETAIL_WORKERS at a time, results in list order). A detail call
+survivor (DETAIL_WORKERS at a time, results in list order). A term whose
+results exceed MAX_PER_TERM marks the snapshot partial (`Snapshot.partial`),
+so the crawl expires nothing on that board. A detail call
 returning 403/404/410 skips that posting (it is no longer viewable) unless
 too many do (`check_skip_ceiling`); any other failure raises FetchError.
 """
@@ -22,8 +24,8 @@ from backend.pipeline import slug_loader
 from backend.pipeline.fetcher import (
     POOL_SIZE, REQUEST_TIMEOUT, USER_AGENT, _polite_sleep, _strip_html)
 from backend.pipeline.direct import (
-    DETAIL_WORKERS, SKIPPABLE_STATUSES, FetchError, check_skip_ceiling, is_candidate_title,
-    make_job_id, map_in_order)
+    DETAIL_WORKERS, SKIPPABLE_STATUSES, FetchError, Snapshot, check_skip_ceiling,
+    is_candidate_title, make_job_id, map_in_order)
 from backend.pipeline.normalizer import _is_non_us_non_remote
 
 logger = logging.getLogger(__name__)
@@ -91,8 +93,10 @@ def fetch(slug: str) -> list[dict]:
 
     paths: dict[str, str] = {}  # externalPath -> title, first seen wins
     non_us: set[str] = set()
+    partial = False
     for term in SEARCH_TERMS:
         offset = 0
+        total = None
         while offset < MAX_PER_TERM:
             _polite_sleep()
             try:
@@ -103,7 +107,10 @@ def fetch(slug: str) -> list[dict]:
                 )
             except requests.RequestException as exc:
                 raise FetchError(f"Workday [{slug}] list failed: {exc}") from exc
-            items = _json(resp).get("jobPostings") or []
+            data = _json(resp)
+            if offset == 0 and isinstance(data.get("total"), int):
+                total = data["total"]  # only the offset-0 page reports it reliably
+            items = data.get("jobPostings") or []
             for item in items:
                 path, title = item.get("externalPath"), item.get("title") or ""
                 if not path or path in paths or not is_candidate_title(title, analyst_entry):
@@ -117,6 +124,16 @@ def fetch(slug: str) -> list[dict]:
             if len(items) < PAGE_SIZE:
                 break
             offset += PAGE_SIZE
+        else:
+            # Full pages all the way to the cap.
+            # Only an offset-0 total of exactly the cap proves nothing was cut
+            # off; a missing, larger or inconsistent total means truncation.
+            if total != MAX_PER_TERM:
+                partial = True
+                logger.warning(
+                    "Workday [%s] term %r hit the %d-result cap (total %s); "
+                    "snapshot is partial, nothing will be expired",
+                    slug, term, MAX_PER_TERM, total)
 
     def detail(path: str) -> dict | None:
         """jobPostingInfo for one posting, or None when it 403/404/410s."""
@@ -178,6 +195,6 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Workday [%s] -> %d jobs (%d non-US skipped from list, %d gone)",
-                slug, len(jobs), len(non_us), skipped)
-    return jobs
+    logger.info("  Workday [%s] -> %d jobs (%d non-US skipped from list, %d gone)%s",
+                slug, len(jobs), len(non_us), skipped, " [partial]" if partial else "")
+    return Snapshot(jobs, partial=partial)
