@@ -10,7 +10,6 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -935,6 +934,37 @@ def _simplify_item_to_job(item: dict) -> dict | None:
     }
 
 
+def _direct_apply_urls() -> frozenset[str]:
+    """Normalized apply URLs of live jobs the direct target crawl holds in
+    Firestore (projection read of apply_url/expired only). Empty, with a
+    warning, when Firestore isn't available: then nothing is de-duplicated."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    from backend.app.extensions import get_db
+    from backend.pipeline import direct
+
+    try:
+        db = get_db()
+        if not db:
+            logger.warning("Simplify: Firestore not initialized, no de-dup against direct crawl")
+            return frozenset()
+        query = (db.collection("jobs")
+                 .where(filter=FieldFilter("source", "in", list(direct.TARGET_PLATFORMS)))
+                 .select(["apply_url", "expired"]))
+        urls = set()
+        for snap in query.stream():
+            data = snap.to_dict() or {}
+            if data.get("expired") is True:
+                continue
+            norm = direct.normalize_apply_url(data.get("apply_url") or "")
+            if norm:
+                urls.add(norm)
+        return frozenset(urls)
+    except Exception as e:
+        logger.warning("Simplify: could not read direct-crawl apply URLs, no de-dup: %s", e)
+        return frozenset()
+
+
 def fetch_simplify() -> list[dict]:
     """Fetch active internship listings from the Simplify GitHub repo.
 
@@ -949,22 +979,17 @@ def fetch_simplify() -> list[dict]:
         logger.warning("Simplify: fetch failed: %s", e)
         return []
 
-    # Listings on a hot-tier target board (Workday/Oracle/Oleeo) come in via
-    # the direct crawl instead; skip them here so each job appears once.
+    # A listing the direct target crawl already holds (same normalized apply
+    # URL) comes in from there instead; skip it here so each job appears once.
     from backend.pipeline import direct
 
-    try:
-        skip_hosts = direct.crawled_hosts()
-    except Exception as e:
-        logger.warning("Simplify: could not load crawled hosts, no de-dup: %s", e)
-        skip_hosts = frozenset()
+    held_urls = _direct_apply_urls()
 
     # Convert all active/visible items
     all_valid: list[dict] = []
     skipped_direct = 0
     for item in raw:
-        host = (urlparse(item.get("url") or "").hostname or "").lower()
-        if host and host in skip_hosts:
+        if held_urls and direct.normalize_apply_url(item.get("url") or "") in held_urls:
             skipped_direct += 1
             continue
         job = _simplify_item_to_job(item)
@@ -972,7 +997,7 @@ def fetch_simplify() -> list[dict]:
             all_valid.append(job)
 
     if skipped_direct:
-        logger.info("  Simplify: skipped %d listings on directly crawled boards", skipped_direct)
+        logger.info("  Simplify: skipped %d listings already held by the direct crawl", skipped_direct)
 
     # Phase 1: Take up to 2,000 from the full list (equivalent to 20 pages × 100)
     main_batch = all_valid[:2000]
