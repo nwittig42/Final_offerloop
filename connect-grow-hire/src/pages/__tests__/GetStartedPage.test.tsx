@@ -99,6 +99,15 @@ describe("GetStartedPage walkthrough", () => {
     expect(lastSaved(s)).toMatchObject({ step: "person", selectedId: "preview-0" });
   });
 
+  it("going back to the matches keeps the person marked as selected", async () => {
+    const { s } = makeServices();
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: /Jamie Demo/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to your matches" }));
+    expect(await screen.findByRole("button", { name: /Jamie Demo/ })).toHaveAttribute("aria-pressed", "true");
+    expect(lastSaved(s)).toMatchObject({ step: "matches", selectedId: "preview-3" });
+  });
+
   it("prepares an editable email on request, in the app only, and saves edits", async () => {
     const { s } = makeServices();
     renderPage(s);

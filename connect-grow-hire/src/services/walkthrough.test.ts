@@ -69,6 +69,14 @@ describe("matchReasons", () => {
     expect(matchReasons(m({ company: "Acme", title: "Analyst" }), null)).toEqual(["Analyst at Acme"]);
   });
 
+  it("skips ranker reasons that repeat what's already said", () => {
+    expect(matchReasons(m({ school: "University of Michigan", reasons: ["Same school", "Started as an intern"] }), profile)).toEqual([
+      "Went to University of Michigan, like you",
+      "Works at Goldman Sachs, one of your target companies",
+      "Started as an intern",
+    ]);
+  });
+
   it("doesn't count generic title words as a role match", () => {
     expect(matchReasons(m({ company: "Acme", title: "Marketing Analyst" }), profile)).toEqual(["Marketing Analyst at Acme"]);
   });

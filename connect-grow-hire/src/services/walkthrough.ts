@@ -174,10 +174,17 @@ export function matchReasons(m: WalkthroughMatch, profile: MatchProfile | null):
     );
     if (role) out.push(`Works close to the ${role} roles you're aiming for`);
   }
+  // The ranker's own reasons, skipping ones that repeat what's already said
+  // ("Same school" after "Went to USC, like you").
+  const said = out.join(" ").toLowerCase();
+  const repeats = (r: string) =>
+    (/\b(same|shared) (school|university|college|alma mater)\b/i.test(r) && said.includes("went to")) ||
+    (/\btarget(ed|ing)? (compan|firm)/i.test(r) && said.includes("target companies")) ||
+    (/\b(same|target(ed|ing)?) role\b/i.test(r) && said.includes("roles you're aiming for"));
   for (const r of m.reasons) {
     if (out.length >= 3) break;
     const k = norm(r);
-    if (k && !out.some((o) => norm(o) === k || norm(o).includes(k))) out.push(r);
+    if (k && !repeats(r) && !out.some((o) => norm(o) === k || norm(o).includes(k))) out.push(r);
   }
   if (!out.length) {
     out.push(m.title && m.company ? `${m.title} at ${m.company}` : "Recommended from your background");
