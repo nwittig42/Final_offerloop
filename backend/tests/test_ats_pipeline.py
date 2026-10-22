@@ -348,3 +348,85 @@ def test_mark_expired_jobs_empty_short_circuits():
     """Empty input must not touch Firestore at all."""
     result = writer.mark_expired_jobs([])
     assert result == {"marked": 0, "not_found": 0, "total": 0}
+
+
+# --------------------------------------------------------------------------
+# Final-review fixes: sticky dormancy + partial snapshots
+# --------------------------------------------------------------------------
+
+@patch("backend.pipeline.writer.get_db")
+@patch("backend.pipeline.crawl_state.mark_recovered")
+def test_hash_match_clears_failures_and_dormancy(mock_recovered, mock_db):
+    """A board that failed 3 times (dormant) and then recovers unchanged must
+    have its failure flags cleared, or cleanup deletes its live jobs."""
+    mock_db.return_value = MagicMock()
+    snapshot = [_mk_job("direct_greenhouse_test_1")]
+    prior = {
+        "board_hash": crawl_state.compute_board_hash(snapshot),
+        "kept_job_ids": ["direct_greenhouse_test_1"],
+        "consecutive_failures": 3,
+        "dormant": True,
+    }
+    result = writer.sync_board_jobs("greenhouse", "test", snapshot, prior_state=prior)
+    assert result["board_hash_matched"] is True
+    mock_recovered.assert_called_once_with(
+        "greenhouse", "test", jobs_count=1, prior_state=prior)
+
+
+@patch("backend.pipeline.writer.get_db")
+@patch("backend.pipeline.crawl_state.mark_recovered")
+def test_hash_match_healthy_board_writes_nothing(mock_recovered, mock_db):
+    mock_db.return_value = MagicMock()
+    snapshot = [_mk_job("direct_greenhouse_test_1")]
+    prior = {"board_hash": crawl_state.compute_board_hash(snapshot),
+             "kept_job_ids": ["direct_greenhouse_test_1"], "consecutive_failures": 0,
+             "dormant": False}
+    writer.sync_board_jobs("greenhouse", "test", snapshot, prior_state=prior)
+    mock_recovered.assert_not_called()
+
+
+def test_mark_recovered_resets_flags_keeps_hash_and_kept():
+    db = MagicMock()
+    with patch.object(crawl_state, "get_db", return_value=db):
+        crawl_state.mark_recovered("workday", "citi", jobs_count=4,
+                                   prior_state={"consecutive_failures": 3, "dormant": True})
+    doc = db.collection.return_value.document.return_value.set.call_args.args[0]
+    assert doc["consecutive_failures"] == 0 and doc["dormant"] is False
+    assert "last_seen_jobs_at" in doc and doc["last_seen_jobs_count"] == 4
+    assert "board_hash" not in doc and "kept_job_ids" not in doc
+
+
+@patch("backend.pipeline.writer.get_db")
+@patch("backend.pipeline.writer._embed_new_jobs_batch")
+@patch("backend.pipeline.writer._expire_by_firestore_ids")
+@patch("backend.pipeline.crawl_state.write_state")
+def test_partial_snapshot_writes_new_expires_nothing(
+    mock_write_state, mock_expire, mock_embed, mock_db
+):
+    """A capped (partial) snapshot writes new jobs, expires nothing, keeps
+    prior kept + snapshot, and stores no board hash."""
+    mock_db.return_value = MagicMock()
+    snapshot = [_mk_job("direct_workday_test_B"), _mk_job("direct_workday_test_D")]
+    prior = {"board_hash": "old", "kept_job_ids": [
+        "direct_workday_test_A", "direct_workday_test_B"]}
+    result = writer.sync_board_jobs("workday", "test", snapshot, prior_state=prior, partial=True)
+    assert result["written"] == 1 and result["expired"] == 0
+    mock_expire.assert_not_called()
+    kw = mock_write_state.call_args.kwargs
+    assert kw["board_hash"] is None
+    assert set(kw["kept_job_ids"]) == {
+        "direct_workday_test_A", "direct_workday_test_B", "direct_workday_test_D"}
+
+
+@patch("backend.pipeline.writer.get_db")
+@patch("backend.pipeline.writer._embed_new_jobs_batch")
+@patch("backend.pipeline.writer._expire_by_firestore_ids")
+@patch("backend.pipeline.crawl_state.write_state")
+def test_partial_snapshot_skips_hash_shortcut(mock_write_state, mock_expire, mock_embed, mock_db):
+    mock_db.return_value = MagicMock()
+    snapshot = [_mk_job("direct_workday_test_B")]
+    prior = {"board_hash": crawl_state.compute_board_hash(snapshot),
+             "kept_job_ids": ["direct_workday_test_B"]}
+    result = writer.sync_board_jobs("workday", "test", snapshot, prior_state=prior, partial=True)
+    assert result["board_hash_matched"] is False
+    mock_write_state.assert_called_once()

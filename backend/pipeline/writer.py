@@ -243,6 +243,7 @@ def sync_board_jobs(
     snapshot_jobs: list[dict],
     *,
     prior_state: Optional[dict] = None,
+    partial: bool = False,
 ) -> dict:
     """Reconcile one board's full snapshot against Firestore state.
 
@@ -270,6 +271,10 @@ def sync_board_jobs(
             omitted, this function will read the state doc itself (adds one
             Firestore read per call — batch reads at the caller are cheaper
             for large sweeps).
+        partial: the fetcher hit a search/page cap, so the snapshot may miss
+            live jobs. New jobs are written but nothing is expired,
+            kept_job_ids becomes prior kept + snapshot, and board_hash is
+            stored as None (a partial hash is never authoritative).
 
     Returns: {board_hash_matched, snapshot_count, written, expired}.
     """
@@ -288,11 +293,16 @@ def sync_board_jobs(
     snapshot_ids = [j["job_id"] for j in snapshot_jobs if j.get("job_id")]
     snapshot_set = set(snapshot_ids)
 
-    if prior_hash == new_hash and prior_hash is not None:
+    if not partial and prior_hash == new_hash and prior_hash is not None:
         logger.info(
             "  sync[%s/%s]: hash match, %d jobs unchanged, no writes",
             platform, slug, snapshot_count,
         )
+        if crawl_state.needs_recovery(prior_state):
+            # A successful crawl must clear failure/dormancy flags even when
+            # nothing changed, or the TTL cleanup treats the board as dead.
+            crawl_state.mark_recovered(
+                platform, slug, jobs_count=snapshot_count, prior_state=prior_state)
         return {
             "board_hash_matched": True,
             "snapshot_count": snapshot_count,
@@ -301,7 +311,13 @@ def sync_board_jobs(
         }
 
     new_ids = snapshot_set - prior_kept
-    removed_ids = prior_kept - snapshot_set
+    # A partial snapshot can't prove a job is gone: expire nothing.
+    removed_ids = set() if partial else prior_kept - snapshot_set
+    if partial:
+        logger.warning(
+            "  sync[%s/%s]: partial snapshot (search cap hit); %d jobs, nothing expired",
+            platform, slug, snapshot_count,
+        )
 
     # Write new jobs — skip existence check since diff already isolates
     # net-new relative to prior kept_ids. Any collision that DOES survive
@@ -335,11 +351,15 @@ def sync_board_jobs(
     # Used later to decide whether a cold slug deserves hot promotion.
     tier1_count = sum(1 for j in snapshot_jobs if j.get("relevance_tier") == 1)
 
+    if partial:
+        kept_ids = sorted(prior_kept) + [j for j in snapshot_ids if j not in prior_kept]
+    else:
+        kept_ids = snapshot_ids
     crawl_state.write_state(
         platform,
         slug,
-        board_hash=new_hash,
-        kept_job_ids=snapshot_ids,
+        board_hash=None if partial else new_hash,
+        kept_job_ids=kept_ids,
         jobs_count=snapshot_count,
         tier1_count=tier1_count,
         prior_state=prior_state,
@@ -366,29 +386,43 @@ def _ats_board(doc_id: str) -> Optional[tuple[str, str]]:
     return None
 
 
-def _ttl_deletable(doc, board_state) -> bool:
-    """Direct-ATS jobs are written once and never rewritten on unchanged
+def _ttl_reason(doc, board_state, board_listed) -> Optional[str]:
+    """Why an expires_at-lapsed job may be deleted, or None to keep it.
+
+    Direct-ATS jobs are written once and never rewritten on unchanged
     boards, so their expires_at lapses while they are still posted (and
     kept_job_ids stops them ever being re-added). Delete them only once
     sync_board_jobs marked them expired, or their board is no longer
-    crawled (dormant or no state), since then nothing would expire them."""
+    crawled (dormant, no state, or dropped from the slug lists), since then
+    nothing would expire them."""
     board = _ats_board(doc.id)
     if board is None:
-        return True
+        return "not_ats"
     if (doc.to_dict() or {}).get("expired") is True:
-        return True
+        return "expired"
     state = board_state(*board)
-    return state is None or crawl_state.is_dormant(state)
+    if state is None:
+        return "no_state"
+    if crawl_state.is_dormant(state):
+        return "dormant"
+    if board_listed(*board) is False:
+        return "unlisted"
+    return None
 
 
 def delete_expired_jobs() -> int:
     """Delete jobs where expires_at < now, except live direct-ATS jobs.
-    Returns total deleted."""
+    Jobs deleted because their board is dormant or unlisted are also dropped
+    from that board's kept_job_ids (and its board_hash cleared) so a revived
+    board re-adds them. Returns total deleted."""
+    from backend.pipeline import slug_loader
+
     db = get_db()
     if not db:
         raise RuntimeError("Firestore DB not initialized")
 
     states: dict = {}
+    listed: dict = {}
 
     def board_state(platform: str, slug: str):
         key = (platform, slug)
@@ -396,9 +430,33 @@ def delete_expired_jobs() -> int:
             states[key] = crawl_state.read_state(platform, slug)
         return states[key]
 
+    def board_listed(platform: str, slug: str) -> Optional[bool]:
+        """Is the board still in the slug lists? None when unknown (the
+        platform's list loaded empty, so it can't be trusted)."""
+        if platform not in listed:
+            try:
+                listed[platform] = frozenset(slug_loader.load_slugs(platform, "all"))
+            except Exception as e:
+                logger.warning("cleanup: could not load %s slugs: %s", platform, e)
+                listed[platform] = frozenset()
+            if not listed[platform]:
+                logger.warning("cleanup: no %s slugs listed; not expiring unlisted boards", platform)
+        slugs = listed[platform]
+        return (slug in slugs) if slugs else None
+
     now = datetime.now(timezone.utc)
-    query = db.collection(COLLECTION).where(filter=FieldFilter("expires_at", "<", now))
-    refs = [doc.reference for doc in query.stream() if _ttl_deletable(doc, board_state)]
+    query = (db.collection(COLLECTION)
+             .where(filter=FieldFilter("expires_at", "<", now))
+             .select(["expired"]))
+    refs = []
+    forget: dict = {}
+    for doc in query.stream():
+        reason = _ttl_reason(doc, board_state, board_listed)
+        if reason is None:
+            continue
+        refs.append(doc.reference)
+        if reason in ("dormant", "unlisted"):
+            forget.setdefault(_ats_board(doc.id), []).append(doc.id)
 
     for i in range(0, len(refs), DELETE_BATCH_SIZE):
         chunk = refs[i : i + DELETE_BATCH_SIZE]
@@ -407,6 +465,12 @@ def delete_expired_jobs() -> int:
             batch.delete(ref)
         batch.commit()
         logger.info("  Deleted batch of %d expired jobs", len(chunk))
+
+    for (platform, slug), ids in forget.items():
+        try:
+            crawl_state.forget_jobs(platform, slug, ids, states[(platform, slug)])
+        except Exception as e:
+            logger.warning("cleanup: could not update %s/%s kept_job_ids: %s", platform, slug, e)
 
     logger.info("Total expired jobs deleted: %d", len(refs))
     return len(refs)

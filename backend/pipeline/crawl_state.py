@@ -88,7 +88,7 @@ def write_state(
     platform: str,
     slug: str,
     *,
-    board_hash: str,
+    board_hash: Optional[str],
     kept_job_ids: list[str],
     jobs_count: int,
     tier1_count: int = 0,
@@ -122,24 +122,67 @@ def write_state(
         "consecutive_failures": 0,
     }
 
-    if jobs_count > 0:
-        doc["last_seen_jobs_at"] = now
-        doc["dormant"] = False
-    else:
-        prev_seen = (prior_state or {}).get("last_seen_jobs_at")
-        if prev_seen:
-            doc["last_seen_jobs_at"] = prev_seen
-            # last_seen_jobs_at may come back as a Firestore Timestamp — coerce.
-            try:
-                days_empty = (now - prev_seen).days
-            except TypeError:
-                days_empty = 0
-            doc["dormant"] = days_empty > DORMANT_THRESHOLD_DAYS
-        else:
-            # Never seen jobs; not dormant yet, just new.
-            doc["dormant"] = False
+    doc.update(_liveness_fields(jobs_count, prior_state, now))
 
     db.collection(COLLECTION).document(_doc_id(platform, slug)).set(doc, merge=True)
+
+
+def _liveness_fields(jobs_count: int, prior_state: Optional[dict], now: datetime) -> dict:
+    """`last_seen_jobs_at` + `dormant` after a successful crawl."""
+    if jobs_count > 0:
+        return {"last_seen_jobs_at": now, "dormant": False}
+    prev_seen = (prior_state or {}).get("last_seen_jobs_at")
+    if not prev_seen:
+        # Never seen jobs; not dormant yet, just new.
+        return {"dormant": False}
+    # last_seen_jobs_at may come back as a Firestore Timestamp — coerce.
+    try:
+        days_empty = (now - prev_seen).days
+    except TypeError:
+        days_empty = 0
+    return {"last_seen_jobs_at": prev_seen, "dormant": days_empty > DORMANT_THRESHOLD_DAYS}
+
+
+def needs_recovery(prior_state: Optional[dict]) -> bool:
+    """True when the state doc carries failure/dormancy flags that a
+    successful crawl must clear."""
+    s = prior_state or {}
+    return bool(s.get("dormant")) or int(s.get("consecutive_failures") or 0) > 0
+
+
+def mark_recovered(
+    platform: str, slug: str, *, jobs_count: int, prior_state: Optional[dict] = None,
+) -> None:
+    """Successful crawl of an unchanged board (hash match): reset
+    consecutive_failures and dormant (and the last_seen fields, as write_state
+    does) without touching board_hash or kept_job_ids. Without this a board
+    that failed 3 times stays dormant forever once it recovers unchanged, and
+    the TTL cleanup deletes its live jobs."""
+    db = get_db()
+    if not db:
+        raise RuntimeError("Firestore DB not initialized")
+    now = datetime.now(timezone.utc)
+    update: dict = {
+        "platform": platform,
+        "slug": slug,
+        "consecutive_failures": 0,
+        "last_crawled_at": now,
+        "last_seen_jobs_count": jobs_count,
+    }
+    update.update(_liveness_fields(jobs_count, prior_state, now))
+    db.collection(COLLECTION).document(_doc_id(platform, slug)).set(update, merge=True)
+
+
+def forget_jobs(platform: str, slug: str, job_ids: Iterable[str], prior_state: dict) -> None:
+    """Drop `job_ids` (deleted by the TTL cleanup) from the board's
+    kept_job_ids and clear board_hash, so a revived board re-adds them."""
+    db = get_db()
+    if not db:
+        raise RuntimeError("Firestore DB not initialized")
+    gone = set(job_ids)
+    kept = [j for j in (prior_state.get("kept_job_ids") or []) if j not in gone]
+    db.collection(COLLECTION).document(_doc_id(platform, slug)).set(
+        {"kept_job_ids": kept, "board_hash": None}, merge=True)
 
 
 def mark_failure(platform: str, slug: str, prior_state: Optional[dict] = None) -> None:
