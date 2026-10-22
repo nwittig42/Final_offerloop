@@ -16,6 +16,11 @@ class _Ref:
         self.id = doc_id
 
 
+class _Exists:
+    def __init__(self, doc_id, exists):
+        self.id, self.exists = doc_id, exists
+
+
 class _Batch:
     def __init__(self, db):
         self._db, self._ops = db, []
@@ -49,7 +54,7 @@ class _Query:
 class FakeDB:
     def __init__(self, docs):
         self.data = {k: dict(v) for k, v in docs.items()}
-        self.writes, self.commits = [], []
+        self.writes, self.commits, self.get_all_calls = [], [], []
 
     def collection(self, name):
         assert name == "jobs"
@@ -60,6 +65,10 @@ class FakeDB:
 
     def document(self, doc_id):
         return _Ref(doc_id)
+
+    def get_all(self, refs):
+        self.get_all_calls.append(len(refs))
+        return [_Exists(r.id, r.id in self.data) for r in refs]
 
     def batch(self):
         return _Batch(self)
@@ -144,3 +153,26 @@ def test_limit_caps_boards():
     db, calls = FakeDB(_docs()), []
     res = bf.backfill(db, confirm=False, fetchers=_fetchers(calls), limit=1)
     assert len(calls) == 1 and res["boards"] == 1
+
+
+def test_jobs_deleted_during_fetch_are_not_recreated():
+    """A job deleted while the boards were being fetched must not come back
+    as a stub doc via set(merge=True)."""
+    db = FakeDB(_docs())
+    f = _fetchers([])
+    real_gh = f["greenhouse"]
+
+    def gh(slug):
+        del db.data["direct_greenhouse_acme_2"]  # cleanup ran mid-fetch
+        return real_gh(slug)
+    f["greenhouse"] = gh
+    res = bf.backfill(db, confirm=True, fetchers=f)
+    assert "direct_greenhouse_acme_2" not in db.data
+    assert {w[0] for w in db.writes} == {"direct_greenhouse_acme_1", "direct_lever_beta_x9"}
+    assert res["vanished"] == 1 and res["updated"] == 2
+
+
+def test_dry_run_does_no_existence_reads():
+    db = FakeDB(_docs())
+    res = bf.backfill(db, confirm=False, fetchers=_fetchers([]))
+    assert db.get_all_calls == [] and res["vanished"] == 0

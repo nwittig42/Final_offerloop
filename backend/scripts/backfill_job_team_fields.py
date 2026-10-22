@@ -4,7 +4,7 @@ Backfill `department` / `team` onto existing early-career ATS job docs.
 Targets `jobs` docs with relevance_tier in [1, 2] and source in
 greenhouse/lever/ashby that have no `department` field. Each board is
 re-fetched once; matching jobs (by job_id) get only `department` and `team`
-written (merge). A board whose fetch returns nothing is skipped and reported
+written (merge), after re-checking that each doc still exists. A board whose fetch returns nothing is skipped and reported
 (the legacy fetchers return [] on error), never treated as "nothing to update".
 
 Usage:
@@ -77,20 +77,31 @@ def backfill(db, confirm: bool, fetchers: dict | None = None, limit: int | None 
             pending.append((doc_id, {"department": job.get("department") or "",
                                      "team": job.get("team") or ""}))
 
-    updated = 0
+    updated = vanished = 0
     if confirm:
         for i in range(0, len(pending), BATCH_SIZE):
+            chunk = pending[i:i + BATCH_SIZE]
+            refs = {doc_id: db.collection(JOBS_COLLECTION).document(doc_id) for doc_id, _ in chunk}
+            # Board fetches take minutes; a job deleted meanwhile must not be
+            # recreated as a stub by set(merge=True). Re-check right before writing.
+            existing = {snap.id for snap in db.get_all(list(refs.values())) if snap.exists}
+            live = [(doc_id, fields) for doc_id, fields in chunk if doc_id in existing]
+            vanished += len(chunk) - len(live)
+            if not live:
+                continue
             batch = db.batch()
-            for doc_id, fields in pending[i:i + BATCH_SIZE]:
-                batch.set(db.collection(JOBS_COLLECTION).document(doc_id), fields, merge=True)
+            for doc_id, fields in live:
+                batch.set(refs[doc_id], fields, merge=True)
             batch.commit()
-            updated += len(pending[i:i + BATCH_SIZE])
+            updated += len(live)
+        if vanished:
+            logger.warning("%d matched docs were deleted before the write; skipped", vanished)
 
     return {"docs_to_update": docs_to_update if limit is None else sum(len(boards[k]) for k in keys),
             "total_docs_missing": docs_to_update,
             "total_boards": len(boards),
             "boards": len(keys), "matched": len(pending), "unmatched": unmatched,
-            "skipped_boards": skipped, "updated": updated}
+            "skipped_boards": skipped, "updated": updated, "vanished": vanished}
 
 
 def main() -> None:
