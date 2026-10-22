@@ -25,6 +25,7 @@ import {
 } from "./walkthroughServices";
 import { OB, obFieldLabel, obInput, obPrimaryButton, obFocus } from "./onboardingTheme";
 import OfferloopLogo from "@/assets/offerloop_logo2_trimmed.png";
+import { MatchGallery, ProfilePortrait, initialsOf } from "@/components/walkthrough/MatchCards";
 
 // First-use walkthrough (onboarding v2). Onboarding hands off here: a few
 // matched people from different companies, pick one, see why they fit, then
@@ -110,14 +111,6 @@ const linkButton: React.CSSProperties = {
   fontFamily: OB.fontBody,
 };
 
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase())
-    .join("");
-
 const Avatar = ({ match, size }: { match: WalkthroughMatch; size: number }) => {
   const [broken, setBroken] = useState(false);
   const style: React.CSSProperties = {
@@ -137,7 +130,7 @@ const Avatar = ({ match, size }: { match: WalkthroughMatch; size: number }) => {
   return match.photoUrl && !broken ? (
     <img src={match.photoUrl} alt="" style={style} onError={() => setBroken(true)} />
   ) : (
-    <span aria-hidden style={style}>{initials(match.name)}</span>
+    <span aria-hidden style={style}>{initialsOf(match.name)}</span>
   );
 };
 
@@ -614,7 +607,8 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       ? sendPhase === "confirm" || sendPhase === "sending" || sendPhase === "unconfirmed" ? 2 : 1
       : 0;
 
-  const shell = (content: React.ReactNode) => (
+  // The matches step is a wide card gallery; everything else is a reading column.
+  const shell = (content: React.ReactNode, opts: { wide?: boolean } = {}) => (
     <div className="min-h-screen flex flex-col" style={{ background: OB.pageBg, color: OB.heading, fontFamily: OB.fontBody }}>
       <header
         style={{ padding: "20px clamp(16px, 5vw, 40px)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
@@ -625,10 +619,10 @@ export default function GetStartedPage({ preview = false, services: injected }: 
         </button>
       </header>
       <main className="flex-1 flex justify-center" style={{ padding: "8px 16px 48px" }}>
-        <div style={{ width: "100%", maxWidth: 640 }}>
+        <div style={{ width: "100%", maxWidth: opts.wide ? 1080 : 640 }}>
           <Progress index={progressIndex} />
           {notice && (
-            <p role={notice.tone === "error" ? "alert" : "status"} style={{ ...notStyle(notice.tone), margin: "0 0 18px" }}>
+            <p role={notice.tone === "error" ? "alert" : "status"} style={{ ...notStyle(notice.tone), margin: "0 0 18px", maxWidth: 640 }}>
               {notice.text}
             </p>
           )}
@@ -790,7 +784,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
               <button type="button" onClick={() => void prepare(selected)} style={obPrimaryButton}>
                 Try again
               </button>
-              <button type="button" onClick={() => update({ step: "matches", selectedId: undefined })} style={secondaryButton}>
+              <button type="button" onClick={() => update({ step: "matches" })} style={secondaryButton}>
                 Pick someone else
               </button>
             </div>
@@ -846,7 +840,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
             Save and finish later
           </button>
           {sendPhase !== "sending" && (
-            <button type="button" onClick={() => update({ step: "matches", selectedId: undefined })} style={linkButton}>
+            <button type="button" onClick={() => update({ step: "matches" })} style={linkButton}>
               Write to someone else instead
             </button>
           )}
@@ -855,48 +849,76 @@ export default function GetStartedPage({ preview = false, services: injected }: 
     );
   }
 
-  // Person step: profile and why they fit. Nothing is spent until "Prepare my email".
+  // Person step: the full profile and why they fit. Nothing is spent until
+  // "Prepare my email".
   if (step === "person" && selected) {
     const reasons = matchReasons(selected, profile);
+    const role = [selected.title, selected.company].filter(Boolean).join(" at ");
     return shell(
       <>
+        <style>{`
+          .wt-profile { display: grid; gap: 22px; grid-template-columns: 1fr; }
+          .wt-profile-portrait { width: 132px; aspect-ratio: 1 / 1.4142; }
+          @media (min-width: 640px) {
+            .wt-profile { grid-template-columns: 190px minmax(0, 1fr); align-items: start; }
+            .wt-profile-portrait { width: 100%; }
+          }
+        `}</style>
         <button
           type="button"
           onClick={() => {
             setNotice(null);
-            update({ step: "matches", selectedId: undefined });
+            update({ step: "matches" });
           }}
           style={{ ...linkButton, display: "flex", alignItems: "center", gap: 6, marginBottom: 16 }}
         >
           <ArrowLeft size={16} /> Back to your matches
         </button>
-        <div style={{ ...card, padding: 22 }}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16 }}>
-            <Avatar match={selected} size={56} />
+        <article style={{ ...card, padding: "clamp(18px, 4vw, 26px)", borderRadius: 18 }}>
+          <div className="wt-profile">
+            <div className="wt-profile-portrait" style={{ display: "flex" }}>
+              <ProfilePortrait match={selected} style={{ flex: 1, borderRadius: 12 }} />
+            </div>
             <div style={{ minWidth: 0 }}>
-              <h1 style={{ fontFamily: OB.fontDisplay, fontWeight: 600, fontSize: 24, margin: 0 }}>{selected.name}</h1>
-              <div style={{ fontSize: 14.5, color: OB.ink2 }}>{[selected.title, selected.company].filter(Boolean).join(" at ")}</div>
-              <div style={{ fontSize: 13.5, color: OB.ink3 }}>{[selected.school, selected.location].filter(Boolean).join(" · ")}</div>
+              {selected.company && (
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: OB.ink3, marginBottom: 6 }}>
+                  {selected.company}
+                </div>
+              )}
+              <h1 style={{ fontFamily: OB.fontDisplay, fontWeight: 600, fontSize: "clamp(26px, 4vw, 32px)", letterSpacing: "-0.02em", lineHeight: 1.15, margin: "0 0 6px" }}>
+                {selected.name}
+              </h1>
+              <div style={{ fontSize: 15, color: OB.ink2 }}>{role}</div>
+              {(selected.school || selected.location) && (
+                <div style={{ fontSize: 13.5, color: OB.ink3, marginTop: 4 }}>
+                  {[selected.school, selected.location].filter(Boolean).join(" · ")}
+                </div>
+              )}
+              <div aria-hidden style={{ height: 1, background: OB.border, margin: "16px 0 14px" }} />
+              <h2 style={{ fontFamily: OB.fontBody, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: OB.primary, margin: "0 0 8px" }}>
+                Why {selected.firstName} is a good first email
+              </h2>
+              <ul style={{ listStyle: "disc", margin: "0 0 14px", paddingLeft: 18, color: OB.ink, fontSize: 14.5, lineHeight: 1.6 }}>
+                {reasons.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+              {selected.briefing && (
+                <p style={{ fontSize: 14, color: OB.ink2, lineHeight: 1.65, margin: "0 0 14px" }}>{selected.briefing}</p>
+              )}
+              {selected.linkedinUrl && (
+                <a
+                  href={selected.linkedinUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: OB.primary }}
+                >
+                  View LinkedIn profile <ExternalLink size={14} />
+                </a>
+              )}
             </div>
           </div>
-          <h2 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 8px" }}>Why {selected.firstName} is a good first email</h2>
-          <ul style={{ margin: "0 0 14px", paddingLeft: 18, color: OB.ink2, fontSize: 14.5, lineHeight: 1.6 }}>
-            {reasons.map((r) => (
-              <li key={r}>{r}</li>
-            ))}
-          </ul>
-          {selected.briefing && <p style={{ fontSize: 14, color: OB.ink2, lineHeight: 1.6, margin: "0 0 14px" }}>{selected.briefing}</p>}
-          {selected.linkedinUrl && (
-            <a
-              href={selected.linkedinUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: OB.primary }}
-            >
-              View LinkedIn profile <ExternalLink size={14} />
-            </a>
-          )}
-        </div>
+        </article>
         <p style={{ fontSize: 13.5, color: OB.ink3, margin: "16px 0 10px" }}>{costNote}</p>
         <button type="button" onClick={() => void prepare(selected)} style={obPrimaryButton}>
           Prepare my email to {selected.firstName}
@@ -907,12 +929,12 @@ export default function GetStartedPage({ preview = false, services: injected }: 
 
   // Matches step.
   const header = (
-    <>
+    <div style={{ maxWidth: 640 }}>
       {h1(<>{firstName ? `${firstName}, here` : "Here"} are a few people worth emailing first</>)}
       {sub("Picked from your resume and the roles and companies you confirmed. Choose one to see why they fit.")}
-    </>
+    </div>
   );
-  if (loadingMatches) return shell(<>{header}{spinner("Finding people who fit your background…")}</>);
+  if (loadingMatches) return shell(<>{header}{spinner("Finding people who fit your background…")}</>, { wide: true });
   if (matchesFailed || !matches.length) {
     return shell(
       <>
@@ -938,51 +960,8 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       </>,
     );
   }
-  return shell(
+  const usableActions = (
     <>
-      {header}
-      <ul aria-label="Your matches" style={{ listStyle: "none", padding: 0, margin: "0 0 18px", display: "flex", flexDirection: "column", gap: 10 }}>
-        {matches.map((m) => {
-          const missing = noEmail.has(m.id);
-          const top = matchReasons(m, profile)[0];
-          return (
-            <li key={m.id}>
-              <button
-                type="button"
-                disabled={missing}
-                onClick={() => {
-                  setNotice(null);
-                  update({ step: "person", selectedId: m.id });
-                  funnel("walkthrough_match_selected", { rank: m.rank, position: matches.indexOf(m) });
-                }}
-                aria-label={`${m.name}, ${[m.title, m.company].filter(Boolean).join(" at ")}`}
-                style={{
-                  ...card,
-                  width: "100%",
-                  textAlign: "left",
-                  display: "flex",
-                  gap: 14,
-                  alignItems: "center",
-                  cursor: missing ? "default" : "pointer",
-                  opacity: missing ? 0.55 : 1,
-                  fontFamily: OB.fontBody,
-                }}
-              >
-                <Avatar match={m} size={48} />
-                <span style={{ minWidth: 0, flex: 1 }}>
-                  <span style={{ display: "block", fontWeight: 700, color: OB.heading }}>{m.name}</span>
-                  <span style={{ display: "block", fontSize: 13.5, color: OB.ink2 }}>
-                    {[m.title, m.company].filter(Boolean).join(" at ")}
-                  </span>
-                  <span style={{ display: "block", fontSize: 13, color: missing ? OB.ink3 : OB.primary, marginTop: 4 }}>
-                    {missing ? "No email found" : top}
-                  </span>
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
       {usable.length < 2 && (
         <button type="button" onClick={() => void fetchMatches(matches.map((m) => m.id))} style={secondaryButton}>
           Show me other people
@@ -991,6 +970,32 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       <button type="button" onClick={() => navigate(exitTo)} style={{ ...linkButton, marginTop: 14 }}>
         Skip for now and go to Find
       </button>
+    </>
+  );
+  return shell(
+    <>
+      {header}
+      <MatchGallery
+        matches={matches}
+        reasonFor={(m) => {
+          // With no real reason, matchReasons falls back to "Title at
+          // Company", which the card already shows; their briefing says more.
+          const top = matchReasons(m, profile)[0];
+          const role = [m.title, m.company].filter(Boolean).join(" at ");
+          return top === role && m.briefing ? m.briefing : top;
+        }}
+        selectedId={state.selectedId}
+        unavailableIds={noEmail}
+        onSelect={(m) => {
+          setNotice(null);
+          update({ step: "person", selectedId: m.id });
+          funnel("walkthrough_match_selected", { rank: m.rank, position: matches.indexOf(m) });
+        }}
+      />
+      <div style={{ maxWidth: 640 }}>
+        {usableActions}
+      </div>
     </>,
+    { wide: true },
   );
 }
