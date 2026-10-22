@@ -47,7 +47,8 @@ import OfferloopLogo from "@/assets/offerloop_logo2_allwhite.png";
 import { OB, obPrimaryButton } from "./onboardingTheme";
 import { OrgMembershipEditor } from "@/components/orgs/OrgMembershipEditor";
 import { useOrgs } from "@/hooks/useOrgs";
-import { trackFeatureActionCompleted } from "@/lib/analytics";
+import { trackFeatureActionCompleted, trackFirstOutreachFunnel } from "@/lib/analytics";
+import { auth } from "@/lib/firebase";
 
 // Onboarding v2 (Milestone 1): one intro screen, then resume / LinkedIn /
 // resume builder (required), then a quick confirm of everything inferred from
@@ -380,6 +381,10 @@ export const OnboardingFlow = ({ onComplete, preview = false, services: injected
       await new Promise((r) => setTimeout(r, 300));
       await refreshUser();
       trackFeatureActionCompleted("onboarding", "complete", true);
+      trackFirstOutreachFunnel("onboarding_completed", auth.currentUser?.metadata?.creationTime, {
+        entry_path: entryPath ?? null,
+        joined_org: memberships.length > 0,
+      });
       try {
         onComplete(finalData);
       } catch (e) {

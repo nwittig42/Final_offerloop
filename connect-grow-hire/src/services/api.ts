@@ -2173,12 +2173,48 @@ async sendRankerFeedback(body: { candidateId: string; signal: "right" | "left" |
 }
 
 /** Find a candidate's verified email (8 credits, refunded on a miss). */
-async revealRankerEmail(candidateId: string, deckId?: string, surface = "web_find"): Promise<{ email: string | null; verified: boolean; cached: boolean; charged: boolean; reason?: string }> {
+async revealRankerEmail(
+  candidateId: string,
+  deckId?: string,
+  surface = "web_find",
+  /** useFirstOutreach: spend the one-time free first outreach instead of credits (409 if it can't be used). */
+  opts?: { useFirstOutreach?: boolean },
+): Promise<{ email: string | null; verified: boolean; cached: boolean; charged: boolean; free?: boolean; reason?: string }> {
   const headers = await this.getAuthHeaders();
   return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/reveal-email`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deck_id: deckId, surface }),
+    body: JSON.stringify({ deck_id: deckId, surface, ...(opts?.useFirstOutreach ? { use_first_outreach: true } : {}) }),
+  });
+}
+
+/** Whether this account can still use its one-time free first outreach. */
+async getFirstOutreachStatus(): Promise<{ eligible: boolean; status: string }> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest('/ranker/first-outreach', { method: 'GET', headers });
+}
+
+/**
+ * Send a contact's first email: exactly the saved draft the user confirmed
+ * (confirmedHash comes from a dryRun of the same endpoint), at most once.
+ * dryRun returns the recipient, blocking problems and style warnings.
+ */
+async sendFirstEmail(contactId: string, body: {
+  dryRun?: boolean; confirmedHash?: string; surface?: string; confirmNotSent?: boolean;
+}): Promise<{
+  sent?: boolean; alreadySent?: boolean; contactId?: string;
+  recipient?: string; subject?: string; hash?: string; blocking?: string[]; warnings?: string[];
+}> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest(`/contacts/${encodeURIComponent(contactId)}/send-first-email`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(body.dryRun ? { dry_run: true } : {}),
+      ...(body.confirmedHash ? { confirmed_hash: body.confirmedHash } : {}),
+      ...(body.surface ? { surface: body.surface } : {}),
+      ...(body.confirmNotSent ? { confirm_not_sent: true } : {}),
+    }),
   });
 }
 

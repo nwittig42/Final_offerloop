@@ -713,8 +713,12 @@ def reveal_candidate_email(candidate_id):
       * Hunter API error / timeout
 
     Request body (optional):
-      {"deck_id": str}      # for cross-endpoint attribution on the
+      {"deck_id": str,      # for cross-endpoint attribution on the
                             # recommendation_events row
+       "use_first_outreach": bool}  # walkthrough: spend the one-time free
+                            # first outreach instead of credits (see
+                            # app.services.first_outreach). Never falls back
+                            # to a charge: 409 when it can't be used.
 
     Response 200 (email found + charge-worthy):
       {email, verified: true, source, confidence, cached: bool, charged: true}
@@ -732,6 +736,7 @@ def reveal_candidate_email(candidate_id):
     data = request.get_json(silent=True) or {}
     deck_id = (data.get("deck_id") or "").strip()
     surface = (str(data.get("surface") or "").strip()[:40]) or "ios_swipe_deck"
+    use_first_outreach = data.get("use_first_outreach") is True
 
     candidate_id = (candidate_id or "").strip()
     if not candidate_id:
@@ -758,6 +763,7 @@ def reveal_candidate_email(candidate_id):
                 "confidence": cached.get("confidence", 0),
                 "cached":     True,
                 "charged":    False,
+                "free":       False,
             })
 
     # ── 2. firm_employees lookup — need first/last/company for Hunter.
@@ -792,17 +798,29 @@ def reveal_candidate_email(candidate_id):
             except Exception:
                 logger.exception("linkedin backfill doc update failed candidate=%s", candidate_id)
 
-    # ── 3. Deduct atomically BEFORE any paid work.
-    from app.services.auth import deduct_credits_atomic
+    # ── 3. Pay BEFORE any paid work: the one-time free first outreach when
+    # the walkthrough asks for it, else credits, deducted atomically.
     from app.config import CREDIT_COSTS
     cost = int(CREDIT_COSTS.get("reveal_email", 8))
-    ok, remaining = deduct_credits_atomic(uid, cost, "reveal_email")
-    if not ok:
-        return jsonify({
-            "error":    "insufficient_credits",
-            "required": cost,
-            "have":     remaining,
-        }), 402
+    reservation = None
+    if use_first_outreach:
+        from app.services import first_outreach
+        reservation, why = first_outreach.reserve(db, uid, candidate_id)
+        if reservation is None:
+            # Never a silent charge: the client shows the price and asks.
+            return jsonify({
+                "error":    "free_outreach_in_use" if why == "in_use" else "free_outreach_unavailable",
+                "required": cost,
+            }), 409
+    else:
+        from app.services.auth import deduct_credits_atomic
+        ok, remaining = deduct_credits_atomic(uid, cost, "reveal_email")
+        if not ok:
+            return jsonify({
+                "error":    "insufficient_credits",
+                "required": cost,
+                "have":     remaining,
+            }), 402
 
     email: str | None = None
     verified = False
@@ -914,7 +932,11 @@ def reveal_candidate_email(candidate_id):
                 charge_worthy = True
 
     if not charge_worthy:
-        _try_refund(uid, cost, "reveal_email_refund")
+        if reservation is not None:
+            # A miss never uses up the free first outreach.
+            first_outreach.release(db, uid, reservation)
+        else:
+            _try_refund(uid, cost, "reveal_email_refund")
         return jsonify({
             "email":      email,
             "verified":   verified,
@@ -923,7 +945,11 @@ def reveal_candidate_email(candidate_id):
             "reason":     "no_email_found" if not email else "below_confidence_threshold",
             "cached":     False,
             "charged":    False,
+            "free":       False,
         })
+
+    if reservation is not None:
+        first_outreach.consume(db, uid, reservation, candidate_id)
 
     # ── 5. Charge-worthy: write cache + event. Failures here do NOT
     # cost the user the charge — they got the email in the response and
@@ -979,7 +1005,8 @@ def reveal_candidate_email(candidate_id):
             "source":     source,
         },
         attribution_source="ranker_deck",
-        extra={"cost_credits": cost},
+        extra=({"cost_credits": 0, "entitlement": "first_outreach"} if reservation is not None
+               else {"cost_credits": cost}),
         doc_id=f"email_revealed_{uid}_{candidate_id}",
     )
 
@@ -989,8 +1016,30 @@ def reveal_candidate_email(candidate_id):
         "source":     source,
         "confidence": confidence,
         "cached":     False,
-        "charged":    True,
+        "charged":    reservation is None,
+        "free":       reservation is not None,
     })
+
+
+@ranker_bp.route("/first-outreach", methods=["GET"])
+@require_firebase_auth
+def first_outreach_status():
+    """GET /api/ranker/first-outreach -> {eligible, status}
+
+    Whether the one-time free first outreach can be used (so the walkthrough
+    can say "free" before the click). Off for everyone until
+    FIRST_OUTREACH_FREE_SINCE is set.
+    """
+    from app.services import first_outreach
+    uid = request.firebase_user["uid"]
+    db = get_db()
+    if not db:
+        return jsonify({"error": "Database not initialized"}), 500
+    try:
+        return jsonify(first_outreach.status(db, uid))
+    except Exception:
+        logger.exception("first_outreach status failed uid=%s", uid)
+        return jsonify({"eligible": False, "status": "ineligible"})
 
 
 @ranker_bp.route("/candidates/<candidate_id>/outreach", methods=["POST"])

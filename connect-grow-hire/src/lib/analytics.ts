@@ -224,3 +224,31 @@ export function trackLifecycleEmailClicked(opts: { campaign: string; content?: s
 export function trackWinbackClicked(): void {
   posthog.capture('winback_clicked', {});
 }
+
+/**
+ * Signup → first outreach funnel (onboarding v2). Every event carries when
+ * it happened and how long after signup, so time-to-first-email can be
+ * measured. Properties are primitives only, and callers must never pass
+ * email text, names, addresses or profile details.
+ */
+export type FirstOutreachFunnelEvent =
+  | 'onboarding_completed'
+  | 'walkthrough_match_selected'
+  | 'walkthrough_draft_generated'
+  | 'walkthrough_gmail_connected'
+  | 'first_email_sent';
+
+export function trackFirstOutreachFunnel(
+  event: FirstOutreachFunnelEvent,
+  signedUpAt?: string | null,
+  props: Record<string, string | number | boolean | null> = {},
+): void {
+  const now = new Date();
+  const signup = signedUpAt ? Date.parse(signedUpAt) : NaN;
+  posthog.capture(event, {
+    ...props,
+    occurred_at: now.toISOString(),
+    signed_up_at: Number.isNaN(signup) ? null : new Date(signup).toISOString(),
+    seconds_since_signup: Number.isNaN(signup) ? null : Math.max(0, Math.round((now.getTime() - signup) / 1000)),
+  });
+}

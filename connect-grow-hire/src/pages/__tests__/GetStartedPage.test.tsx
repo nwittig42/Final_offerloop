@@ -9,7 +9,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 const auth = vi.hoisted(() => ({ user: { uid: "u1", name: "Ana Lee", email: "ana@umich.edu" } }));
 vi.mock("@/contexts/FirebaseAuthContext", () => ({ useFirebaseAuth: () => auth }));
-vi.mock("@/lib/analytics", () => ({ trackFeatureActionCompleted: vi.fn() }));
+const analytics = vi.hoisted(() => ({ trackFeatureActionCompleted: vi.fn(), trackFirstOutreachFunnel: vi.fn() }));
+vi.mock("@/lib/analytics", () => analytics);
 vi.mock("@/lib/firebase", () => ({ db: {}, auth: { currentUser: null } }));
 vi.mock("@/services/api", () => ({ apiService: {}, BACKEND_URL: "" }));
 vi.mock("@/services/firebaseApi", () => ({ firebaseApi: {} }));
@@ -27,14 +28,21 @@ function makeServices(saved: WalkthroughState | null = null, overrides: Partial<
     saveState: vi.fn(async () => {}),
     loadProfile: vi.fn(async () => ({ university: "University of Southern California", targetCompanies: ["Goldman Sachs"], roles: [] })),
     loadPeople: vi.fn(async () => ({ people: PREVIEW_PEOPLE })),
-    revealEmail: vi.fn(async () => ({ ok: true as const })),
+    loadFirstOutreach: vi.fn(async () => false),
+    revealEmail: vi.fn(async (_id: string, _deck: string, useFree: boolean) => ({ ok: true as const, free: useFree })) as WalkthroughServices["revealEmail"],
     writeDraft: vi.fn(async (id: string) => {
       drafts.set(`ranker_${id}`, DRAFT);
       return { ok: true as const };
     }),
     loadDraft: vi.fn(async (_uid: string, contactId: string) => drafts.get(contactId) ?? null),
     saveDraft: vi.fn(async () => {}),
-    firstOutreachFree: false,
+    gmailStatus: vi.fn(async () => ({ connected: false, canSend: false })),
+    connectGmail: vi.fn(async () => "redirecting" as const) as WalkthroughServices["connectGmail"],
+    reviewSend: vi.fn(async (contactId: string) => ({
+      recipient: "riley@example.com", subject: drafts.get(contactId)?.subject ?? "", hash: "h1",
+      blocking: [] as string[], warnings: ["too_short"], alreadySent: false,
+    })),
+    sendEmail: vi.fn(async () => ({ ok: true as const, alreadySent: false })) as WalkthroughServices["sendEmail"],
     ...overrides,
   } satisfies WalkthroughServices;
   return { s, drafts };
@@ -98,7 +106,7 @@ describe("GetStartedPage walkthrough", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Prepare my email to Riley" }));
     const subject = await screen.findByLabelText("Subject");
     expect(subject).toHaveValue(DRAFT.subject);
-    expect(s.revealEmail).toHaveBeenCalledWith("preview-0", "preview-deck");
+    expect(s.revealEmail).toHaveBeenCalledWith("preview-0", "preview-deck", false);
     expect(s.writeDraft).toHaveBeenCalledWith("preview-0", "preview-deck");
     expect(lastSaved(s)).toMatchObject({ status: "drafted", step: "draft", selectedId: "preview-0", contactId: "ranker_preview-0" });
 
@@ -196,10 +204,228 @@ describe("GetStartedPage walkthrough", () => {
     expect(await screen.findByTestId("where")).toHaveTextContent("/find");
   });
 
-  it("says the first email is free once the entitlement is on", async () => {
-    const { s } = makeServices(null, { firstOutreachFree: true });
+});
+
+// ── Milestone 3: free first outreach, Gmail, sending ───────────────────────
+
+const DRAFT_STATE: WalkthroughState = {
+  version: WALKTHROUGH_VERSION, status: "drafted", step: "draft", matches: MATCHES,
+  selectedId: "preview-0", contactId: "ranker_preview-0",
+};
+function atDraft(overrides: Partial<WalkthroughServices> = {}) {
+  const made = makeServices(DRAFT_STATE, overrides);
+  made.drafts.set("ranker_preview-0", DRAFT);
+  return made;
+}
+const funnelEvents = () => analytics.trackFirstOutreachFunnel.mock.calls.map((c) => c[0]);
+
+describe("free first outreach", () => {
+  it("uses the free first outreach when the backend says it's available", async () => {
+    const { s } = makeServices(null, { loadFirstOutreach: vi.fn(async () => true) });
     renderPage(s);
     fireEvent.click(await screen.findByRole("button", { name: /Riley Sample/ }));
     expect(await screen.findByText("Your first email is on us. No credits needed.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prepare my email to Riley" }));
+    await screen.findByLabelText("Subject");
+    expect(s.revealEmail).toHaveBeenCalledWith("preview-0", "preview-deck", true);
+    expect(analytics.trackFirstOutreachFunnel).toHaveBeenCalledWith(
+      "walkthrough_draft_generated", undefined, expect.objectContaining({ free_outreach: true }),
+    );
+  });
+
+  it("never charges silently when the free outreach can't be used: shows the price and waits", async () => {
+    const revealEmail = vi.fn()
+      .mockResolvedValueOnce({ ok: false, reason: "free_unavailable" })
+      .mockResolvedValueOnce({ ok: true, free: false });
+    const { s } = makeServices(null, { loadFirstOutreach: vi.fn(async () => true), revealEmail });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: /Riley Sample/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Prepare my email to Riley" }));
+    expect(await screen.findByText(/free first email isn't available on this account/)).toBeInTheDocument();
+    expect(screen.getByText("Finding their email uses 8 credits. If we can't find one, you're not charged.")).toBeInTheDocument();
+    expect(revealEmail).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Prepare my email to Riley" }));
+    await screen.findByLabelText("Subject");
+    expect(revealEmail).toHaveBeenLastCalledWith("preview-0", "preview-deck", false);
+  });
+
+  it("resuming an interrupted draft still uses the free outreach", async () => {
+    const { s } = makeServices(
+      { ...DRAFT_STATE, status: "in_progress" },
+      { loadFirstOutreach: vi.fn(() => new Promise<boolean>((r) => setTimeout(() => r(true), 20))) },
+    );
+    renderPage(s);
+    await screen.findByLabelText("Subject");
+    expect(s.revealEmail).toHaveBeenCalledWith("preview-0", "preview-deck", true);
+  });
+});
+
+describe("Gmail connection", () => {
+  it("explains why Gmail is needed and starts OAuth back to this draft, after saving edits", async () => {
+    const { s } = atDraft();
+    renderPage(s, "/get-started?returnTo=%2Fpricing");
+    expect(await screen.findByText(/goes out from your own Gmail address/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is sent without your OK/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "Edited before connecting" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect Gmail" }));
+    await waitFor(() => expect(s.connectGmail).toHaveBeenCalledWith("/get-started?returnTo=%2Fpricing"));
+    // The edit was saved before leaving for Google.
+    expect(s.saveDraft).toHaveBeenCalledWith("u1", "ranker_preview-0", { subject: DRAFT.subject, body: "Edited before connecting" });
+    expect(vi.mocked(s.saveDraft).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(s.connectGmail).mock.invocationCallOrder[0]);
+  });
+
+  it("skips the connect step when Gmail can already send", async () => {
+    const { s } = atDraft({ gmailStatus: vi.fn(async () => ({ connected: true, canSend: true })) });
+    renderPage(s);
+    expect(await screen.findByRole("button", { name: "Send email to Riley" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect Gmail" })).not.toBeInTheDocument();
+  });
+
+  it("comes back from OAuth to the same edited draft, re-checking permissions", async () => {
+    const { s, drafts } = atDraft({ gmailStatus: vi.fn(async () => ({ connected: true, canSend: true })) });
+    drafts.set("ranker_preview-0", { ...DRAFT, body: "My edited version" });
+    renderPage(s, "/get-started?connected=gmail");
+    expect(await screen.findByText("Gmail is connected. Your email is ready to send.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toHaveValue("My edited version");
+    expect(screen.getByRole("button", { name: "Send email to Riley" })).toBeInTheDocument();
+    expect(s.gmailStatus).toHaveBeenCalled();
+    expect(funnelEvents()).toContain("walkthrough_gmail_connected");
+  });
+
+  it("doesn't trust ?connected=gmail when the granted permissions can't send", async () => {
+    const { s } = atDraft({ gmailStatus: vi.fn(async () => ({ connected: true, canSend: false })) });
+    renderPage(s, "/get-started?connected=gmail");
+    expect(await screen.findByRole("alert")).toHaveTextContent("without permission to send");
+    expect(screen.getByRole("button", { name: "Reconnect Gmail" })).toBeInTheDocument();
+    expect(funnelEvents()).not.toContain("walkthrough_gmail_connected");
+  });
+
+  it("explains a declined permission and keeps the draft", async () => {
+    const { s } = atDraft();
+    renderPage(s, "/get-started?gmail_error=scopes_declined");
+    expect(await screen.findByRole("alert")).toHaveTextContent("leave all the boxes checked");
+    expect(screen.getByLabelText("Subject")).toHaveValue(DRAFT.subject);
+    expect(screen.getByRole("button", { name: "Connect Gmail" })).toBeInTheDocument();
+  });
+});
+
+describe("sending", () => {
+  const connected = { gmailStatus: vi.fn(async () => ({ connected: true, canSend: true })) };
+
+  it("sends only after an explicit confirm, then completes and opens the conversation", async () => {
+    const { s } = atDraft({ ...connected });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    const dialog = await screen.findByRole("dialog", { name: "Confirm sending" });
+    expect(within(dialog).getByText("riley@example.com")).toBeInTheDocument();
+    expect(within(dialog).getByText(DRAFT.subject)).toBeInTheDocument();
+    // Style issues are optional suggestions, not blockers.
+    expect(within(dialog).getByRole("list", { name: "Optional suggestions" })).toBeInTheDocument();
+    expect(s.sendEmail).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Yes, send it" }));
+    expect(await screen.findByTestId("where")).toHaveTextContent("/contacts?contact=ranker_preview-0");
+    expect(s.sendEmail).toHaveBeenCalledWith("ranker_preview-0", "h1", { confirmNotSent: false });
+    expect(lastSaved(s)).toMatchObject({ status: "completed" });
+
+    const sentEvent = analytics.trackFirstOutreachFunnel.mock.calls.find((c) => c[0] === "first_email_sent");
+    expect(sentEvent).toBeTruthy();
+    // No email text, recipient or names in analytics.
+    const flat = JSON.stringify(analytics.trackFirstOutreachFunnel.mock.calls);
+    for (const secret of [DRAFT.subject, DRAFT.body, "riley@example.com", "Riley"]) expect(flat).not.toContain(secret);
+  });
+
+  it("an edit after review closes the confirm, so only reviewed text can be sent", async () => {
+    const { s } = atDraft({ ...connected });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    await screen.findByRole("dialog", { name: "Confirm sending" });
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "Changed my mind" } });
+    expect(screen.queryByRole("dialog", { name: "Confirm sending" })).not.toBeInTheDocument();
+    expect(s.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("blocks serious problems before the confirm", async () => {
+    const { s } = atDraft({
+      ...connected,
+      reviewSend: vi.fn(async () => ({ recipient: "r@x.com", subject: "s", hash: "h", blocking: ["placeholder"], warnings: [], alreadySent: false })),
+    });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Replace placeholder text like [Name]");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("asks to reconnect when Gmail access expired, keeping the draft", async () => {
+    const { s } = atDraft({ ...connected, sendEmail: vi.fn(async () => ({ ok: false as const, reason: "gmail_token_expired" as const })) });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, send it" }));
+    expect(await screen.findByRole("button", { name: "Reconnect Gmail" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Subject")).toHaveValue(DRAFT.subject);
+    expect(s.saveState).not.toHaveBeenCalledWith("u1", expect.objectContaining({ status: "completed" }));
+  });
+
+  it("reloads the draft when it changed since review", async () => {
+    const { s, drafts } = atDraft({ ...connected });
+    vi.mocked(s.sendEmail).mockImplementationOnce(async () => {
+      drafts.set("ranker_preview-0", { ...DRAFT, body: "Edited in another tab" });
+      return { ok: false, reason: "draft_changed" };
+    });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, send it" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("changed since you reviewed it");
+    expect(screen.getByLabelText("Email")).toHaveValue("Edited in another tab");
+  });
+
+  it("when an earlier try may have sent, asks to check Sent before sending again", async () => {
+    const sendEmail = vi.fn()
+      .mockResolvedValueOnce({ ok: false, reason: "send_unconfirmed" })
+      .mockResolvedValueOnce({ ok: true, alreadySent: false });
+    const { s } = atDraft({ ...connected, sendEmail });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, send it" }));
+    expect(await screen.findByText("Check your Sent folder first")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open Gmail Sent/ })).toHaveAttribute("href", "https://mail.google.com/mail/u/0/#sent");
+    fireEvent.click(screen.getByRole("button", { name: "It's not there. Send it now" }));
+    expect(await screen.findByTestId("where")).toHaveTextContent("/contacts?contact=ranker_preview-0");
+    expect(sendEmail).toHaveBeenLastCalledWith("ranker_preview-0", "h1", { confirmNotSent: true });
+  });
+
+  it("a failed send keeps the draft and can be retried", async () => {
+    const sendEmail = vi.fn()
+      .mockResolvedValueOnce({ ok: false, reason: "send_failed" })
+      .mockResolvedValueOnce({ ok: true, alreadySent: false });
+    const { s } = atDraft({ ...connected, sendEmail });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, send it" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("won't send it twice");
+    fireEvent.click(screen.getByRole("button", { name: "Send email to Riley" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, send it" }));
+    expect(await screen.findByTestId("where")).toHaveTextContent("/contacts?contact=ranker_preview-0");
+  });
+
+  it("an email that already went out just opens the conversation", async () => {
+    const { s } = atDraft({
+      ...connected,
+      reviewSend: vi.fn(async () => ({ recipient: "r@x.com", subject: "s", hash: "h", blocking: [], warnings: [], alreadySent: true })),
+    });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Send email to Riley" }));
+    expect(await screen.findByTestId("where")).toHaveTextContent("/contacts?contact=ranker_preview-0");
+    expect(s.sendEmail).not.toHaveBeenCalled();
+    expect(funnelEvents()).not.toContain("first_email_sent");
+  });
+});
+
+describe("analytics", () => {
+  it("records match selection with timestamps-only props", async () => {
+    const { s } = makeServices();
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: /Riley Sample/ }));
+    expect(analytics.trackFirstOutreachFunnel).toHaveBeenCalledWith("walkthrough_match_selected", undefined, { rank: 0, position: 0 });
   });
 });
