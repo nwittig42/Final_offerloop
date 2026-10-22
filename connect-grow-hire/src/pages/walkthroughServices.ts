@@ -18,8 +18,41 @@ import {
 
 export const WALKTHROUGH_SURFACE = "web_walkthrough";
 
-export type RevealResult = { ok: true } | { ok: false; reason: "no_email" | "insufficient_credits" | "error" };
+export type RevealResult =
+  | { ok: true; free: boolean }
+  | { ok: false; reason: "no_email" | "insufficient_credits" | "free_unavailable" | "error" };
 export type DraftResult = { ok: true } | { ok: false; reason: "generation_failed" | "no_email" | "error" };
+
+export interface GmailState {
+  connected: boolean;
+  /** Connected with a permission that can send (compose / send). */
+  canSend: boolean;
+}
+
+export interface SendReview {
+  recipient: string;
+  subject: string;
+  /** Server hash of the saved draft; sending requires it back. */
+  hash: string;
+  blocking: string[];
+  warnings: string[];
+  alreadySent: boolean;
+}
+
+export type SendError =
+  | "gmail_not_connected" | "gmail_token_expired" | "gmail_scope_missing"
+  | "draft_changed" | "send_in_progress" | "send_unconfirmed"
+  | "blocked" | "daily_cap_reached" | "send_failed";
+export type SendResult = { ok: true; alreadySent: boolean } | { ok: false; reason: SendError };
+
+const SEND_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://mail.google.com/",
+];
+/** Mirrors the backend: connected with no scope list recorded counts as able to send. */
+export const canSendWith = (scopes: string[] | undefined) =>
+  !scopes || scopes.length === 0 || scopes.some((s) => SEND_SCOPES.includes(s));
 
 export interface WalkthroughServices {
   loadState(uid: string): Promise<WalkthroughState | null>;
@@ -28,18 +61,26 @@ export interface WalkthroughServices {
   loadProfile(uid: string): Promise<MatchProfile | null>;
   /** Recommended people (the ranker deck). Never starts paid prefetches or digs. */
   loadPeople(exclude: string[]): Promise<{ people: Person[]; reason?: string }>;
-  /** Find their email. Spends REVEAL_COST credits (refunded on a miss) unless firstOutreachFree. */
-  revealEmail(candidateId: string, deckId: string): Promise<RevealResult>;
+  /** Whether the one-time free first outreach can be used (decided by the backend). */
+  loadFirstOutreach(): Promise<boolean>;
+  /**
+   * Find their email. useFree spends the free first outreach (only used up
+   * when an email is found); otherwise REVEAL_COST credits, refunded on a miss.
+   */
+  revealEmail(candidateId: string, deckId: string, useFree: boolean): Promise<RevealResult>;
   /** Write the email (in the app only; no Gmail draft). */
   writeDraft(candidateId: string, deckId: string): Promise<DraftResult>;
   loadDraft(uid: string, contactId: string): Promise<EmailDraft | null>;
   saveDraft(uid: string, contactId: string, draft: Pick<EmailDraft, "subject" | "body">): Promise<void>;
+  gmailStatus(): Promise<GmailState>;
   /**
-   * The first email is free for new users. Pending the backend entitlement
-   * (see the Milestone 2 notes): false until it ships, so the page states
-   * the real cost.
+   * Start Gmail OAuth, coming back to returnTo. Live: leaves the page for
+   * Google ("redirecting"). Preview: connects in place ("connected").
    */
-  firstOutreachFree: boolean;
+  connectGmail(returnTo: string): Promise<"redirecting" | "connected">;
+  /** What would be sent (server view of the saved draft). */
+  reviewSend(contactId: string): Promise<SendReview>;
+  sendEmail(contactId: string, confirmedHash: string, opts?: { confirmNotSent?: boolean }): Promise<SendResult>;
 }
 
 const errorStatus = (e: unknown): number | undefined => (e as { status?: number })?.status;
@@ -68,13 +109,22 @@ export const liveWalkthroughServices: WalkthroughServices = {
       .filter((p): p is Person => p !== null);
     return { people, reason: res.reason };
   },
-  async revealEmail(candidateId, deckId) {
+  async loadFirstOutreach() {
     try {
-      const res = await apiService.revealRankerEmail(candidateId, deckId, WALKTHROUGH_SURFACE);
-      return res.email ? { ok: true } : { ok: false, reason: "no_email" };
+      return (await apiService.getFirstOutreachStatus()).eligible === true;
+    } catch {
+      return false;
+    }
+  },
+  async revealEmail(candidateId, deckId, useFree) {
+    try {
+      const res = await apiService.revealRankerEmail(candidateId, deckId, WALKTHROUGH_SURFACE, { useFirstOutreach: useFree });
+      return res.email ? { ok: true, free: res.free === true } : { ok: false, reason: "no_email" };
     } catch (e) {
+      const msg = errorMessage(e);
       if (errorStatus(e) === 402) return { ok: false, reason: "insufficient_credits" };
-      return { ok: false, reason: errorMessage(e) === "candidate_not_found" ? "no_email" : "error" };
+      if (msg === "free_outreach_unavailable" || msg === "free_outreach_in_use") return { ok: false, reason: "free_unavailable" };
+      return { ok: false, reason: msg === "candidate_not_found" ? "no_email" : "error" };
     }
   },
   async writeDraft(candidateId, deckId) {
@@ -92,7 +142,43 @@ export const liveWalkthroughServices: WalkthroughServices = {
   },
   loadDraft,
   saveDraft,
-  firstOutreachFree: false,
+  async gmailStatus() {
+    const res = await apiService.gmailStatus();
+    return { connected: !!res.connected, canSend: !!res.connected && canSendWith(res.scopes) };
+  },
+  async connectGmail(returnTo) {
+    const url = await apiService.startGmailOAuth(returnTo);
+    window.location.assign(url);
+    return "redirecting";
+  },
+  async reviewSend(contactId) {
+    const res = await apiService.sendFirstEmail(contactId, { dryRun: true });
+    return {
+      recipient: res.recipient || "",
+      subject: res.subject || "",
+      hash: res.hash || "",
+      blocking: res.blocking || [],
+      warnings: res.warnings || [],
+      alreadySent: !!res.alreadySent,
+    };
+  },
+  async sendEmail(contactId, confirmedHash, opts) {
+    try {
+      const res = await apiService.sendFirstEmail(contactId, {
+        confirmedHash,
+        surface: WALKTHROUGH_SURFACE,
+        confirmNotSent: opts?.confirmNotSent,
+      });
+      return res.sent ? { ok: true, alreadySent: !!res.alreadySent } : { ok: false, reason: "send_failed" };
+    } catch (e) {
+      const msg = errorMessage(e) as SendError;
+      const known: SendError[] = [
+        "gmail_not_connected", "gmail_token_expired", "gmail_scope_missing", "draft_changed",
+        "send_in_progress", "send_unconfirmed", "blocked", "daily_cap_reached",
+      ];
+      return { ok: false, reason: known.includes(msg) ? msg : "send_failed" };
+    }
+  },
 };
 
 // ── Preview: sample people, fake email, nothing leaves the browser ──────────
@@ -129,6 +215,9 @@ export const PREVIEW_PEOPLE: Person[] = [
 export function createPreviewWalkthroughServices(): WalkthroughServices {
   let state: WalkthroughState | null = { version: 1, status: "pending", step: "matches" };
   const drafts = new Map<string, EmailDraft>();
+  let gmailConnected = false;
+  let freeUsed = false;
+  const sent = new Set<string>();
   const delay = () => new Promise((r) => setTimeout(r, 600));
   return {
     loadState: async () => state,
@@ -141,10 +230,13 @@ export function createPreviewWalkthroughServices(): WalkthroughServices {
       roles: ["Investment Banking Analyst"],
     }),
     loadPeople: async (exclude) => ({ people: PREVIEW_PEOPLE.filter((p) => !exclude.includes(p.id)) }),
-    // The second sample person shows the "no email" path.
-    revealEmail: async (id) => {
+    loadFirstOutreach: async () => !freeUsed,
+    // The second sample person shows the "no email" path (which keeps the free outreach).
+    revealEmail: async (id, _deck, useFree) => {
       await delay();
-      return id === "preview-1" ? { ok: false, reason: "no_email" } : { ok: true };
+      if (id === "preview-1") return { ok: false, reason: "no_email" };
+      if (useFree) freeUsed = true;
+      return { ok: true, free: useFree };
     },
     writeDraft: async (id) => {
       await delay();
@@ -161,6 +253,29 @@ export function createPreviewWalkthroughServices(): WalkthroughServices {
       const cur = drafts.get(contactId);
       if (cur) drafts.set(contactId, { ...cur, ...d });
     },
-    firstOutreachFree: false,
+    gmailStatus: async () => ({ connected: gmailConnected, canSend: gmailConnected }),
+    connectGmail: async () => {
+      await delay();
+      gmailConnected = true;
+      return "connected";
+    },
+    reviewSend: async (contactId) => {
+      const d = drafts.get(contactId);
+      const words = (d?.body || "").trim().split(/\s+/).filter(Boolean).length;
+      return {
+        recipient: d?.to || "",
+        subject: d?.subject || "",
+        hash: `preview-${d?.subject.length}-${d?.body.length}`,
+        blocking: /\[[A-Za-z ]+\]|\{\{/.test(d?.body || "") ? ["placeholder"] : [],
+        warnings: words < 60 ? ["too_short"] : [],
+        alreadySent: sent.has(contactId),
+      };
+    },
+    sendEmail: async (contactId) => {
+      await delay();
+      const already = sent.has(contactId);
+      sent.add(contactId);
+      return { ok: true, alreadySent: already };
+    },
   };
 }

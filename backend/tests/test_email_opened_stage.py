@@ -611,3 +611,54 @@ def test_rollback_apply_moves_opened_back_in_batches():
     assert store["u1"]["c"]["pipelineStage"] == "replied"
     # Idempotent.
     assert run(db, apply=True, log=lambda *_a: None) == {}
+
+
+# ---------------------------------------------------------------------------
+# First email from the Inbox: no "Re:", a real stage, no stale Gmail draft
+# ---------------------------------------------------------------------------
+
+def _send_first(data):
+    from app.services import outbox_service
+
+    ref = MagicMock()
+    service = MagicMock()
+    service.users().messages().send().execute.return_value = {"id": "m1", "threadId": "t-new"}
+    with (
+        patch.object(outbox_service, "_get_contact", return_value=(ref, data)),
+        patch.object(outbox_service, "_load_user_gmail_creds", return_value=object()),
+        patch.object(outbox_service, "_gmail_service", return_value=service),
+        patch.object(outbox_service, "get_db", return_value=MagicMock()),
+        patch.object(email_tracking, "start", return_value=None),
+        patch("app.services.cooldown_service.record_outreach"),
+        patch("app.utils.metrics_events.log_event"),
+    ):
+        outbox_service.send_reply_for_contact("u1", "c1", "Hi Pat, would you have 15 minutes next week?")
+    import base64
+    import email as _email
+    raw = service.users().messages().send.call_args.kwargs["body"]["raw"]
+    return ref.update.call_args[0][0], _email.message_from_bytes(base64.urlsafe_b64decode(raw)), service
+
+
+def test_first_email_keeps_its_subject_and_cleans_up_the_gmail_draft():
+    from firebase_admin import firestore
+
+    updates, msg, service = _send_first({
+        "email": "pat@evercore.com", "pipelineStage": "generated", "emailSubject": "Evercore question",
+        "gmailDraftId": "d1", "gmailDraftUrl": "https://mail.google.com/d1",
+    })
+    assert msg["subject"] == "Evercore question"
+    assert updates["pipelineStage"] == "email_sent"
+    assert updates["emailSent"] is True and updates["draftStillExists"] is False
+    assert updates["gmailDraftId"] is firestore.DELETE_FIELD
+    assert updates["gmailThreadId"] == "t-new"
+    service.users().drafts().delete.assert_called_once_with(userId="me", id="d1")
+
+
+def test_reply_in_a_thread_still_gets_re():
+    updates, msg, service = _send_first({
+        "email": "pat@evercore.com", "pipelineStage": "replied", "emailSubject": "Evercore question",
+        "gmailThreadId": "t1", "emailSent": True, "gmailDraftId": "d-old",
+    })
+    assert msg["subject"] == "Re: Evercore question"
+    assert "gmailDraftId" not in updates
+    service.users().drafts().delete.assert_not_called()

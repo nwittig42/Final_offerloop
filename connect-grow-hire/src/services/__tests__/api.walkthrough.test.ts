@@ -53,4 +53,21 @@ describe("ranker API options", () => {
     await apiService.revealRankerEmail("c1", "d1");
     expect(calls.map((c) => c.body.surface)).toEqual(["web_walkthrough", "web_find"]);
   });
+
+  it("free first outreach is opt-in on the reveal; the default body is unchanged", async () => {
+    await apiService.revealRankerEmail("c1", "d1", "web_walkthrough", { useFirstOutreach: true });
+    await apiService.revealRankerEmail("c1", "d1", "web_walkthrough", { useFirstOutreach: false });
+    expect(calls[0].body).toEqual({ deck_id: "d1", surface: "web_walkthrough", use_first_outreach: true });
+    expect(calls[1].body).toEqual({ deck_id: "d1", surface: "web_walkthrough" });
+  });
+
+  it("send-first-email: dry run, then send with the confirmed hash", async () => {
+    await apiService.sendFirstEmail("ranker_c1", { dryRun: true });
+    await apiService.sendFirstEmail("ranker_c1", { confirmedHash: "abc", surface: "web_walkthrough" });
+    await apiService.sendFirstEmail("ranker_c1", { confirmedHash: "abc", surface: "web_walkthrough", confirmNotSent: true });
+    expect(calls.map((c) => c.url.replace(/^.*\/api/, ""))).toEqual(Array(3).fill("/contacts/ranker_c1/send-first-email"));
+    expect(calls[0].body).toEqual({ dry_run: true });
+    expect(calls[1].body).toEqual({ confirmed_hash: "abc", surface: "web_walkthrough" });
+    expect(calls[2].body).toEqual({ confirmed_hash: "abc", surface: "web_walkthrough", confirm_not_sent: true });
+  });
 });

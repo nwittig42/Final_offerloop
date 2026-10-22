@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, ExternalLink, Loader2 } from "lucide-react";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
-import { trackFeatureActionCompleted } from "@/lib/analytics";
+import { trackFeatureActionCompleted, trackFirstOutreachFunnel, type FirstOutreachFunnelEvent } from "@/lib/analytics";
+import { auth } from "@/lib/firebase";
 import {
   REVEAL_COST,
   WALKTHROUGH_VERSION,
@@ -18,18 +19,22 @@ import {
 import {
   createPreviewWalkthroughServices,
   liveWalkthroughServices,
+  type GmailState,
+  type SendReview,
   type WalkthroughServices,
 } from "./walkthroughServices";
 import { OB, obFieldLabel, obInput, obPrimaryButton, obFocus } from "./onboardingTheme";
 import OfferloopLogo from "@/assets/offerloop_logo2_trimmed.png";
 
-// First-use walkthrough (onboarding v2, Milestone 2). Onboarding hands off
-// here: a few matched people from different companies, pick one, see why
-// they fit, then (only on an explicit click) find their email and write an
-// editable first email. The draft stays in the app; Gmail and sending are
-// Milestone 3. Progress is saved on users/{uid}.walkthrough, the draft on the
-// contact doc, so "Save and finish later" resumes in place. Nothing here
-// blocks the app: every state has a way out to Find.
+// First-use walkthrough (onboarding v2). Onboarding hands off here: a few
+// matched people from different companies, pick one, see why they fit, then
+// (only on an explicit click) find their email and write an editable first
+// email. Sending is on the same screen: connect Gmail if needed (the OAuth
+// round trip comes back to this draft), then Send, then an explicit confirm.
+// The backend sends exactly the saved draft that was confirmed, once.
+// Progress is saved on users/{uid}.walkthrough, the draft on the contact
+// doc, so leaving at any point resumes in place. Nothing here blocks the
+// app: every state has a way out to Find.
 
 const safeReturnTo = (raw: string | null): string => {
   if (!raw) return "";
@@ -41,7 +46,43 @@ const safeReturnTo = (raw: string | null): string => {
 const PREVIEW_UID = "preview";
 const EMPTY_RETRY_MS = 3000;
 
-type Notice = { tone: "info" | "error"; text: string } | null;
+type Notice = { tone: "info" | "error" | "success"; text: string } | null;
+type SendPhase = "idle" | "reviewing" | "confirm" | "sending" | "unconfirmed";
+
+const GMAIL_SENT_URL = "https://mail.google.com/mail/u/0/#sent";
+
+// ?gmail_error= codes from the OAuth callback.
+const GMAIL_ERROR_COPY: Record<string, string> = {
+  scopes_declined:
+    "Gmail didn't get every permission it asked for, so we can't send for you yet. Try again and leave all the boxes checked. Your draft is saved.",
+  not_test_user: "This Google account can't be connected yet. Try another account, or save and finish later.",
+};
+const GMAIL_ERROR_DEFAULT = "Gmail didn't connect. Your draft is saved, so you can try again.";
+
+const BLOCKING_COPY: Record<string, string> = {
+  no_recipient: "We don't have an email address for them. Pick someone else.",
+  empty_subject: "Add a subject line.",
+  empty_body: "Your email is empty.",
+  placeholder: "Replace placeholder text like [Name] before sending.",
+};
+const WARNING_COPY: Record<string, string> = {
+  too_short: "It's on the short side. A sentence about why them helps.",
+  too_long: "It's a bit long. Shorter emails tend to get more replies.",
+  no_clear_ask: "Ending with a clear ask, like a 15-minute call, gets more replies.",
+  no_specificity: "A detail about them (their team, path or school) makes it feel personal.",
+  weak_subject: "A specific subject line gets opened more often.",
+  subject_no_contact_noun: "Mentioning them or their company in the subject helps it get opened.",
+};
+
+const notStyle = (tone: NonNullable<Notice>["tone"]): React.CSSProperties => ({
+  fontSize: 14,
+  lineHeight: 1.5,
+  borderRadius: 10,
+  padding: "10px 14px",
+  margin: "0 0 14px",
+  background: tone === "error" ? "#FEF2F2" : tone === "success" ? "#ECFDF5" : OB.primary50,
+  color: tone === "error" ? "#991B1B" : tone === "success" ? "#065F46" : OB.ink2,
+});
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 interface GetStartedPageProps {
@@ -163,6 +204,21 @@ export default function GetStartedPage({ preview = false, services: injected }: 
   const [draftFailed, setDraftFailed] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [notice, setNotice] = useState<Notice>(null);
+  // The one-time free first outreach (backend decides); null until known.
+  const [freeEligible, setFreeEligibleState] = useState<boolean | null>(null);
+  // prepare() can run before the status arrives (resuming after a refresh),
+  // so it awaits the same request instead of reading possibly-stale state.
+  const freeRef = useRef<Promise<boolean> | null>(null);
+  const setFreeEligible = useCallback((v: boolean) => {
+    freeRef.current = Promise.resolve(v);
+    setFreeEligibleState(v);
+  }, []);
+  const [gmail, setGmail] = useState<GmailState | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
+  const [review, setReview] = useState<SendReview | null>(null);
+  const [sendNotice, setSendNotice] = useState<Notice>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
 
   const track = useCallback(
     (action: string, success = true) => {
@@ -170,6 +226,27 @@ export default function GetStartedPage({ preview = false, services: injected }: 
     },
     [preview],
   );
+  // Signup → first email funnel, with timestamps. No email text or profile data.
+  const funnel = useCallback(
+    (event: FirstOutreachFunnelEvent, props: Record<string, string | number | boolean | null> = {}) => {
+      if (!preview) trackFirstOutreachFunnel(event, auth.currentUser?.metadata?.creationTime, props);
+    },
+    [preview],
+  );
+
+  // Coming back from Google's consent screen: remember the outcome, then
+  // clean the URL (keeping returnTo). It's acted on once the draft is shown.
+  const oauthReturn = useRef<{ connected: boolean; error: string | null } | null>(null);
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search);
+    if (!sp.has("connected") && !sp.has("gmail_error")) return;
+    oauthReturn.current = { connected: sp.get("connected") === "gmail", error: sp.get("gmail_error") };
+    sp.delete("connected");
+    sp.delete("gmail_error");
+    const rest = sp.toString();
+    navigate({ pathname: location.pathname, search: rest ? `?${rest}` : "" }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // State changes are saved but never wait on the save: a failed write just
   // means a refresh resumes a step earlier.
@@ -238,10 +315,19 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       }
 
       setPreparing("email");
-      const reveal = await services.revealEmail(match.id, match.deckId);
+      const useFree = (await (freeRef.current ?? Promise.resolve(false))) === true;
+      const reveal = await services.revealEmail(match.id, match.deckId, useFree);
       if (!reveal.ok) {
         setPreparing(null);
-        if (reveal.reason === "no_email") {
+        if (reveal.reason === "free_unavailable") {
+          // Never charged silently: show the price and let them choose.
+          setFreeEligible(false);
+          update({ step: "person", contactId: undefined });
+          setNotice({
+            tone: "info",
+            text: `Your free first email isn't available on this account. Finding ${match.firstName}'s email uses ${REVEAL_COST} credits, and you're not charged if we can't find one.`,
+          });
+        } else if (reveal.reason === "no_email") {
           const noEmailIds = Array.from(new Set([...(stateRef.current?.noEmailIds || []), match.id]));
           update({ step: "matches", selectedId: undefined, contactId: undefined, noEmailIds });
           setNotice({
@@ -262,6 +348,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
         return;
       }
       track("email_found");
+      if (reveal.free) setFreeEligible(false);
 
       setPreparing("writing");
       const written = await services.writeDraft(match.id, match.deckId);
@@ -275,8 +362,9 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       setDraft(saved);
       update({ status: "drafted" });
       track("draft_written");
+      funnel("walkthrough_draft_generated", { free_outreach: reveal.free, rank: match.rank });
     },
-    [uid, services, update, track],
+    [uid, services, update, track, funnel, setFreeEligible],
   );
 
   // ── Load / resume ────────────────────────────────────────────────────────
@@ -285,6 +373,9 @@ export default function GetStartedPage({ preview = false, services: injected }: 
     if (!uid || started.current) return;
     started.current = true;
     services.loadProfile(uid).then(setProfile).catch(() => setProfile(null));
+    const free = services.loadFirstOutreach().catch(() => false);
+    freeRef.current = free;
+    void free.then((v) => setFreeEligibleState(v));
     services
       .loadState(uid)
       .catch(() => null)
@@ -321,6 +412,11 @@ export default function GetStartedPage({ preview = false, services: injected }: 
     const next = { ...draft, ...patch };
     setDraft(next);
     setSaveStatus("saving");
+    // A change after review needs a fresh review before it can be sent.
+    if (sendPhase === "confirm" || sendPhase === "unconfirmed") {
+      setSendPhase("idle");
+      setReview(null);
+    }
     const contactId = state.contactId;
     window.clearTimeout(editTimer.current);
     editTimer.current = window.setTimeout(() => {
@@ -329,6 +425,171 @@ export default function GetStartedPage({ preview = false, services: injected }: 
         .then(() => setSaveStatus("saved"))
         .catch(() => setSaveStatus("error"));
     }, 700);
+  };
+
+  /** Save the current text now (before sending or leaving for Google). */
+  const flushSave = async () => {
+    if (!draft || !uid || !state?.contactId) throw new Error("no_draft");
+    window.clearTimeout(editTimer.current);
+    if (saveStatus === "saving" || saveStatus === "error") {
+      await services.saveDraft(uid, state.contactId, { subject: draft.subject, body: draft.body });
+      setSaveStatus("saved");
+    }
+  };
+
+  // ── Gmail and sending ────────────────────────────────────────────────────
+  const onGmailConnected = useCallback(
+    (g: GmailState) => {
+      if (g.canSend) {
+        setSendNotice({ tone: "success", text: "Gmail is connected. Your email is ready to send." });
+        funnel("walkthrough_gmail_connected", {});
+      } else {
+        setSendNotice({
+          tone: "error",
+          text: "Gmail connected without permission to send. Reconnect and leave every box checked. Your draft is saved.",
+        });
+      }
+    },
+    [funnel],
+  );
+
+  // Know whether Gmail can send as soon as the draft is on screen, and
+  // finish an OAuth return (re-checking the permissions actually granted).
+  const step0 = state?.step;
+  useEffect(() => {
+    if (step0 !== "draft" || !draft || gmail) return;
+    let cancelled = false;
+    services
+      .gmailStatus()
+      .catch(() => ({ connected: false, canSend: false }))
+      .then((g) => {
+        if (cancelled) return;
+        setGmail(g);
+        const ret = oauthReturn.current;
+        oauthReturn.current = null;
+        if (ret?.error) setSendNotice({ tone: "error", text: GMAIL_ERROR_COPY[ret.error] ?? GMAIL_ERROR_DEFAULT });
+        else if (ret?.connected) onGmailConnected(g);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step0, draft, gmail, services, onGmailConnected]);
+
+  const connectGmail = async () => {
+    setSendNotice(null);
+    setConnecting(true);
+    try {
+      await flushSave();
+    } catch {
+      setConnecting(false);
+      setSendNotice({ tone: "error", text: "Couldn't save your latest edits. Check your connection and try again." });
+      return;
+    }
+    const back = `/get-started${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`;
+    try {
+      const how = await services.connectGmail(back);
+      if (how === "connected") {
+        const g = await services.gmailStatus();
+        setGmail(g);
+        onGmailConnected(g);
+        setConnecting(false);
+      }
+      // "redirecting": the page is leaving for Google.
+    } catch {
+      setConnecting(false);
+      setSendNotice({ tone: "error", text: GMAIL_ERROR_DEFAULT });
+    }
+  };
+
+  const finishSent = (alreadySent: boolean) => {
+    const contactId = state?.contactId;
+    update({ status: "completed" });
+    track("email_sent");
+    if (!alreadySent) funnel("first_email_sent", { rank: selectedMatch()?.rank ?? null });
+    if (preview || !contactId) {
+      setSentTo(selectedMatch()?.firstName || "them");
+      return;
+    }
+    navigate(`/contacts?contact=${encodeURIComponent(contactId)}`, { replace: true });
+  };
+  const selectedMatch = () => stateRef.current?.matches?.find((m) => m.id === stateRef.current?.selectedId) || null;
+
+  // Step 1 of sending: save, then ask the server what exactly would go out.
+  const startSend = async () => {
+    const contactId = state?.contactId;
+    if (!contactId || !draft) return;
+    setSendNotice(null);
+    setSendPhase("reviewing");
+    try {
+      await flushSave();
+    } catch {
+      setSendPhase("idle");
+      setSendNotice({ tone: "error", text: "Couldn't save your latest edits. Check your connection and try again." });
+      return;
+    }
+    let r: SendReview;
+    try {
+      r = await services.reviewSend(contactId);
+    } catch {
+      setSendPhase("idle");
+      setSendNotice({ tone: "error", text: "Couldn't get your email ready to send. Try again." });
+      return;
+    }
+    if (r.alreadySent) {
+      finishSent(true);
+      return;
+    }
+    if (r.blocking.length) {
+      setSendPhase("idle");
+      setSendNotice({ tone: "error", text: r.blocking.map((b) => BLOCKING_COPY[b] ?? "Something in this email needs fixing first.").join(" ") });
+      return;
+    }
+    setReview(r);
+    setSendPhase("confirm");
+  };
+
+  // Step 2: the explicit confirmation. Sends the reviewed version only.
+  const confirmSend = async (confirmNotSent = false) => {
+    const contactId = state?.contactId;
+    if (!contactId || !review) return;
+    setSendPhase("sending");
+    const res = await services.sendEmail(contactId, review.hash, { confirmNotSent });
+    if (res.ok) {
+      finishSent(res.alreadySent);
+      return;
+    }
+    setSendPhase(res.reason === "send_unconfirmed" ? "unconfirmed" : "idle");
+    if (res.reason !== "send_unconfirmed") setReview(null);
+    switch (res.reason) {
+      case "gmail_not_connected":
+      case "gmail_token_expired":
+      case "gmail_scope_missing":
+        setGmail({ connected: res.reason !== "gmail_not_connected", canSend: false });
+        setSendNotice({ tone: "error", text: "Gmail needs to be reconnected before this can send. Your draft is saved." });
+        break;
+      case "draft_changed": {
+        const fresh = uid ? await services.loadDraft(uid, contactId).catch(() => null) : null;
+        if (fresh) setDraft(fresh);
+        setSendNotice({ tone: "error", text: "Your email changed since you reviewed it. Check it and send again." });
+        break;
+      }
+      case "send_in_progress":
+        setSendNotice({ tone: "info", text: "This email is already being sent. Give it a moment, then try again." });
+        break;
+      case "send_unconfirmed":
+        break;
+      case "blocked":
+        setSendNotice({ tone: "error", text: "Something in this email needs fixing before it can go out." });
+        break;
+      case "daily_cap_reached":
+        setSendNotice({ tone: "error", text: "You've reached today's sending limit. Your draft is saved; send it tomorrow." });
+        break;
+      default:
+        setSendNotice({
+          tone: "error",
+          text: "Sending didn't go through. Your draft is saved, and trying again won't send it twice.",
+        });
+    }
   };
 
   const saveAndExit = () => {
@@ -347,7 +608,11 @@ export default function GetStartedPage({ preview = false, services: injected }: 
   const selected = matches.find((m) => m.id === state?.selectedId) || null;
   const usable = matches.filter((m) => !noEmail.has(m.id));
   const step = state?.step ?? "matches";
-  const progressIndex = step === "draft" ? 1 : 0;
+  const progressIndex = sentTo
+    ? 3
+    : step === "draft"
+      ? sendPhase === "confirm" || sendPhase === "sending" || sendPhase === "unconfirmed" ? 2 : 1
+      : 0;
 
   const shell = (content: React.ReactNode) => (
     <div className="min-h-screen flex flex-col" style={{ background: OB.pageBg, color: OB.heading, fontFamily: OB.fontBody }}>
@@ -363,18 +628,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
         <div style={{ width: "100%", maxWidth: 640 }}>
           <Progress index={progressIndex} />
           {notice && (
-            <p
-              role={notice.tone === "error" ? "alert" : "status"}
-              style={{
-                fontSize: 14,
-                lineHeight: 1.5,
-                borderRadius: 10,
-                padding: "10px 14px",
-                margin: "0 0 18px",
-                background: notice.tone === "error" ? "#FEF2F2" : OB.primary50,
-                color: notice.tone === "error" ? "#991B1B" : OB.ink2,
-              }}
-            >
+            <p role={notice.tone === "error" ? "alert" : "status"} style={{ ...notStyle(notice.tone), margin: "0 0 18px" }}>
               {notice.text}
             </p>
           )}
@@ -413,9 +667,106 @@ export default function GetStartedPage({ preview = false, services: injected }: 
     borderRadius: 14,
     padding: 18,
   };
-  const costNote = services.firstOutreachFree
+  const costNote = freeEligible
     ? "Your first email is on us. No credits needed."
     : `Finding their email uses ${REVEAL_COST} credits. If we can't find one, you're not charged.`;
+
+  // The send area under the draft: connect Gmail, send, confirm.
+  const sendSection = (m: WalkthroughMatch) => {
+    if (!gmail) return spinner("Checking your Gmail…");
+    if (!gmail.canSend) {
+      return (
+        <div style={{ ...card, background: OB.primary50, border: "none" }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Send it from your Gmail</div>
+          <p style={{ fontSize: 14, color: OB.ink2, lineHeight: 1.6, margin: "0 0 6px" }}>
+            Your email goes out from your own Gmail address, so {m.firstName}'s reply comes straight to you.
+          </p>
+          <p style={{ fontSize: 13.5, color: OB.ink3, lineHeight: 1.6, margin: "0 0 14px" }}>
+            Google will ask to let Offerloop write and send email, and read your inbox. We use that to send only the
+            emails you confirm, and to spot replies so they show up in Contacts. Nothing is sent without your OK.
+          </p>
+          <button type="button" onClick={() => void connectGmail()} disabled={connecting} style={{ ...obPrimaryButton, opacity: connecting ? 0.6 : 1 }}>
+            {connecting ? "Opening Google…" : gmail.connected ? "Reconnect Gmail" : "Connect Gmail"}
+          </button>
+        </div>
+      );
+    }
+    if (sendPhase === "unconfirmed") {
+      return (
+        <div role="alert" style={{ ...card }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Check your Sent folder first</div>
+          <p style={{ fontSize: 14, color: OB.ink2, lineHeight: 1.6, margin: "0 0 12px" }}>
+            An earlier try may have sent this already, and we couldn't check. Look in Gmail's Sent folder so{" "}
+            {m.firstName} doesn't get it twice.
+          </p>
+          <a href={GMAIL_SENT_URL} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: OB.primary, marginBottom: 12 }}>
+            Open Gmail Sent <ExternalLink size={14} />
+          </a>
+          <button type="button" onClick={() => void confirmSend(true)} style={secondaryButton}>
+            It's not there. Send it now
+          </button>
+        </div>
+      );
+    }
+    if ((sendPhase === "confirm" || sendPhase === "sending") && review) {
+      const tips = review.warnings.map((w) => WARNING_COPY[w]).filter(Boolean).slice(0, 2);
+      const sending = sendPhase === "sending";
+      return (
+        <div role="dialog" aria-label="Confirm sending" style={{ ...card, borderColor: OB.primary200 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10 }}>Send this email now?</div>
+          <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", fontSize: 14, margin: "0 0 12px" }}>
+            <dt style={{ color: OB.ink3 }}>To</dt>
+            <dd style={{ margin: 0, fontWeight: 600, overflowWrap: "anywhere" }}>{review.recipient}</dd>
+            <dt style={{ color: OB.ink3 }}>Subject</dt>
+            <dd style={{ margin: 0, overflowWrap: "anywhere" }}>{review.subject}</dd>
+          </dl>
+          <p style={{ fontSize: 13.5, color: OB.ink3, margin: "0 0 12px" }}>
+            The email above is exactly what will be sent, from your Gmail.
+          </p>
+          {tips.length > 0 && (
+            <ul aria-label="Optional suggestions" style={{ margin: "0 0 12px", paddingLeft: 18, fontSize: 13, color: OB.ink2, lineHeight: 1.5 }}>
+              {tips.map((t) => (
+                <li key={t}>{t}</li>
+              ))}
+            </ul>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button type="button" onClick={() => void confirmSend()} disabled={sending} style={{ ...obPrimaryButton, opacity: sending ? 0.6 : 1 }}>
+              {sending ? "Sending…" : "Yes, send it"}
+            </button>
+            {!sending && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSendPhase("idle");
+                  setReview(null);
+                }}
+                style={secondaryButton}
+              >
+                Keep editing
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+    const busy = sendPhase === "reviewing";
+    return (
+      <button type="button" onClick={() => void startSend()} disabled={busy} style={{ ...obPrimaryButton, opacity: busy ? 0.6 : 1 }}>
+        {busy ? "Getting it ready…" : `Send email to ${m.firstName}`}
+      </button>
+    );
+  };
+
+  if (sentTo) {
+    // Preview only; live sends go straight to the conversation.
+    return shell(
+      <>
+        {h1(<>Sent to {sentTo}</>)}
+        {sub("In the app you'd land on the conversation in Contacts now, where their reply will show up.")}
+      </>,
+    );
+  }
 
   if (!state) return shell(spinner("Loading…"));
 
@@ -484,20 +835,21 @@ export default function GetStartedPage({ preview = false, services: injected }: 
           {saveStatus === "saved" && "Saved"}
           {saveStatus === "error" && "Couldn't save your last change. Keep typing to try again."}
         </p>
-        <div style={{ ...card, background: OB.primary50, border: "none", marginBottom: 18 }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>Next: send it from your Gmail</div>
-          <div style={{ fontSize: 14, color: OB.ink2, lineHeight: 1.55 }}>
-            Your draft is saved here and in Contacts. Next we'll connect your Gmail so it goes out from your own address,
-            only when you choose to send it.
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <button type="button" onClick={saveAndExit} style={obPrimaryButton}>
+        {sendNotice && (
+          <p role={sendNotice.tone === "error" ? "alert" : "status"} style={notStyle(sendNotice.tone)}>
+            {sendNotice.text}
+          </p>
+        )}
+        {sendSection(selected)}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
+          <button type="button" onClick={saveAndExit} style={linkButton}>
             Save and finish later
           </button>
-          <button type="button" onClick={() => update({ step: "matches", selectedId: undefined })} style={secondaryButton}>
-            Write to someone else instead
-          </button>
+          {sendPhase !== "sending" && (
+            <button type="button" onClick={() => update({ step: "matches", selectedId: undefined })} style={linkButton}>
+              Write to someone else instead
+            </button>
+          )}
         </div>
       </>,
     );
@@ -601,6 +953,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
                 onClick={() => {
                   setNotice(null);
                   update({ step: "person", selectedId: m.id });
+                  funnel("walkthrough_match_selected", { rank: m.rank, position: matches.indexOf(m) });
                 }}
                 aria-label={`${m.name}, ${[m.title, m.company].filter(Boolean).join(" at ")}`}
                 style={{

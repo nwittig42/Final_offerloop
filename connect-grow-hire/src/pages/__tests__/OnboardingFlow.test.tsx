@@ -17,7 +17,8 @@ const orgs = vi.hoisted(() => ({ value: { orgs: [] as unknown[], memberships: []
 
 vi.mock("@/contexts/FirebaseAuthContext", () => ({ useFirebaseAuth: () => auth }));
 vi.mock("@/hooks/useOrgs", () => ({ useOrgs: () => orgs.value }));
-vi.mock("@/lib/analytics", () => ({ trackFeatureActionCompleted: vi.fn() }));
+const analytics = vi.hoisted(() => ({ trackFeatureActionCompleted: vi.fn(), trackFirstOutreachFunnel: vi.fn() }));
+vi.mock("@/lib/analytics", () => analytics);
 vi.mock("@/lib/firebase", () => ({ db: {}, auth: { currentUser: null } }));
 vi.mock("@/services/api", () => ({ BACKEND_URL: "", extractDirection: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -157,6 +158,8 @@ describe("OnboardingFlow", () => {
     expect(data).not.toHaveProperty("tier");
 
     expect(await screen.findByTestId("where")).toHaveTextContent("/get-started?returnTo=%2Fpricing");
+    // Funnel start, without profile data.
+    expect(analytics.trackFirstOutreachFunnel).toHaveBeenCalledWith("onboarding_completed", undefined, { entry_path: "resume", joined_org: false });
     expect(s.extractDirection).toHaveBeenCalledWith(expect.stringContaining("Economics"));
   });
 

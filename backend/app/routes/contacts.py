@@ -962,3 +962,65 @@ def clear_mcp_unseen():
         return jsonify({"cleared": cleared})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@contacts_bp.route('/<contact_id>/send-first-email', methods=['POST'])
+@require_firebase_auth
+def send_first_email_route(contact_id):
+    """POST /api/contacts/<contact_id>/send-first-email
+
+    Send this contact's first email: exactly the saved draft the user
+    confirmed, at most once (app.services.first_email_send).
+
+    Body: {"confirmed_hash": str,      # draft_hash of the subject/body shown
+           "surface": str,             # "web_walkthrough" completes the walkthrough
+           "dry_run": bool,            # review only: recipient, blocking, warnings
+           "confirm_not_sent": bool}   # after a "check your Sent folder" prompt
+
+    200 {sent, alreadySent, contactId, messageId, threadId}
+    200 dry_run {recipient, subject, hash, blocking, warnings, alreadySent}
+    401 gmail_not_connected | gmail_token_expired
+    403 gmail_scope_missing
+    404 contact_not_found
+    409 draft_changed | send_in_progress | send_unconfirmed
+    422 blocked {blocking: [...]}
+    429 daily_cap_reached
+    502 send_failed
+    """
+    from app.services import first_email_send as fes
+
+    uid = request.firebase_user['uid']
+    db = get_db()
+    if not db:
+        return jsonify({"error": "Database not initialized"}), 500
+    data = request.get_json(silent=True) or {}
+    contact_id = (contact_id or "").strip()
+    if not contact_id:
+        return jsonify({"error": "contact_not_found"}), 404
+
+    if data.get("dry_run") is True:
+        info = fes.review(db, uid, contact_id)
+        if info is None:
+            return jsonify({"error": "contact_not_found"}), 404
+        return jsonify({
+            "recipient": info.recipient,
+            "subject": info.subject,
+            "hash": info.hash,
+            "blocking": info.blocking,
+            "warnings": info.warnings,
+            "alreadySent": bool(info.contact.get("emailSent")),
+        })
+
+    try:
+        result = fes.send_first_email(
+            db, uid, contact_id, str(data.get("confirmed_hash") or ""),
+            surface=str(data.get("surface") or "")[:40],
+            confirm_not_sent=data.get("confirm_not_sent") is True,
+        )
+        return jsonify(result), 200
+    except fes.SendError as err:
+        return jsonify({"error": err.code, **err.extra}), err.status
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("send-first-email failed uid=%s contact=%s", uid, contact_id)
+        return jsonify({"error": "send_failed"}), 502

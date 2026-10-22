@@ -1087,7 +1087,12 @@ def send_reply_for_contact(uid, contact_id, body):
     msg = email_tracking.tracked_text_mime(text, tracking_token)
     msg["to"] = to_email
     if subject:
-        msg["subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+        # "Re:" only when this continues an existing Gmail thread. A first
+        # email (no thread yet) goes out with the subject as written.
+        if thread_id and not subject.lower().startswith("re:"):
+            msg["subject"] = f"Re: {subject}"
+        else:
+            msg["subject"] = subject
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     message_body = {"raw": raw}
     if thread_id:
@@ -1119,6 +1124,17 @@ def send_reply_for_contact(uid, contact_id, body):
         updates["gmailMessageId"] = sent_message_id
     if sent_thread_id and not thread_id:
         updates["gmailThreadId"] = sent_thread_id
+    # First email: the Gmail draft made for it is now stale. Delete it below
+    # so it can't be sent a second time from Gmail.
+    is_first_send = not thread_id and not data.get("emailSent")
+    stale_draft_id = (data.get("gmailDraftId") or "").strip() if is_first_send else ""
+    if is_first_send:
+        updates["emailSent"] = True
+        updates["draftStillExists"] = False
+    if stale_draft_id:
+        from firebase_admin import firestore as _fs
+        updates["gmailDraftId"] = _fs.DELETE_FIELD
+        updates["gmailDraftUrl"] = _fs.DELETE_FIELD
     # A follow-up is a send to a contact who hadn't replied yet. Counts up so
     # the existing "Nth follow-up" UI in ConversationPanel.tsx stays accurate.
     is_followup_send = not had_unread_reply and current_stage not in ("replied",)
@@ -1135,13 +1151,22 @@ def send_reply_for_contact(uid, contact_id, body):
             # new email they haven't opened yet. emailOpenedAt keeps the first
             # open ever.
             updates["pipelineStage"] = "waiting_on_reply"
-        elif current_stage in ("new", "draft_created", "draft_deleted", ""):
+        elif current_stage in ("new", "generated", "draft_created", "draft_deleted", ""):
             updates["pipelineStage"] = "email_sent"
         # Otherwise leave the stage where it is (email_sent / waiting_on_reply
         # stays — we're just sending another follow-up in the same state).
 
     ref.update(updates)
-    data.update(updates)
+    data.update({k: v for k, v in updates.items() if k not in ("gmailDraftId", "gmailDraftUrl")})
+
+    if stale_draft_id:
+        data.pop("gmailDraftId", None)
+        data.pop("gmailDraftUrl", None)
+        try:
+            service.users().drafts().delete(userId="me", id=stale_draft_id).execute()
+        except Exception as e:
+            # Already sent or deleted by the user in Gmail: nothing to clean up.
+            logger.info("[outbox] send_reply: stale draft cleanup skipped contact=%s: %s", contact_id, e)
 
     # Cooldown: log this send against the recipient so other product paths
     # don't over-contact the same person. Mirrors the same hook used by
