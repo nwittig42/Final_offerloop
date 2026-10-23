@@ -500,23 +500,30 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
     };
   }, [user]);
 
-  // "Only show auto-apply jobs" filter. Defaults to ON because the
-  // marketing claim of the feature lands hardest when the first
-  // impression is "every job has an Auto-apply button." Power users
-  // who need Workday / Indeed inventory (Goldman, JPM, Microsoft) flip
-  // it off. Preference persists in localStorage so the choice sticks
-  // across sessions.
+  // "Only show auto-apply jobs" filter. Defaults to OFF: auto-apply is a
+  // convenience, not the product, so the board shows the best-matched jobs
+  // and lets students narrow to applyable ones if they want to. Defaulting
+  // it ON hid our highest-intent inventory — the Workday / Oracle / Oleeo /
+  // Goldman campus boards (Citi, JPM, BlackRock, Blackstone, PwC, Goldman
+  // summer-analyst programs) are not auto-applyable, so a student's first
+  // impression excluded exactly the roles they came here for.
+  //
+  // The storage key is versioned: the old key's value was almost never a
+  // deliberate choice (the effect below persisted the ON default on first
+  // mount), so reading it would keep every existing user filtered forever.
+  // Bumping to .v2 gives everyone the new default once; explicit toggles
+  // after that persist as normal.
   const [autoApplyOnly, setAutoApplyOnly] = useState<boolean>(() => {
     try {
-      const stored = localStorage.getItem("jobBoard.autoApplyOnly");
-      return stored === null ? true : stored === "true";
+      const stored = localStorage.getItem("jobBoard.autoApplyOnly.v2");
+      return stored === null ? false : stored === "true";
     } catch {
-      return true;
+      return false;
     }
   });
   useEffect(() => {
     try {
-      localStorage.setItem("jobBoard.autoApplyOnly", String(autoApplyOnly));
+      localStorage.setItem("jobBoard.autoApplyOnly.v2", String(autoApplyOnly));
     } catch {
       /* localStorage unavailable; toggle still works for the session */
     }

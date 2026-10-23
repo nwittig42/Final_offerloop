@@ -163,16 +163,38 @@ def _dedup_by_title_company(jobs: list[dict]) -> list[dict]:
     return sorted(seen.values(), key=lambda j: j.get("match_score") or 0, reverse=True)
 
 
+def _log_suppressed_by_eligibility(jobs: list[dict], top_n: int = 10) -> None:
+    """Measure what the old eligibility re-sort used to cost us.
+
+    Counts jobs in the top `top_n` of the quality ranking that are NOT
+    auto-apply-eligible — exactly the ones the previous sort pushed below
+    every eligible job. Lets us quantify the suppression after the fact
+    instead of guessing at it.
+    """
+    if not jobs:
+        return
+    head = jobs[:top_n]
+    demoted = sum(1 for j in head if not j.get("auto_apply_eligible"))
+    if demoted:
+        logger.info(
+            "feed: %d/%d top-ranked jobs are not auto-apply-eligible "
+            "(previously demoted below every eligible job); platforms=%s",
+            demoted, len(head),
+            sorted({(j.get("ats_platform") or j.get("source") or "?")
+                    for j in head if not j.get("auto_apply_eligible")}),
+        )
+
+
 def _serialize_jobs(jobs: list[dict]) -> list[dict]:
     """Convert Firestore timestamps to ISO strings, strip large/internal fields.
 
-    Also re-orders the returned list to push auto-apply-eligible jobs
-    (Greenhouse / Lever / Ashby) ahead of ineligible ones (Workday,
-    Indeed, custom careers pages). Within each bucket the caller's
-    original ranking is preserved (Python's sorted is stable), so jobs
-    that were already ranked high by match score / posted_at stay
-    ordered among each other — they just shift relative to a less-
-    actionable Workday posting that would otherwise interleave.
+    The caller's ranking (match score / posted_at) is preserved exactly.
+    This used to re-sort the list to push auto-apply-eligible jobs
+    (Greenhouse / Lever / Ashby) ahead of ineligible ones, which buried a
+    well-matched Workday summer-analyst posting at a target employer below
+    a weak Greenhouse match purely because of which ATS it sat on. Jobs are
+    ranked on quality; `auto_apply_eligible` still rides along so the SPA
+    can render the Auto-apply button, but it no longer decides order.
     """
     from app.services.auto_apply.ats_detector import detect_platform, is_eligible
     cleaned = []
@@ -198,9 +220,7 @@ def _serialize_jobs(jobs: list[dict]) -> list[dict]:
         doc["ats_platform"] = detect_platform(job)
         doc["auto_apply_eligible"] = is_eligible(job)
         cleaned.append(doc)
-    # Stable sort: eligible jobs (key=False=0) come before ineligible
-    # (key=True=1). Preserves the caller's intra-bucket ranking.
-    cleaned.sort(key=lambda j: not j.get("auto_apply_eligible"))
+    _log_suppressed_by_eligibility(cleaned)
     return cleaned
 
 

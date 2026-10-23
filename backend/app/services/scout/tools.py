@@ -1336,6 +1336,27 @@ async def _run_draft_outreach(args: Dict[str, Any], context: Dict[str, Any]) -> 
                 "error": "drafting failed", "code": "INTERNAL"}
 
 
+def job_rank_key(job: Dict[str, Any]):
+    """Sort key for Scout job results — quality first, applyability last.
+
+    Ascending sort. Order of precedence:
+      1. `_score`  — how many query tokens matched (more is better)
+      2. `_tier`   — relevance_tier, 1 (early-career) beats 3
+      3. auto-apply eligibility — a pure tiebreaker between otherwise
+         equally good jobs.
+
+    Eligibility must never remove a job from the results. Scout previously
+    hard-filtered to auto-apply-eligible jobs, which hid every Workday,
+    Oracle, Oleeo and Goldman posting at a target employer unless there
+    happened to be no eligible match at all.
+    """
+    return (
+        -(job.get("_score") or 0),
+        int(job.get("_tier") or 3),
+        not job.get("auto_apply_eligible"),
+    )
+
+
 def _job_text(value: Any) -> str:
     """Coerce a job-doc field to display text. Some sources store location or
     company as dicts; slicing those raised KeyError(slice(...)) and killed
@@ -1400,18 +1421,24 @@ def _find_jobs(query: str, limit: Any = None) -> Dict[str, Any]:
                     "auto_apply_eligible": bool(is_eligible(d)),
                     "apply_url": _job_text(d.get("apply_url") or d.get("url") or "")[:2000],
                     "_score": score,
+                    "_tier": int(d.get("relevance_tier") or 3),
                 }
             if candidates:
                 break
-        # Prefer to surface ONLY jobs Scout can actually submit for the user:
-        # eligible matches take the whole result set, and ineligible ones
-        # only appear when there is no eligible match at all. Returning fewer
-        # eligible jobs beats padding with ineligible ones the user would
-        # have to apply to by hand.
-        by_score = sorted(candidates.values(), key=lambda j: j["_score"], reverse=True)
-        eligible = [j for j in by_score if j.get("auto_apply_eligible")]
-        pool = eligible if eligible else by_score
-        jobs = [{k: v for k, v in j.items() if k != "_score"} for j in pool[:limit]]
+        # Rank on quality, not on which ATS the job happens to sit on:
+        # query-token match first, then how early-career the posting is
+        # (relevance_tier 1 beats 3), and only as a final tiebreaker prefer
+        # jobs Scout can submit itself. This used to hard-filter to eligible
+        # jobs, which made every Workday / Oracle / Oleeo / Goldman posting
+        # at a target employer invisible in Scout unless there was no
+        # eligible match at all — we were ingesting that inventory and then
+        # hiding it. Auto-apply is a tiebreaker, never a filter.
+        shown = sorted(candidates.values(), key=job_rank_key)[:limit]
+        _ineligible = sum(1 for j in shown if not j["auto_apply_eligible"])
+        if _ineligible:
+            print(f"[ScoutTools] find_jobs: {_ineligible}/{len(shown)} results "
+                  f"are not auto-apply-eligible (previously hidden)")
+        jobs = [{k: v for k, v in j.items() if not k.startswith("_")} for j in shown]
         # query rides along so the harness can prefill the Job Board chip.
         return {"count": len(jobs), "jobs": jobs, "query": query}
     except Exception as e:
