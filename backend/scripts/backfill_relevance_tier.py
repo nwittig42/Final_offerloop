@@ -7,11 +7,25 @@ queries don't match missing fields).
 
 Idempotent: skips docs that already have relevance_tier set. Safe to re-run.
 
+With --recompute it re-grades docs that already carry a tier (use after
+changing the tiering rules in quality_gate) and writes ONLY the docs whose
+tier actually changes. It used to write every scanned doc, which meant a
+rules change that moved 122 jobs still issued ~70,000 no-op writes and blew
+past Firestore's query deadline partway through.
+
+Pages with a document-ID cursor rather than one long `coll.stream()`. A single
+stream over ~70k docs exceeds the server-side query deadline and fails with
+"503 Query timed out", and the client's retry path then dies on
+`'_UnaryStreamMultiCallable' object has no attribute '_retry'`. Short paged
+queries avoid both, and the run resumes cleanly if interrupted.
+
 Usage:
     cd ~/work/Offerloop
     GOOGLE_APPLICATION_CREDENTIALS=firebase-sa.json python -m backend.scripts.backfill_relevance_tier
-    # dry-run first:
+    # dry-run first (reports how many tiers would CHANGE):
     ... python -m backend.scripts.backfill_relevance_tier --dry-run
+    # re-grade after a quality_gate rules change:
+    ... python -m backend.scripts.backfill_relevance_tier --recompute
     # limit batch (for smoke tests):
     ... python -m backend.scripts.backfill_relevance_tier --limit=1000
 """
@@ -34,6 +48,9 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BATCH_WRITE_SIZE = 400
+# Docs per paged read. Small enough that each query finishes well inside the
+# server-side deadline that killed the single-stream version.
+PAGE_SIZE = 2000
 
 
 def _init_db():
@@ -58,36 +75,68 @@ def main() -> None:
 
     total_scanned = 0
     total_skipped = 0
+    total_unchanged = 0
     tier_counts: Counter = Counter()
+    transitions: Counter = Counter()
     batch = db.batch()
     batch_size = 0
     total_written = 0
 
-    logger.info("Streaming jobs collection...")
-    for doc in coll.stream():
-        total_scanned += 1
-        data = doc.to_dict() or {}
-
-        if not args.recompute and "relevance_tier" in data:
-            total_skipped += 1
-            continue
-
-        tier = compute_relevance_tier(data)
-        tier_counts[tier] += 1
-
-        if not args.dry_run:
-            batch.update(doc.reference, {"relevance_tier": tier})
-            batch_size += 1
-            if batch_size >= BATCH_WRITE_SIZE:
-                batch.commit()
-                total_written += batch_size
-                logger.info("committed %d writes (running total %d)", batch_size, total_written)
-                batch = db.batch()
-                batch_size = 0
-
-        if args.limit and total_scanned >= args.limit:
-            logger.info("hit --limit=%d, stopping", args.limit)
+    logger.info("Paging jobs collection (%d per page)...", PAGE_SIZE)
+    cursor = None
+    done = False
+    while not done:
+        page = coll.order_by("__name__").limit(PAGE_SIZE)
+        if cursor is not None:
+            # Pass the snapshot, not a {"__name__": id} dict — the field form
+            # needs a full document path and silently mis-pages with a bare id.
+            page = page.start_after(cursor)
+        docs = list(page.stream())
+        if not docs:
             break
+        cursor = docs[-1]
+
+        for doc in docs:
+            total_scanned += 1
+            data = doc.to_dict() or {}
+            existing = data.get("relevance_tier")
+
+            if not args.recompute and existing is not None:
+                total_skipped += 1
+                continue
+
+            tier = compute_relevance_tier(data)
+            tier_counts[tier] += 1
+
+            # Only write when the value actually changes. Re-stamping a doc
+            # with the tier it already has costs a write and a trigger for no
+            # benefit, and at ~70k docs that is what exceeded the query
+            # deadline on the first --recompute run.
+            if tier == existing:
+                total_unchanged += 1
+                continue
+            transitions[(existing, tier)] += 1
+
+            if not args.dry_run:
+                batch.update(doc.reference, {"relevance_tier": tier})
+                batch_size += 1
+                if batch_size >= BATCH_WRITE_SIZE:
+                    batch.commit()
+                    total_written += batch_size
+                    logger.info("committed %d writes (running total %d)",
+                                batch_size, total_written)
+                    batch = db.batch()
+                    batch_size = 0
+
+            if args.limit and total_scanned >= args.limit:
+                logger.info("hit --limit=%d, stopping", args.limit)
+                done = True
+                break
+
+        if not done and len(docs) < PAGE_SIZE:
+            break
+        if total_scanned % (PAGE_SIZE * 10) == 0:
+            logger.info("scanned %d docs...", total_scanned)
 
     if batch_size and not args.dry_run:
         batch.commit()
@@ -100,7 +149,14 @@ def main() -> None:
     print(f"computed tiers:     {sum(tier_counts.values())}")
     for t in sorted(tier_counts):
         print(f"  tier {t}: {tier_counts[t]}")
-    print(f"writes committed:   {total_written} {'(DRY RUN)' if args.dry_run else ''}")
+    print(f"already correct:    {total_unchanged} (no write needed)")
+    if transitions:
+        print("tier changes:")
+        for (old, new), n in sorted(transitions.items(), key=lambda kv: -kv[1]):
+            print(f"  {old} -> {new}: {n}")
+    print(f"writes {'that WOULD be made' if args.dry_run else 'committed'}:"
+          f"   {total_written if not args.dry_run else sum(transitions.values())}"
+          f" {'(DRY RUN)' if args.dry_run else ''}")
 
 
 if __name__ == "__main__":
