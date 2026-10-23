@@ -21,7 +21,7 @@ export const WALKTHROUGH_SURFACE = "web_walkthrough";
 export type RevealResult =
   | { ok: true; free: boolean }
   | { ok: false; reason: "no_email" | "insufficient_credits" | "free_unavailable" | "error" };
-export type DraftResult = { ok: true } | { ok: false; reason: "generation_failed" | "no_email" | "error" };
+export type DraftResult = { ok: true } | { ok: false; reason: "generation_failed" | "no_email" | "not_configured" | "error" };
 
 export interface GmailState {
   connected: boolean;
@@ -137,6 +137,7 @@ export const liveWalkthroughServices: WalkthroughServices = {
     } catch (e) {
       const msg = errorMessage(e);
       if (msg === "no_verified_email") return { ok: false, reason: "no_email" };
+      if (msg === "email_generation_not_configured") return { ok: false, reason: "not_configured" };
       return { ok: false, reason: msg === "generation_failed" ? "generation_failed" : "error" };
     }
   },

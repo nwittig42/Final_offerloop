@@ -96,6 +96,15 @@ def google_oauth_start():
     db = get_db()
     uid = request.firebase_user["uid"]
 
+    # Without an OAuth client the consent URL would be broken (empty
+    # client_id) and Google shows an error page; say so plainly instead.
+    if not os.environ.get("GOOGLE_CLIENT_ID") or not os.environ.get("GOOGLE_CLIENT_SECRET"):
+        print("[gmail_oauth] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set; Gmail connection unavailable")
+        return jsonify({
+            "error": "gmail_oauth_not_configured",
+            "message": "Gmail connection isn't configured on this server.",
+        }), 503
+
     # Get email from Firestore user document (source of truth)
     # This ensures we use the correct email for the logged-in user
     user_email = None

@@ -195,6 +195,8 @@ export default function GetStartedPage({ preview = false, services: injected }: 
   const [preparing, setPreparing] = useState<"email" | "writing" | null>(null);
   const [draft, setDraft] = useState<EmailDraft | null>(null);
   const [draftFailed, setDraftFailed] = useState(false);
+  // The server has no email model configured (a setup problem, not a bad draft).
+  const [draftNotConfigured, setDraftNotConfigured] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [notice, setNotice] = useState<Notice>(null);
   // The one-time free first outreach (backend decides); null until known.
@@ -298,6 +300,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       setNotice(null);
       setDraft(null);
       setDraftFailed(false);
+      setDraftNotConfigured(false);
 
       // An earlier attempt may already have written it (a refresh mid-way).
       const existing = await services.loadDraft(uid, contactId).catch(() => null);
@@ -349,6 +352,7 @@ export default function GetStartedPage({ preview = false, services: injected }: 
       setPreparing(null);
       if (!saved) {
         setDraftFailed(true);
+        setDraftNotConfigured(!written.ok && written.reason === "not_configured");
         track("draft_written", false);
         return;
       }
@@ -488,9 +492,15 @@ export default function GetStartedPage({ preview = false, services: injected }: 
         setConnecting(false);
       }
       // "redirecting": the page is leaving for Google.
-    } catch {
+    } catch (e) {
       setConnecting(false);
-      setSendNotice({ tone: "error", text: GMAIL_ERROR_DEFAULT });
+      const notConfigured = e instanceof Error && e.message === "gmail_oauth_not_configured";
+      setSendNotice({
+        tone: "error",
+        text: notConfigured
+          ? "Gmail connection isn't set up on this server yet. Your draft is saved."
+          : GMAIL_ERROR_DEFAULT,
+      });
     }
   };
 
@@ -779,7 +789,11 @@ export default function GetStartedPage({ preview = false, services: injected }: 
         draftFailed ? (
           <>
             {h1("We couldn't write that email")}
-            {sub(`Something went wrong writing to ${selected.firstName}. Trying again won't cost anything extra.`)}
+            {sub(
+              draftNotConfigured
+                ? "Email writing isn't set up on this server yet, so nothing was written or charged. Your progress is saved."
+                : `Something went wrong writing to ${selected.firstName}. Trying again won't cost anything extra.`,
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <button type="button" onClick={() => void prepare(selected)} style={obPrimaryButton}>
                 Try again

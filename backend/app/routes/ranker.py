@@ -1021,6 +1021,27 @@ def reveal_candidate_email(candidate_id):
     })
 
 
+def _apply_confirmed_profile(user_data: dict, user_profile: dict, pre_parsed):
+    """School / major / year the student confirmed in onboarding, written
+    into the sender profile and the stored parse the email writer reads.
+    "Not in school" means no school at all. Returns (pre_parsed, resume_text)
+    with resume_text None so the writer doesn't re-parse the resume."""
+    academics = user_data.get("academics") or {}
+    profile = user_data.get("profile") or {}
+    school = "" if user_data.get("universityOptOut") is True else (academics.get("university") or "").strip()
+    major = (academics.get("major") or "").strip()
+    year = str(academics.get("graduationYear") or "").strip()
+    name = (profile.get("fullName") or "").strip()
+    if name:
+        user_profile["name"] = name
+    user_profile.update({"university": school, "major": major, "year": year, "graduationYear": year})
+    if isinstance(pre_parsed, dict):
+        education = dict(pre_parsed.get("education") or {}) if isinstance(pre_parsed.get("education"), dict) else {}
+        education.update({"university": school, "major": major, "graduation": year})
+        pre_parsed = {**pre_parsed, "education": education}
+    return pre_parsed, None
+
+
 @ranker_bp.route("/first-outreach", methods=["GET"])
 @require_firebase_auth
 def first_outreach_status():
@@ -1147,7 +1168,13 @@ def candidate_outreach(candidate_id):
     contact["EmailVerified"] = bool(reveal.get("verified"))
     contact["EmailConfidenceScore"] = int(reveal.get("confidence") or 0)
 
-    # 3. Generate in the prompt-search voice.
+    # 3. Generate in the prompt-search voice. No model configured is a
+    # server setup problem, not a bad draft: say so instead of "failed".
+    from app.services.openai_client import get_openai_client, get_anthropic_client
+    if not get_openai_client() and not get_anthropic_client():
+        logger.error("outreach: no LLM configured (OPENAI_API_KEY / CLAUDE_API_KEY) uid=%s", uid)
+        return jsonify({"error": "email_generation_not_configured"}), 503
+
     from app.utils.users import get_outreach_email
     from app.routes.runs import _resolve_email_template
     from app.services.reply_generation import (
@@ -1206,13 +1233,22 @@ def candidate_outreach(candidate_id):
             and not (cached_resume_src and cached_resume_src != resume_url)):
         resume_text = cached_resume_text
 
+    # Onboarding v2: the student confirmed (or corrected) their school,
+    # major and year. Those beat a fresh parse of the resume text, which the
+    # writer otherwise prefers; the stored parse still supplies everything
+    # else (experience, activities). Skipping the re-parse also saves a model
+    # call per draft.
+    pre_parsed = user_data.get("resumeParsed")
+    if (user_data.get("onboarding") or {}).get("profileConfirmedAt"):
+        pre_parsed, resume_text = _apply_confirmed_profile(user_data, user_profile, pre_parsed)
+
     try:
         email_results = batch_generate_emails(
             contacts=[contact],
             resume_text=resume_text,
             user_profile=user_profile,
             career_interests=career_interests,
-            pre_parsed_user_info=user_data.get("resumeParsed"),
+            pre_parsed_user_info=pre_parsed,
             template_instructions=template_instructions,
             email_template_purpose=email_template_purpose,
             resume_filename=user_data.get("resumeFileName"),
