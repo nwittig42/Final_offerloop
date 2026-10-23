@@ -397,7 +397,10 @@ def parse_resume_info(resume_text):
     """Parse comprehensive info from resume text using OpenAI - extracts full structure"""
     try:
         client = get_openai_client()
-        if not client or not resume_text:
+        if not client:
+            print("[ResumeParser] OPENAI_API_KEY not set: resume parsing unavailable, returning an empty parse")
+            return {}
+        if not resume_text:
             return {}
         
         # Use full resume text (or reasonable limit for very long resumes)

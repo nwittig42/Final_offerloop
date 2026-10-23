@@ -172,6 +172,12 @@ def create_app() -> Flask:
 
     print("🚀 Initializing app extensions...")
     init_app_extensions(app)
+    try:
+        from .app.config import integration_status
+        missing = [name for name, ok in integration_status().items() if not ok]
+        print("[config] signup -> first email integrations not configured: " + (", ".join(missing) or "none"))
+    except Exception as e:
+        print(f"[config] integration status check failed: {e}")
     print("✅ App extensions initialized")
 
     # Security headers on every response. Enumerated script-src so a compromised

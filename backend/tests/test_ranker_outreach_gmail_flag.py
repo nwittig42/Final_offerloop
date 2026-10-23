@@ -83,6 +83,7 @@ def env(monkeypatch):
          patch("app.services.reply_generation.batch_generate_emails",
                return_value={0: {"subject": "Coffee chat?", "body": "Hi Pat, ..."}}), \
          patch("app.services.gmail_client._load_user_gmail_creds", return_value=object()), \
+         patch("app.services.openai_client.get_openai_client", return_value=object()), \
          patch("app.services.gmail_client.create_drafts_parallel", drafts):
         app = Flask(__name__)
         app.register_blueprint(ranker_bp)

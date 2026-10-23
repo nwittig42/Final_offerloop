@@ -22,6 +22,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // Full-flow component tests (onboarding, walkthrough) render whole pages
+    // with many async steps; 5s timed them out on a loaded machine while
+    // each passes in under a second alone.
+    testTimeout: 15000,
     setupFiles: ['./src/test/setup.ts'],
     // Co-locate tests with code under src/**/__tests__/ AND src/**/*.test.tsx
     // so component tests sit next to the component they exercise. Exclude

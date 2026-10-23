@@ -430,6 +430,25 @@ describe("sending", () => {
   });
 });
 
+describe("missing configuration", () => {
+  it("says plainly when email writing isn't set up on the server", async () => {
+    const { s } = makeServices(null, { writeDraft: vi.fn(async () => ({ ok: false as const, reason: "not_configured" as const })) });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: /Riley Sample/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Prepare my email to Riley" }));
+    expect(await screen.findByText(/Email writing isn't set up on this server yet/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pick someone else" })).toBeInTheDocument();
+  });
+
+  it("says plainly when Gmail connection isn't set up on the server", async () => {
+    const { s } = atDraft({ connectGmail: vi.fn(async () => { throw new Error("gmail_oauth_not_configured"); }) });
+    renderPage(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect Gmail" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Gmail connection isn't set up on this server yet");
+    expect(screen.getByLabelText("Subject")).toHaveValue(DRAFT.subject);
+  });
+});
+
 describe("analytics", () => {
   it("records match selection with timestamps-only props", async () => {
     const { s } = makeServices();
