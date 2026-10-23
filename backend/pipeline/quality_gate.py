@@ -133,7 +133,33 @@ _TARGET_FUNCTION_TITLE = re.compile(
     r"solutions\s+engineer|forward\s+deployed|technical\s+account\s+manager|"
     r"customer\s+success|customer\s+engineer|"
     r"account\s+executive|sales\s+development|sdr|bdr|business\s+development|"
-    r"investment\s+banking|equity\s+research|sales\s+and\s+trading|"
+    r"investment\s+bank(ing)?|equity\s+research|credit\s+research|"
+    r"sales\s*(and|&)\s*trading|"
+    # Finance and professional-services functions. Without these, the
+    # entry-level titles our students actually recruit for ("2027 Summer
+    # Analyst Program", "Global Markets Summer Analyst", "Asset Management
+    # Summer Analyst", "Corporate Banking Analyst Program") matched NO target
+    # function, graded tier 2, and so ranked below every tech internship and
+    # skipped enrichment. Previously only the literal phrases "investment
+    # banking" and "sales and trading" qualified — a tiny slice of how banks,
+    # asset managers and the Big 4 actually title early-career roles.
+    # Functions only, never a bare "analyst": that would sweep almost
+    # everything into tier 1 and defeat the point of tiering.
+    r"capital\s+markets|global\s+markets|fixed\s+income|"
+    r"(asset|investment|wealth|portfolio)\s+management|"
+    r"(private|corporate|commercial)\s+bank(ing)?|"
+    r"private\s+equity|venture\s+capital|"
+    r"m&a|mergers\s+and\s+acquisitions|restructuring|"
+    r"underwrit(ing|er)|actuarial|risk\s+management|"
+    r"audit|assurance|deal\s+advisory|transaction\s+(services|advisory)|"
+    r"trader|trading\s+(analyst|associate|intern)|"
+    # "Summer Analyst" / "Summer Associate" are levels, not functions, but
+    # they are finance- and consulting-specific by convention (tech says
+    # "intern"), and they are how the flagship programs are titled when the
+    # posting names no desk at all: "2027 Summer Analyst Program". The
+    # deadline extractor already treats these as a first-class category
+    # (`year_coded_analyst`), so counting them as on-target is consistent.
+    r"summer\s+(analyst|associate)|"
     r"consultant|consulting|"
     r"quant(itative)?|research\s+analyst|"
     r"business\s+analyst|financial\s+analyst|risk\s+analyst|"

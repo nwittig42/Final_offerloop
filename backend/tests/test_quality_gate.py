@@ -6,7 +6,7 @@ Firestore dependency.
 """
 from datetime import datetime, timedelta, timezone
 
-from pipeline.quality_gate import evaluate, apply
+from pipeline.quality_gate import evaluate, apply, compute_relevance_tier
 
 
 def _base_job(**overrides):
@@ -88,3 +88,75 @@ class TestQualityGate:
         assert len(kept) == 2
         assert {j["job_id"] for j in kept} == {"a", "b"}
         assert drops.get("staffing_company_name") == 1
+
+
+class TestFinanceTitlesReachTier1:
+    """Bank / Big-4 early-career titles must grade tier 1, not tier 2.
+
+    `_TARGET_FUNCTION_TITLE` was tech-weighted: for finance it matched only the
+    literal phrases "investment banking" and "sales and trading". So the titles
+    our students actually recruit for — "2027 Summer Analyst Program", "Global
+    Markets Summer Analyst", "Asset Management Summer Analyst", "Audit
+    Associate" — matched no target function and graded tier 2, which ranks them
+    below every tech internship and skips enrichment entirely
+    (writer._apply_enrichment_gate flags only tier 1 for Firecrawl + PDL).
+    """
+
+    TIER1_TITLES = [
+        "Investment Banking Summer Analyst 2027",
+        "2027 Summer Analyst Program",
+        "Global Markets Summer Analyst 2027",
+        "Asset Management Summer Analyst",
+        "Equity Capital Markets Summer Analyst",
+        "Corporate Banking Analyst Program",
+        "Wealth Management Summer Analyst",
+        "Private Bank Summer Analyst 2027",
+        "Investment Management Summer Analyst",
+        "2027 Early Careers: Analyst, Underwriting - Structured Credit",
+        "Sales & Trading Summer Analyst",
+        "Restructuring Summer Analyst",
+        "Audit Associate - Fall 2027",
+        "Assurance Intern 2027",
+        "Actuarial Summer Intern",
+        "Summer Associate - Consulting",
+    ]
+
+    # The regex must stay a FUNCTION list. Matching a bare "analyst" or
+    # "associate" would sweep these in and make tiering meaningless.
+    NOT_TIER1_TITLES = [
+        "Warehouse Associate",
+        "Retail Sales Associate",
+        "Customer Support Associate",
+        "Client Services Associate",
+        "Teller",
+        "Barista",
+        "Summer Camp Counselor",
+        "Groundskeeper",
+    ]
+
+    SENIOR_TITLES = [
+        "Senior Analyst - FIG",
+        "Vice President - Asset Management",
+        "Managing Director, Global Markets",
+        "Director of Audit",
+    ]
+
+    def test_finance_early_career_is_tier1(self):
+        for title in self.TIER1_TITLES:
+            doc = {"title": title, "analyst_entry": True}
+            assert compute_relevance_tier(doc) == 1, f"{title!r} should be tier 1"
+
+    def test_non_target_roles_stay_out_of_tier1(self):
+        for title in self.NOT_TIER1_TITLES:
+            doc = {"title": title, "analyst_entry": True}
+            assert compute_relevance_tier(doc) != 1, f"{title!r} must not be tier 1"
+
+    def test_senior_finance_titles_stay_tier3(self):
+        for title in self.SENIOR_TITLES:
+            doc = {"title": title, "analyst_entry": True}
+            assert compute_relevance_tier(doc) == 3, f"{title!r} should be tier 3"
+
+    def test_tech_titles_unaffected(self):
+        for title in ("Software Engineer Intern", "Business Analyst Intern",
+                      "Data Scientist Intern", "Product Manager Intern"):
+            assert compute_relevance_tier({"title": title}) == 1, f"{title!r} regressed"
