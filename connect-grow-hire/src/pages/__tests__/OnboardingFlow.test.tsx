@@ -107,11 +107,11 @@ beforeEach(() => {
 });
 
 describe("OnboardingFlow", () => {
-  it("starts a new user on the single intro and saves progress when they continue", async () => {
+  it("starts a new user on the intro slides and saves progress when they continue", async () => {
     const s = makeServices(null);
     renderFlow(s);
-    expect(await screen.findByRole("button", { name: "Get started" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Get started" }));
+    expect(await screen.findByRole("button", { name: "Skip" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     expect(await screen.findByText("stub: resume parsed")).toBeInTheDocument();
     expect(s.saveProgress).toHaveBeenCalledWith("u1", expect.objectContaining({ version: ONBOARDING_PROGRESS_VERSION, step: "source" }));
   });
@@ -119,7 +119,7 @@ describe("OnboardingFlow", () => {
   it("resumes at the confirm step with the saved draft after a refresh", async () => {
     renderFlow(makeServices({ version: ONBOARDING_PROGRESS_VERSION, step: "confirm", draft: baseDraft }));
     expect(await screen.findByLabelText("School")).toHaveValue("UCLA");
-    expect(screen.queryByRole("button", { name: "Get started" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Skip" })).not.toBeInTheDocument();
   });
 
   it("infers the profile from the saved parse, confirms it, completes and hands off to the walkthrough", async () => {
@@ -191,7 +191,7 @@ describe("OnboardingFlow", () => {
     s.saveProgress.mockRejectedValue(new Error("permission-denied"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     renderFlow(s);
-    fireEvent.click(await screen.findByRole("button", { name: "Get started" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
     expect(await screen.findByText("stub: resume parsed")).toBeInTheDocument();
     warn.mockRestore();
   });

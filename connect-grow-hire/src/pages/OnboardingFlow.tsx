@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Check, Loader2 } from "lucide-react";
-import { OnboardingIntro } from "./OnboardingIntro";
+import { OnboardingSlides } from "./OnboardingSlides";
 import { OnboardingSource, type SourceResult } from "./OnboardingSource";
 import { OnboardingBuilder } from "./OnboardingBuilder";
 import { OnboardingConfirm } from "./OnboardingConfirm";
@@ -406,10 +406,20 @@ export const OnboardingFlow = ({ onComplete, preview = false, services: injected
   };
 
   // ── Step handlers ─────────────────────────────────────────────────────────
-  const handleIntroDone = () => {
-    services.logEvent("completed", "intro");
+  // The intro is the five-slide video walkthrough; Skip or the last slide moves on.
+  const handleIntroDone = (skipped: boolean) => {
+    services.logEvent("completed", "slides", skipped);
     goTo("source");
   };
+  const viewedSlides = useRef<Set<number>>(new Set());
+  const handleViewSlide = useCallback(
+    (i: number) => {
+      if (viewedSlides.current.has(i)) return;
+      viewedSlides.current.add(i);
+      services.logEvent("viewed", `slides_${i + 1}`);
+    },
+    [services],
+  );
   const handleSource = (data: SourceResult) => {
     services.logEvent("completed", "source");
     void inferDraft(data.resolved, data.entryPath, data.linkedinUrl, draft);
@@ -459,12 +469,12 @@ export const OnboardingFlow = ({ onComplete, preview = false, services: injected
     );
   }
 
-  // The intro bypasses the Slate Split shell entirely.
+  // The slides bypass the Slate Split shell entirely (full-bleed navy).
   if (currentStep === "intro") {
     return (
       <>
         {preview && PREVIEW_BADGE}
-        <OnboardingIntro onContinue={handleIntroDone} onBack={handleBack} />
+        <OnboardingSlides onDone={handleIntroDone} onViewSlide={handleViewSlide} />
       </>
     );
   }
