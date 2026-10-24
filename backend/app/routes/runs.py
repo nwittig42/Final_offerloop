@@ -1173,6 +1173,10 @@ def prompt_search():
                     # Persisted so My Network can render a "Verified" /
                     # "Best guess" badge and we have data for tuning.
                     contact_doc["emailSource"] = contact.get("EmailSource") or None
+                    # Find's "Recently found" feed (OFF-56) groups these by the
+                    # search that produced them.
+                    contact_doc["source"] = "find_search"
+                    contact_doc["foundQuery"] = prompt[:200]
                     # Face for Inbox/Network rows; clients fall back to
                     # initials when the hotlink expires.
                     contact_doc["photoUrl"] = (contact.get("PhotoUrl") or "").strip()
@@ -1217,11 +1221,16 @@ def prompt_search():
                     if contact.get("gmailDraftId") or contact.get("gmailDraftUrl"):
                         contact_doc["pipelineStage"] = "draft_created"
                     now_iso = datetime.utcnow().isoformat() + "Z"  # TODO: deprecated in Python 3.12
-                    contact_doc["inOutbox"] = True
-                    contact_doc["draftToEmail"] = contact.get("_draftRecipientEmail") or email
-                    contact_doc["draftCreatedAt"] = now_iso
-                    contact_doc["emailGeneratedAt"] = now_iso
-                    contact_doc["draftStillExists"] = True
+                    # Preview writes no email, so the contact isn't in the
+                    # outbox yet; marking it there made Find show "Drafted".
+                    if outreach_mode == "preview":
+                        contact_doc["inOutbox"] = False
+                    else:
+                        contact_doc["inOutbox"] = True
+                        contact_doc["draftToEmail"] = contact.get("_draftRecipientEmail") or email
+                        contact_doc["draftCreatedAt"] = now_iso
+                        contact_doc["emailGeneratedAt"] = now_iso
+                        contact_doc["draftStillExists"] = True
                     contact_doc["lastActivityAt"] = now_iso
                     contact_doc["hasUnreadReply"] = False
                     contact_doc["gmailMessageId"] = contact.get("gmailMessageId") or None

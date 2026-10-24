@@ -129,5 +129,6 @@ export function useBookmarks() {
     }
   }, [uid, findContact, queryClient, navigate]);
 
-  return { isBookmarked, toggle, contactFor: findContact };
+  const contacts = useMemo(() => (contactsQuery.data ?? []) as ContactDoc[], [contactsQuery.data]);
+  return { isBookmarked, toggle, contactFor: findContact, contacts };
 }

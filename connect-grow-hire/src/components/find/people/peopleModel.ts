@@ -129,6 +129,35 @@ export function personFromSearch(c: Contact, index: number): Person {
   };
 }
 
+// A Contacts doc a typed search saved (source "find_search", OFF-56), back
+// into card shape for Find's "Recently found" feed. Same id rule as
+// personFromSearch so card state carries over from the results grid.
+export function personFromSavedSearch(c: Record<string, any>): Person {
+  const firstName = str(c.firstName);
+  const lastName = str(c.lastName);
+  const email = str(c.email);
+  const linkedinUrl = str(c.linkedinUrl);
+  return {
+    id: linkedinUrl || email || `contact-${str(c.id)}`,
+    source: "search",
+    name: `${firstName} ${lastName}`.trim() || "Unknown",
+    firstName,
+    lastName,
+    title: str(c.jobTitle),
+    company: str(c.company),
+    location: str(c.location) || [str(c.city), str(c.state)].filter(Boolean).join(", "),
+    school: str(c.college),
+    linkedinUrl,
+    photoUrl: str(c.photoUrl),
+    email,
+    reasons: [],
+    briefing: typeof c.briefing === "string" ? c.briefing : "",
+    matchScore: null,
+    rank: 0,
+    deckId: "",
+  };
+}
+
 // Org directory row (OFF-42). `email` is "" when we don't have one yet.
 export function personFromDirectory(m: DirectoryMember, index: number, orgId = ""): Person {
   const name = `${m.firstName} ${m.lastName}`.trim() || "Unknown";

@@ -18,7 +18,8 @@ import { NoSchoolEmptyState } from "@/components/NoSchoolEmptyState";
 import { GoalsPromptBanner } from "@/components/find/GoalsPromptBanner";
 import { IS_DEV_PREVIEW, DEV_MOCK_USER } from "@/lib/devPreview";
 import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
-import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
+import { CONTACTS_KEY, THREADS_KEY, normalizeLinkedIn } from "@/components/contacts/contactsModel";
+import { TIER_CONFIGS } from "@/lib/constants";
 import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
 import { useOrgs } from "@/hooks/useOrgs";
 import { orgLogo } from "@/lib/orgLogos";
@@ -26,11 +27,12 @@ import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { ContactProgressTray, type TrayItem } from "@/components/find/people/ContactProgressTray";
 import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
+import { SearchLoader } from "@/components/find/people/SearchLoader";
 import { GOLD_RING } from "@/components/find/people/PersonAvatar";
 import { seedCompanies, type FeedProfile } from "@/components/find/people/feedSeeds";
 import { neverEmailed, useBookmarks } from "@/components/find/people/useBookmarks";
 import {
-  personFromRanker, personFromSearch, type Person,
+  personFromRanker, personFromSavedSearch, personFromSearch, type Person,
 } from "@/components/find/people/peopleModel";
 import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder";
 
@@ -39,11 +41,28 @@ const FIRST_PAGE = 40;
 const NEXT_PAGE = 20;
 // Narrow cards: as many ~236px columns as fit.
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
-const SEARCH_BATCH = 6;
+// Default for the "how many people" slider; the plan's cap is the max.
+const DEFAULT_COUNT = 5;
+const COUNT_KEY = "offerloop_find_count";
+// "Recently found" (OFF-56): how many lead the feed, and how often the rest
+// are mixed in among recommended cards.
+const FOUND_LEAD = 8;
+const FOUND_EVERY = 6;
 // How many people lead the feed as "Top connections".
 const TOP_COUNT = 4;
 // Written by the landing page hero search (HeroSearchCTA.PENDING_QUERY_KEY).
 const PENDING_QUERY_KEY = "offerloop_pending_query";
+
+// Puts one `extra` after every `every` items of `list`; leftovers go last.
+function disperse<T>(list: T[], extras: T[], every: number): T[] {
+  const out: T[] = [];
+  let e = 0;
+  list.forEach((item, i) => {
+    out.push(item);
+    if ((i + 1) % every === 0 && e < extras.length) out.push(extras[e++]);
+  });
+  return out.concat(extras.slice(e));
+}
 
 // When only filters are set, build the sentence the prompt parser expects.
 // Org pills read as "who are USC TKE alumni"; the backend strips that back
@@ -227,6 +246,16 @@ const FindPage: React.FC = () => {
   const [results, setResults] = useState<Person[] | null>(null);
   const [resultsLabel, setResultsLabel] = useState("");
   const [resultsNote, setResultsNote] = useState<string | null>(null);
+  // How many people a search finds: 1..the plan's cap, remembered per browser.
+  const maxCount = TIER_CONFIGS[(authUser?.tier as keyof typeof TIER_CONFIGS) || "free"]?.maxContacts ?? 3;
+  const [count, setCountState] = useState(() => {
+    try { return Number(localStorage.getItem(COUNT_KEY)) || DEFAULT_COUNT; } catch { return DEFAULT_COUNT; }
+  });
+  const searchCount = Math.min(Math.max(1, count), maxCount);
+  const setCount = (n: number) => {
+    setCountState(n);
+    try { localStorage.setItem(COUNT_KEY, String(n)); } catch { /* private mode */ }
+  };
 
   const runSearch = useCallback(async (q: string, rawFilters: PeopleFilters) => {
     // Drop orgs the student has since left, so a stale pill can't linger.
@@ -240,7 +269,7 @@ const FindPage: React.FC = () => {
     setOrgHint(null);
     try {
       const res = await apiService.runPromptSearch({
-        prompt, batchSize: SEARCH_BATCH, mode: "preview", emailTemplate,
+        prompt, batchSize: searchCount, mode: "preview", emailTemplate,
         filters: peopleFiltersActive(f) ? f : undefined,
       });
       if (isErrorResponse(res)) throw new Error(res.error);
@@ -257,7 +286,7 @@ const FindPage: React.FC = () => {
     } finally {
       setSearching(false);
     }
-  }, [emailTemplate, queryClient, joinedOrgs]);
+  }, [emailTemplate, queryClient, joinedOrgs, searchCount]);
 
   // ?q= hands a query in from elsewhere (Loop cards, Getting Started). Run
   // it once, then drop it (and any legacy ?tab=) from the URL.
@@ -282,6 +311,34 @@ const FindPage: React.FC = () => {
   // ── Contact + Info ──────────────────────────────────────────────────────
   const [contactStates, setContactStates] = useState<Record<string, ContactState>>({});
   const bookmarks = useBookmarks();
+
+  // People the student's own searches saved and they haven't reached out to
+  // yet, newest first, with the search each came from.
+  const [foundFilter, setFoundFilter] = useState<string | null>(null);
+  const found = useMemo(() => {
+    const seen = new Set<string>();
+    return bookmarks.contacts
+      .filter((c) => c.source === "find_search" && neverEmailed(c))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .map((c) => ({ person: personFromSavedSearch(c), query: String(c.foundQuery || "").trim() }))
+      // One card per person, even if Contacts holds duplicate rows.
+      .filter((f) => !seen.has(f.person.id) && !!seen.add(f.person.id));
+  }, [bookmarks.contacts]);
+  const recentSearches = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of found) if (f.query) counts.set(f.query, (counts.get(f.query) ?? 0) + 1);
+    return [...counts.entries()].slice(0, 5).map(([query, n]) => ({ query, n }));
+  }, [found]);
+  // A search chip that no longer has anyone left falls back to All.
+  const activeFilter = foundFilter && recentSearches.some((r) => r.query === foundFilter) ? foundFilter : null;
+  const foundLead = activeFilter
+    ? found.filter((f) => f.query === activeFilter).map((f) => f.person)
+    : found.slice(0, FOUND_LEAD).map((f) => f.person);
+  const foundMixed = activeFilter ? [] : found.slice(FOUND_LEAD).map((f) => f.person);
+  const foundLinkedIns = useMemo(
+    () => new Set(found.map((f) => normalizeLinkedIn(f.person.linkedinUrl)).filter(Boolean)),
+    [found],
+  );
   const [infoPerson, setInfoPerson] = useState<Person | null>(null);
   const setContactState = (id: string, s: ContactState) => setContactStates((m) => ({ ...m, [id]: s }));
   // Gmail links from this session's drafts, until Contacts refetches.
@@ -390,7 +447,35 @@ const FindPage: React.FC = () => {
   }
 
   const inSearch = results !== null || searching;
-  const people = inSearch ? results ?? [] : recommendedPeople;
+  // Someone already in "Recently found" doesn't show twice in the feed.
+  const people = inSearch
+    ? results ?? []
+    : recommendedPeople.filter((p) => !foundLinkedIns.has(normalizeLinkedIn(p.linkedinUrl)));
+
+  const card = (p: Person, featured = false, found = false, foundLabel?: string) => (
+    <PersonCard
+      key={`${p.source}-${p.id}`}
+      person={p}
+      featured={featured}
+      found={found}
+      foundLabel={foundLabel}
+      contactState={stateFor(p)}
+      contactHref={contactHrefFor(p)}
+      emailHref={emailHrefFor(p)}
+      onContact={() => contact(p)}
+      onInfo={() => setInfoPerson(p)}
+      onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
+      bookmarked={bookmarks.isBookmarked(p)}
+      onToggleBookmark={() => void bookmarks.toggle(p)}
+      userSchool={userUniversity}
+    />
+  );
+  // Cards from earlier searches mixed into the recommended feed.
+  const withFound = (list: Person[]) => (
+    foundMixed.length
+      ? disperse(list.map((p) => card(p)), foundMixed.map((p) => card(p, false, true, "Your find")), FOUND_EVERY)
+      : list.map((p) => card(p))
+  );
 
 
   return (
@@ -413,6 +498,9 @@ const FindPage: React.FC = () => {
                   orgs={joinedOrgs}
                   showJoinOrg={joinedOrgs.length === 0 && allOrgs.length > 0}
                   searching={searching}
+                  count={searchCount}
+                  maxCount={maxCount}
+                  onCountChange={setCount}
                 />
               </div>
 
@@ -486,6 +574,57 @@ const FindPage: React.FC = () => {
                 )}
               </div>
 
+              {/* Recently found (OFF-56): leads the feed in the search green */}
+              {!inSearch && found.length > 0 && (
+                <section
+                  className="mb-8 rounded-[26px] p-4 sm:p-5"
+                  style={{ fontFamily: APPLE_FONT, background: "linear-gradient(180deg, #EAF5EF 0%, rgba(234,245,239,0) 100%)" }}
+                >
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-2 px-1">
+                    <div className="flex items-center gap-2.5">
+                      <span className="h-2.5 w-2.5 rounded-full bg-[#01754F]" />
+                      <div>
+                        <div className="text-[17px] font-semibold tracking-[-0.01em] text-[#1D1D1F]">Recently found</div>
+                        <div className="text-[13px] text-[#6E6E73]">
+                          People from your searches you haven't reached out to yet. They're saved in Contacts.
+                        </div>
+                      </div>
+                    </div>
+                    <Link to="/contacts" className="inline-flex items-center gap-0.5 text-[13px] font-medium text-[#01754F] hover:underline">
+                      Contacts <ChevronRight className="h-4 w-4" />
+                    </Link>
+                  </div>
+                  {recentSearches.length > 1 && (
+                    <div className="mb-3.5 flex gap-2 overflow-x-auto px-1 pb-1">
+                      {[{ query: null as string | null, label: "All", n: found.length }, ...recentSearches.map((r) => ({ query: r.query as string | null, label: r.query, n: r.n }))].map((chip) => {
+                        const on = activeFilter === chip.query;
+                        return (
+                          <button
+                            key={chip.label}
+                            type="button"
+                            onClick={() => setFoundFilter(chip.query)}
+                            aria-pressed={on}
+                            title={chip.label}
+                            className={`inline-flex h-8 max-w-[280px] shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium transition-colors ${
+                              on ? "border-[#01754F] bg-[#01754F] text-white" : "border-[#CFE5D9] bg-white text-[#1D1D1F] hover:border-[#01754F]"
+                            }`}
+                          >
+                            <span className="truncate">{chip.label}</span>
+                            <span className={`tabular-nums ${on ? "text-white/80" : "text-[#86868B]"}`}>{chip.n}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className={GRID}>{foundLead.map((p) => card(p, false, true, "Your find"))}</div>
+                  {foundMixed.length > 0 && (
+                    <p className="mt-3 px-1 text-[12.5px] text-[#6E6E73]">
+                      {foundMixed.length} more from your searches are mixed into your feed below.
+                    </p>
+                  )}
+                </section>
+              )}
+
               {inSearch && orgHint && !searching && (
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[18px] px-4 py-3 text-white" style={{ fontFamily: APPLE_FONT, background: "linear-gradient(165deg, #25335A 0%, #0F172A 100%)" }}>
                   <span className="text-[14px]">{orgHint.shortName} alumni are in a members-only directory. Join with your chapter's password to search them.</span>
@@ -499,9 +638,13 @@ const FindPage: React.FC = () => {
               )}
 
               {/* Gallery */}
-              {!inSearch && feedEmpty ? null : ((recommendedLoading || feedProfile === null || (recommendedPeople.length === 0 && (hasNextPage || isFetchingNextPage))) && !inSearch) || searching ? (
+              {searching ? (
+                <SearchLoader count={searchCount} grid={GRID} />
+              ) : !inSearch && feedEmpty ? (
+                foundMixed.length > 0 ? <div className={GRID}>{withFound([])}</div> : null
+              ) : (recommendedLoading || feedProfile === null || (recommendedPeople.length === 0 && (hasNextPage || isFetchingNextPage))) && !inSearch ? (
                 <div className={GRID}>
-                  {Array.from({ length: searching ? SEARCH_BATCH : 15 }).map((_, i) => <CardSkeleton key={i} />)}
+                  {Array.from({ length: 15 }).map((_, i) => <CardSkeleton key={i} />)}
                 </div>
               ) : people.length === 0 && orgHint ? null : people.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-line px-6 py-14 text-center text-[14px] text-ink-3">
@@ -509,29 +652,16 @@ const FindPage: React.FC = () => {
                 </div>
               ) : (
                 (() => {
-                  const card = (p: Person, featured = false) => (
-                    <PersonCard
-                      key={`${p.source}-${p.id}`}
-                      person={p}
-                      featured={featured}
-                      contactState={stateFor(p)}
-                      contactHref={contactHrefFor(p)}
-                      emailHref={emailHrefFor(p)}
-                      onContact={() => contact(p)}
-                      onInfo={() => setInfoPerson(p)}
-                      onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
-                      bookmarked={bookmarks.isBookmarked(p)}
-                      onToggleBookmark={() => void bookmarks.toggle(p)}
-                      userSchool={userUniversity}
-                    />
-                  );
                   // Search results are one flat grid. The feed leads with the
                   // top 4. PLACEHOLDER: these are simply the first four the
                   // recommender returned; the real pick (shared clubs, same
                   // alumni groups, likeliest to reply) comes with the pairing
                   // algorithm.
-                  if (inSearch || people.length <= TOP_COUNT) {
-                    return <div className={GRID}>{people.map((p) => card(p, !inSearch))}</div>;
+                  if (inSearch) {
+                    return <div className={GRID}>{people.map((p) => card(p, false, true))}</div>;
+                  }
+                  if (people.length <= TOP_COUNT) {
+                    return <div className={GRID}>{people.map((p) => card(p, true))}{foundMixed.map((p) => card(p, false, true, "Your find"))}</div>;
                   }
                   const top = people.slice(0, TOP_COUNT);
                   const rest = people.slice(TOP_COUNT);
@@ -555,7 +685,7 @@ const FindPage: React.FC = () => {
                       <div className="mb-3 mt-8 px-1 text-[17px] font-semibold tracking-[-0.01em] text-[#1D1D1F]" style={{ fontFamily: APPLE_FONT }}>
                         More people for you
                       </div>
-                      <div className={GRID}>{rest.map((p) => card(p))}</div>
+                      <div className={GRID}>{withFound(rest)}</div>
                     </>
                   );
                 })()

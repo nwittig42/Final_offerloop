@@ -108,6 +108,10 @@ interface PersonCardProps {
   // Top connection: gold ring + "Top match" capsule (placeholder until the
   // pairing algorithm picks these for real).
   featured?: boolean;
+  // Came from one of the student's own searches (OFF-56): green ring and a
+  // "Found" capsule; `foundLabel` overrides the capsule text.
+  found?: boolean;
+  foundLabel?: string;
   bookmarked?: boolean;
   onToggleBookmark?: () => void;
   // The signed-in student's school: highlights the pill on fellow alumni.
@@ -117,7 +121,7 @@ interface PersonCardProps {
   emailHref?: string | null;
 }
 
-export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, bookmarked = false, onToggleBookmark, userSchool = null, contactHref = "/contacts", emailHref = null }: PersonCardProps) {
+export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, found = false, foundLabel = "Just found", bookmarked = false, onToggleBookmark, userSchool = null, contactHref = "/contacts", emailHref = null }: PersonCardProps) {
   const linkedIn = linkedInHref(person.linkedinUrl);
   const isSample = person.source === "sample";
   const reason = person.reasons[0] || (featured ? "Most in common with you" : "");
@@ -133,7 +137,9 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
           ? "0 0 0 2px #0071E3, 0 4px 14px rgba(0,113,227,0.12)"
           : drafted
             ? "0 0 0 1.5px #34C759, 0 4px 14px rgba(0,0,0,0.05)"
-            : "0 1px 2px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.05)",
+            : found
+              ? "0 0 0 1.5px #01754F, 0 6px 18px rgba(1,117,79,0.12)"
+              : "0 1px 2px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.05)",
       }}
     >
       {onDismiss && !isSample && (
@@ -225,6 +231,11 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
             <Check className="h-3 w-3" strokeWidth={3} /> Drafted
           </span>
         )}
+        {found && !drafted && (
+          <span className="rounded-full px-2 py-[3px] text-[11px] font-semibold" style={{ background: "#E8F3EE", color: "#01754F" }}>
+            {foundLabel}
+          </span>
+        )}
         {featured ? (
           <span className="rounded-full px-2 py-[3px] text-[11px] font-semibold" style={{ background: "#FBF3DF", color: "#8A6116" }}>
             Top match
@@ -306,7 +317,18 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
           >
             Info
           </button>
-          {contactState === "no_email" ? (
+          {person.source === "search" && !person.email ? (
+            // The search's email pass came up empty; the contact is saved, so
+            // an address can be added from Contacts.
+            <Link
+              to={contactHref}
+              className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12.5px] font-medium transition-colors hover:bg-[#DCEFE4]"
+              style={{ background: "#E8F3EE", color: "#01754F" }}
+              title="We couldn't find their email yet. Open them in Contacts to add one."
+            >
+              No email yet
+            </Link>
+          ) : contactState === "no_email" ? (
             <span className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12px]" style={{ background: FILL, color: INK_3 }} title="No credits were charged">
               No email found
             </span>

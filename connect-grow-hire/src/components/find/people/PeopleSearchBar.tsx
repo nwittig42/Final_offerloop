@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ChevronDown, Plus, X } from "lucide-react";
 import { Link } from "react-router-dom";
+import * as SliderPrimitive from "@radix-ui/react-slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
@@ -32,6 +33,49 @@ const GROUPS: { key: Key; label: string; placeholder: string; suggestions: strin
 ];
 
 const MAX_VALUES = 5;
+// Matches CREDIT_COSTS['find_contact'] in backend/app/config.py.
+const CREDITS_PER_PERSON = 10;
+const GREEN = "#01754F";
+
+// "Find [8] people" with a drag track. The max is the plan's per-search cap
+// (the backend clamps to it too); the bubble over the thumb shows the count.
+function CountSlider({ value, max, onChange, disabled }: { value: number; max: number; onChange: (n: number) => void; disabled?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <span className="shrink-0 text-[13px] font-medium text-[#1D1D1F]">
+        Find <span className="inline-block min-w-[1.4em] text-center tabular-nums" style={{ color: GREEN }}>{value}</span> {value === 1 ? "person" : "people"}
+      </span>
+      <SliderPrimitive.Root
+        value={[value]}
+        min={1}
+        max={max}
+        step={1}
+        disabled={disabled || max <= 1}
+        onValueChange={([n]) => onChange(n)}
+        aria-label="How many people to find"
+        className="group relative flex h-6 w-[150px] shrink-0 touch-none select-none items-center sm:w-[190px]"
+      >
+        <SliderPrimitive.Track className="relative h-[6px] grow overflow-hidden rounded-full bg-[#E8E8ED]">
+          <SliderPrimitive.Range className="absolute h-full rounded-full" style={{ background: `linear-gradient(90deg, #34C77B 0%, ${GREEN} 100%)` }} />
+        </SliderPrimitive.Track>
+        <SliderPrimitive.Thumb
+          className="relative block h-[22px] w-[22px] cursor-grab rounded-full bg-white outline-none transition-transform active:cursor-grabbing active:scale-110 focus-visible:ring-4 focus-visible:ring-[#01754F]/20"
+          style={{ boxShadow: `0 0 0 2px ${GREEN}, 0 2px 6px rgba(1,117,79,0.3)` }}
+        >
+          <span
+            className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded-full px-2 py-0.5 text-[11.5px] font-semibold tabular-nums text-white opacity-0 transition-opacity group-active:opacity-100 group-focus-within:opacity-100"
+            style={{ background: GREEN }}
+          >
+            {value}
+          </span>
+        </SliderPrimitive.Thumb>
+      </SliderPrimitive.Root>
+      <span className="hidden shrink-0 text-[12.5px] tabular-nums text-[#86868B] sm:inline">
+        {value * CREDITS_PER_PERSON} credits
+      </span>
+    </div>
+  );
+}
 
 // Example searches typed out (then erased) in the empty box, so it's clear
 // you describe who you want rather than type a name. Uses the student's school.
@@ -182,9 +226,13 @@ interface PeopleSearchBarProps {
   // would be, linking to Account Settings (where the password is entered).
   showJoinOrg?: boolean;
   searching: boolean;
+  // How many people to find, 1..maxCount (the plan's per-search cap).
+  count: number;
+  maxCount: number;
+  onCountChange: (n: number) => void;
 }
 
-export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], showJoinOrg = false, searching }: PeopleSearchBarProps) {
+export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], showJoinOrg = false, searching, count, maxCount, onCountChange }: PeopleSearchBarProps) {
   const [allOpen, setAllOpen] = useState(false);
   const [allDraft, setAllDraft] = useState<PeopleFilters>(filters);
   useEffect(() => { if (allOpen) setAllDraft(filters); }, [allOpen, filters]);
@@ -242,10 +290,13 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
           aria-label="Describe who you want to meet"
           className="block w-full resize-none bg-transparent text-[17px] leading-[1.45] text-[#1D1D1F] outline-none placeholder:text-[#86868B]"
         />
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <span className="truncate text-[12.5px] text-[#86868B]">
+        {!query && (
+          <span className="block truncate text-[12.5px] text-[#86868B]">
             Describe them: role, company, school, city. Any mix works.
           </span>
+        )}
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#F0F0F2] pt-3">
+          <CountSlider value={count} max={maxCount} onChange={onCountChange} disabled={searching} />
           <div className="flex shrink-0 items-center gap-2">
             {query && (
               <button type="button" onClick={() => { onQueryChange(""); inputRef.current?.focus(); }} aria-label="Clear" className="flex h-8 w-8 items-center justify-center rounded-full text-[#86868B] hover:bg-[#F5F5F7]">
