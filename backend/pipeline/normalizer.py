@@ -854,22 +854,63 @@ _EXCLUDED_COUNTRIES = {
 }
 
 
+# OFF-54: match country names as WORDS, longest-first so "united kingdom" wins
+# over a bare "uk" and "united arab emirates" over "uae".
+_EXCLUDED_COUNTRY_RE = re.compile(
+    r"\b(" + "|".join(
+        re.escape(c) for c in sorted(_EXCLUDED_COUNTRIES, key=len, reverse=True)
+    ) + r")\b",
+    re.I,
+)
+
+# An explicit US marker anywhere in the string. Vendors append the country
+# ("New York, NY, United States"), so this is usually present on real US rows.
+_US_COUNTRY_MARKER = re.compile(
+    r"(?:\bunited\s+states\b|\busa\b|\bus\b|\bu\.\s?s\.(?:\s?a\.)?)",
+    re.I,
+)
+
+
 def _is_non_us_non_remote(job: dict) -> bool:
     """Return True if the job is based in a non-US country.
 
     Excludes jobs like "Remote, Singapore" where the primary location is
     international. Keeps purely "Remote" or US-based locations.
+
+    OFF-54: this used to substring-match the country list, so any US location
+    containing a country name as a substring was silently dropped — from every
+    source, since both normalize_all and run_crawl_ats gate on this. Real
+    casualties: "New Mexico" (matched "mexico"), "Indiana" and "Indianapolis"
+    ("india"), "Milwaukee" and "Tukwila" ("uk"), "Panama City, FL", "Peru, IL".
+
+    Two defences now, in order:
+      1. Any explicit US marker — a state name, a ", XX" state abbrev, or a
+         "United States" / "USA" / "US" country tag — settles it as US. This
+         is what rescues genuine US places that are also country names
+         ("China, TX", "Mexico, MO", "Lebanon, OH").
+      2. Otherwise the country list is matched on WORD boundaries, so
+         "milwaukee" no longer contains "uk".
+
+    Both steps fail open (keep the job). Dropping a US job is the expensive
+    error: it is invisible, and it costs us inventory we already paid to crawl.
     """
     loc = job.get("location") or ""
     if isinstance(loc, dict):
         loc = loc.get("name") or loc.get("city") or str(loc)
     elif isinstance(loc, list):
         loc = " ".join(str(x) for x in loc)
-    location = str(loc).lower()
-    for country in _EXCLUDED_COUNTRIES:
-        if country in location:
-            return True
-    return False
+    location = str(loc)
+    if not location.strip():
+        return False
+
+    # 1. Explicit US signal wins outright.
+    if (_US_COUNTRY_MARKER.search(location)
+            or _US_STATE_FULL.search(location)
+            or _US_STATE_ABBREV.search(location)):
+        return False
+
+    # 2. Country names, matched as words rather than substrings.
+    return bool(_EXCLUDED_COUNTRY_RE.search(location))
 
 
 # ---------------------------------------------------------------------------
