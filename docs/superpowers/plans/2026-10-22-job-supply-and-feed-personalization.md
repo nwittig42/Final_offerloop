@@ -335,40 +335,54 @@ repeating in a feed within N days.
 
 ---
 
-## Adjacent finding: the Coresignal migration is incomplete on the busiest surface
+## Adjacent finding: the vendor migration IS complete — the comments weren't
 
-Not job-feed work, but it is live vendor spend and it surfaced while pricing B1.
+Not job-feed work, but it surfaced while pricing B1 and it corrects a claim made earlier in this
+document's history.
 
-`engine_search.py` was built 2026-08-31 as "the one door every people-search surface walks
-through" — warehouse first, then Coresignal — and its docstring calls PDL **"the retired PDL
-key"**. Six surfaces route through it: `runs_similar`, the MCP `find_contacts`, `agent_actions`,
-`alumni_discovery`, `recruiter_finder`, `find_people_public`.
+**Nick was right: people search is Coresignal + FullEnrich.** The 30-day `provider_calls` ledger:
 
-**`runs.py` is not one of them.** The main website contact search still imports
-`pdl_client.search_contacts_from_prompt` directly and its comment at `runs.py:237-243` still
-says *"Provider routing: PDL is primary [...] Coresignal/Hunter remain wired up in code as a
-reliability fallback only if PDL itself is down."* The call order is firm cache → PDL →
-Coresignal for the remainder only. `PEOPLE_DATA_LABS_API_KEY` is still populated.
+| provider | spend | share |
+|---|---|---|
+| coresignal | $112.72 | 90% |
+| fullenrich | $7.75 | 6% |
+| pdl | $3.60 | 3% |
+| openai / anthropic / hunter / apify | ~$1.60 | 1% |
 
-Why it matters: `metering.PROVIDER_RATES` prices **PDL at $0.20/credit against Coresignal at
-$0.04 member_search / $0.08 member_collect** — PDL is 2.5-5x the cost. So either the highest
--traffic search path is paying a premium the rest of the app stopped paying, or the key is dead
-and every website search burns a failed round-trip before falling back.
+**`pdl/person_search` has zero rows.** Only `pdl/person_enrich` appears (23 calls), from
+`enrich_linkedin_profile` via `linkedin_enrichment.py:172`. Meanwhile
+`coresignal/member_search` has 152 calls, so people are searching and Coresignal serves all of it.
 
-Both clients are metered (`@meter_call("pdl", "person_search")` at `pdl_client.py:3643`,
-`@meter_call("coresignal", ...)` at `coresignal_client.py:72`), so `provider_calls` settles it.
-Run the summary above: if PDL rows appear in the last 30 days, `runs.py` is still spending on it.
+An earlier version of this section claimed `runs.py` still called PDL first and that the
+migration was unfinished. **That was wrong** — it read the comment at the top of the block
+instead of the call path, which is the exact failure this plan warns about elsewhere. The ladder
+actually implemented is firm_employees → Coresignal → Hunter; the PDL rung was removed
+2026-08-31 and `runs.py:322` already said so. The misleading "PDL is primary" comment and the
+`pdl_target` / `pdl_exclude` variable names survived that change by two months. Corrected in
+96c7afb4 (comments, log strings and local names only, no behaviour change).
 
-Next step either way: point `runs.py` at `engine_search`, which is a drop-in — it returns the
-same 4-tuple contract as `pdl_client.search_contacts_from_prompt` specifically so every call
-site can swap without changes.
+What remains of PDL, all legitimate:
+- **Job-pipeline title enrichment** — the big one, 17,177 of 50,000 pool credits. Now metered
+  and alerted (74632dc7); it was previously invisible to both the ledger and the spend alerter.
+- **`enrich_linkedin_profile`** — 23 calls, $3.60/30d, via `linkedin_enrichment.py`. A newer
+  `linkedin_enrich.enrich_linkedin_profile_engine` exists and `coffee_chat_prep.py:174` already
+  uses it, so this rung looks mid-migration. Small enough to leave; worth finishing when touched.
+- **`PDL_OUTAGE_ACTIVE`** — legacy-named but still the live kill switch for contact search. Do
+  not delete it as dead code.
+
+Remaining follow-up, flagged not done: `runs.py`'s ladder duplicates
+`engine_search.engine_search_contacts`, which every other people-search surface routes through
+and which returns the same 4-tuple. Consolidating is worthwhile but is a behaviour-affecting
+refactor of the busiest route with no bug behind it, so it needs its own change and a decision.
 
 ---
 
 ## Decisions needed from Nick
 
-1. **PDL title-enrichment headroom** — gates B1's first live run. Not a per-call price; see B1.
-   Run `provider_spend_summary` and check credits used against the 45,000 breaker.
+1. ~~**PDL title-enrichment headroom**~~ — **ANSWERED 2026-10-22, B1 is clear.** 17,177 credits
+   used against the 45,000 breaker leaves **27,823 headroom**, and 17,087 unique titles are
+   already cached at 0 credits to re-use. OFF-48's ~3,600 jobs cost only the *new distinct*
+   titles they introduce, and bank titles repeat heavily. No budget conversation needed.
 2. **Phase B stopping point.** B1+B2 are free and large. B3 reuses an existing subscription. B4
    is real build effort — worth it only if B3's numbers are poor.
 3. **Does personalization wait for Phase B?** C1-C3 are independently worth doing and do not
@@ -380,7 +394,7 @@ site can swap without changes.
    Job Board visit catches the user when they care but reaches fewer of them.
 6. **What is an industry match worth in C2?** Needs a number. Location is 10 and field alignment
    is 40, so somewhere between those.
-7. **Is `runs.py` supposed to still be on PDL?** See the adjacent finding. If PDL is retired as
-   `engine_search` claims, the website's main contact search should move to `engine_search` and
-   the PDL key should come out of the people-search path (the job pipeline's title enrichment is
-   a separate pool and would keep working).
+7. ~~**Is `runs.py` supposed to still be on PDL?**~~ — **ANSWERED: no, and it isn't.** PDL was
+   removed from that ladder 2026-08-31; only the comments lied. See the adjacent finding.
+   Remaining optional call: consolidate `runs.py` onto `engine_search` to kill the duplicated
+   ladder, and finish the `enrich_linkedin_profile` → `linkedin_enrich` move. Neither is a bug.
