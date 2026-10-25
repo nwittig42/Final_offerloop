@@ -151,3 +151,86 @@ def test_success_and_failure_both_clear_the_claim(setup):
     assert resp.status_code == 502 and resp.get_json() == {"error": "gmail_draft_failed"}
     assert CLAIM not in setup.db.store
     assert "gmailDraftId" not in setup.db.store[CONTACT]
+
+
+SEND_ONLY = "https://www.googleapis.com/auth/gmail.send"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("scopes", [[SEND_ONLY], [], None])
+def test_send_only_or_no_scopes_is_409_scope_missing(setup, scopes):
+    # gmail.send can't create drafts; unknown scopes can't be trusted to.
+    setup.creds = SimpleNamespace(scopes=scopes)
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 409 and resp.get_json() == {"error": "gmail_scope_missing"}
+    setup.creator.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("scope", [COMPOSE, "https://www.googleapis.com/auth/gmail.modify", "https://mail.google.com/"])
+def test_any_draft_capable_scope_is_enough(setup, scope):
+    setup.creds = SimpleNamespace(scopes=[scope])
+    assert setup.client.post(URL, headers=HEADERS).status_code == 200
+
+
+@pytest.mark.unit
+def test_suppressed_recipient_is_422(setup):
+    setup.creator.return_value = "suppressed_free_draft_pat"
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 422 and resp.get_json() == {"error": "recipient_suppressed"}
+    assert "gmailDraftId" not in setup.db.store[CONTACT]
+    assert CLAIM not in setup.db.store
+
+
+@pytest.mark.unit
+def test_email_source_is_passed_to_gmail(setup):
+    setup.db.store[CONTACT]["emailSource"] = "hunter"
+    setup.client.post(URL, headers=HEADERS)
+    assert setup.creator.call_args[0][0]["EmailSource"] == "hunter"
+    setup.db.store[CONTACT].pop("gmailDraftId")
+    setup.db.store[CONTACT].pop("emailSource")
+    setup.client.post(URL, headers=HEADERS)
+    assert setup.creator.call_args[0][0]["EmailSource"] == ""
+
+
+def _fail_contact_set(db, monkeypatch):
+    from tests import fake_firestore
+    real = fake_firestore.Doc.set
+
+    def flaky(self, data, merge=False):
+        if self.path == CONTACT and "gmailDraftId" in data:
+            raise RuntimeError("firestore down")
+        return real(self, data, merge=merge)
+    monkeypatch.setattr(fake_firestore.Doc, "set", flaky)
+    return lambda: monkeypatch.setattr(fake_firestore.Doc, "set", real)
+
+
+@pytest.mark.unit
+def test_failed_contact_write_keeps_the_claim_and_a_retry_reuses_the_draft(setup, monkeypatch):
+    restore = _fail_contact_set(setup.db, monkeypatch)
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 502
+    claim = setup.db.store[CLAIM]
+    assert claim["draftId"] == "d1" and claim["draftUrl"].endswith("#draft/d1")
+    assert "gmailDraftId" not in setup.db.store[CONTACT]
+
+    restore()
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.get_json() == {"gmailDraftId": "d1", "gmailDraftUrl": "https://mail.google.com/mail/u/0/#draft/d1",
+                               "created": False}
+    setup.creator.assert_called_once()
+    doc = setup.db.store[CONTACT]
+    assert doc["gmailDraftId"] == "d1" and doc["pipelineStage"] == "draft_created"
+    assert CLAIM not in setup.db.store
+
+
+@pytest.mark.unit
+def test_a_claim_taken_over_by_another_call_is_not_deleted(setup):
+    # While Gmail is drafting, a newer claim replaces ours; we must leave it.
+    def creator(*a, **k):
+        setup.db.store[CLAIM] = {"claimedAt": "someone-else"}
+        return {"draft_id": "d1", "draft_url": "u"}
+    setup.creator.side_effect = creator
+    assert setup.client.post(URL, headers=HEADERS).status_code == 200
+    assert setup.db.store[CLAIM]["claimedAt"] == "someone-else"
