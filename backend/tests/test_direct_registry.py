@@ -301,11 +301,19 @@ def test_empty_target_snapshot_without_prior_jobs_syncs():
     mark_failure.assert_not_called()
 
 
-def test_empty_legacy_snapshot_still_syncs():
-    """The guard is target-platform only: legacy behaviour is unchanged."""
+def test_empty_legacy_snapshot_with_no_prior_jobs_syncs():
+    """A genuinely new or empty legacy board is not a block — no false alarm.
+
+    Replaces test_empty_legacy_snapshot_still_syncs, which asserted that a
+    legacy board with prior jobs still synced on an empty read. That test was
+    pinning the SCOPE of Ruling 19 ("target-platform only"), not arguing the
+    behaviour was correct — and it is the exact gap A2 closes, since an empty
+    read of a board that had jobs expires every one of them. The
+    prior-jobs case is now covered by
+    test_legacy_blocked_read_marks_failure_without_expiring.
+    """
     calls, sync, mark_failure, patches = _crawl_patches({})
-    _run(_with_prior(patches, {"kept_job_ids": ["direct_greenhouse_acme_1"]}),
-         platforms=("greenhouse",))
+    _run(_with_prior(patches, {"kept_job_ids": []}), platforms=("greenhouse",))
     sync.assert_called_once()
     mark_failure.assert_not_called()
 
@@ -348,3 +356,42 @@ def test_live_run_writes_run_log():
     with patch.object(main, "_write_run_log") as log:
         assert main._execute("crawl-ats-targets", lambda: {"total": 1}) == 0
     assert log.call_args.args[0] == "crawl-ats-targets"
+
+
+# ---------------------------------------------------------------------------
+# A blocked read must never expire a board — on ANY platform (A2 / OFF-53).
+#
+# The legacy fetchers swallow every exception and `return []`
+# (fetcher.py:124-126), so a transient 403 or timeout on
+# greenhouse/lever/ashby reached sync with an empty snapshot and
+# partial=False. writer then computes removed_ids = prior_kept and expires the
+# whole board. That is the OFF-53 failure mode on the platforms holding ~95%
+# of our jobs, and it was silent: nothing raised, so mark_failure was never
+# called, the board never went dormant, and the crawl logged a clean
+# "0 jobs" board while its live jobs expired.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("platform", ["greenhouse", "lever", "ashby"])
+def test_legacy_blocked_read_marks_failure_without_expiring(platform):
+    """0 fetched + prior jobs = blocked read. Must not reach sync."""
+    _, sync, mark_failure, patches = _crawl_patches({platform: lambda slug: []})
+    prior = {"kept_job_ids": [f"direct_{platform}_acme_1"]}
+    result = _run(_with_prior(patches, prior), platforms=(platform,))
+    sync.assert_not_called()
+    mark_failure.assert_called_once_with(platform, "acme", prior)
+    assert result["slugs_failed"] == 1
+
+
+def test_legacy_fetched_but_all_filtered_still_expires():
+    """Raw jobs that all fail the quality gate SHOULD still expire.
+
+    Deliberately left outside the guard: the legacy gate is aggressive, and a
+    board that stops posting early-career roles should drop off rather than
+    linger forever. Only a ZERO-fetch counts as a block.
+    """
+    _, sync, mark_failure, patches = _crawl_patches(
+        {"greenhouse": lambda slug: [_raw("greenhouse", title="Chief Executive Officer")]})
+    _run(_with_prior(patches, {"kept_job_ids": ["direct_greenhouse_acme_1"]}),
+         platforms=("greenhouse",))
+    sync.assert_called_once()
+    mark_failure.assert_not_called()

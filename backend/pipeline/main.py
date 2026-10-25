@@ -606,9 +606,26 @@ def run_crawl_ats(
             }
         else:
             prior_kept = (prior_state or {}).get("kept_job_ids") or []
+            # Nothing FETCHED at all, on a board that had jobs, is the
+            # signature of a block rather than an emptied board — for every
+            # platform. The legacy fetchers swallow every exception and
+            # `return []` (fetcher.py:124-126), so a transient 403 or timeout
+            # on greenhouse/lever/ashby used to reach sync with an empty
+            # snapshot and partial=False, where writer computes
+            # removed_ids = prior_kept and expires the entire board. That is
+            # the OFF-53 failure mode on the platforms holding ~95% of jobs,
+            # and it was silent: no raise meant no mark_failure, so the board
+            # never went dormant and the crawl logged a clean "0 jobs".
+            if not raw and prior_kept:
+                raise direct.FetchError(
+                    f"0 jobs fetched but {len(prior_kept)} kept last crawl; "
+                    "treating as a blocked read, not an emptied board")
+            # Target platforms keep the stricter rule: their fetchers raise on
+            # real failures, so raw-but-nothing-kept is still suspicious there.
+            # Legacy platforms are deliberately NOT included — their quality
+            # gate is aggressive, and a board that genuinely stops posting
+            # early-career roles should still expire.
             if platform in direct.TARGET_PLATFORMS and not kept and prior_kept:
-                # An empty read of a board that had jobs is far likelier a
-                # block than an empty board: never let it expire everything.
                 raise direct.FetchError(
                     f"empty snapshot ({len(raw)} fetched, 0 kept) but {len(prior_kept)} "
                     "jobs last crawl; marking failed instead of syncing")
