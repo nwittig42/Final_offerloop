@@ -410,13 +410,25 @@ def prompt_search():
         # (it used to surface as a 500 UnboundLocalError).
         retry_level_used = 0
         already_saved_contacts: list = []
+        # Result check (OFF-58): every candidate is read against the prompt
+        # before it counts, so "USC alumni at tech startups" can't fill up on
+        # whichever USC alumni the warehouse happens to hold.
+        from app.services.search_judge import judge_contacts
+        judge = (lambda batch: judge_contacts(prompt, batch)) if not org_targets else None
+        judge_rejected = 0
         try:
             from app.services.firm_cache import search_firm_cache
             from app.services.firm_cache.reader import _flag_enabled as _lookup_enabled
-            if _lookup_enabled() and not org_targets:
+            # The warehouse knows people's schools and employers, not what kind
+            # of company the employer is, so trait searches go to Coresignal.
+            if _lookup_enabled() and not org_targets and not parsed.get("company_traits"):
                 cache_hits, _, _, cache_hit_metadata = search_firm_cache(
                     parsed, max_contacts, exclude_keys=seen_contact_set
                 )
+                if cache_hits and judge:
+                    verdicts = judge(cache_hits)
+                    judge_rejected += verdicts.count(False)
+                    cache_hits = [c for c, ok in zip(cache_hits, verdicts) if ok]
                 if cache_hits:
                     print(f"[FirmCache] LOOKUP hit — {len(cache_hits)}/{max_contacts} served from firm_employees")
         except Exception as e:
@@ -475,9 +487,13 @@ def prompt_search():
                 try:
                     if getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
                         remainder, retry_level_used, already_saved_contacts, remainder_meta = coresignal_client.search_contacts_from_prompt(
-                            parsed, pdl_target, exclude_keys=pdl_exclude, user_profile=user_data
+                            parsed, pdl_target, exclude_keys=pdl_exclude, user_profile=user_data,
+                            # Room to walk past rejects, capped so a bad
+                            # search can't burn collects without end.
+                            judge=judge, max_collect=pdl_target * 2 + 2,
                         )
                         remainder_meta = remainder_meta or {}
+                        judge_rejected += int(remainder_meta.get("rejected_count") or 0)
                         remainder_meta.setdefault("provider", "coresignal")
                         _cs_collected = int(remainder_meta.get("collected_count") or 0)
                         if _cs_collected:
@@ -575,7 +591,11 @@ def prompt_search():
             "companies": parsed.get("companies", []),
             "title_variations": parsed.get("title_variations", []),
             "locations": parsed.get("locations", []),
+            "schools": parsed.get("schools", []),
             "company_context": parsed.get("company_context", ""),
+            # How the search read the prompt, for the line under the box.
+            "company_traits": parsed.get("company_traits"),
+            "judge_rejected": judge_rejected,
         }
         if org_targets:
             parsed_query_payload["org_ids"] = org_targets

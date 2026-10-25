@@ -22,7 +22,7 @@ import hashlib
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -76,6 +76,8 @@ def search_contacts_from_prompt(
     exclude_keys: Optional[Set[str]] = None,
     user_profile: Optional[Dict[str, Any]] = None,
     alumni_school: Optional[str] = None,
+    judge: Optional[Callable[[List[Dict[str, Any]]], List[bool]]] = None,
+    max_collect: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Drop-in surface for pdl_client.search_contacts_from_prompt.
@@ -127,19 +129,25 @@ def search_contacts_from_prompt(
     target_company = _target_company_name(parsed_prompt)
     target_schools = parsed_prompt.get("schools") or []
 
+    # With a judge (OFF-58), each batch is checked against the prompt and the
+    # walk continues past rejects, up to max_collect paid collects.
+    collect_cap = max_collect or len(ids)
+    rejected_count = 0
     cursor = 0
-    while cursor < len(ids) and len(contacts) < max_contacts:
+    while cursor < len(ids) and len(contacts) < max_contacts and collected_count < collect_cap:
         remaining = max_contacts - len(contacts)
-        take = min(remaining, COLLECT_CONCURRENCY, len(ids) - cursor)
+        take = min(remaining, COLLECT_CONCURRENCY, len(ids) - cursor, collect_cap - collected_count)
         batch = ids[cursor : cursor + take]
         cursor += take
 
         profiles = _collect_profiles_parallel(batch)
         collected_count += len(profiles)
+        fresh: List[Dict[str, Any]] = []
         for prof in profiles:
             if len(contacts) >= max_contacts:
                 break
-            normalized = _normalize_to_contact(prof, target_company=target_company)
+            normalized = _normalize_to_contact(prof, target_company=target_company,
+                                               traits=parsed_prompt.get("company_traits"))
             if not normalized:
                 continue
             # Promotion guard: "joined recently" means the person's FIRST
@@ -156,12 +164,19 @@ def search_contacts_from_prompt(
                 continue
             if key:
                 seen_keys.add(key)
-            contacts.append(normalized)
+            fresh.append(normalized)
+        verdicts = judge(fresh) if judge and fresh else [True] * len(fresh)
+        for c, ok in zip(fresh, verdicts):
+            if not ok:
+                rejected_count += 1
+            elif len(contacts) < max_contacts:
+                contacts.append(c)
 
     meta = {
         "provider": "coresignal",
         "raw_count": len(ids),
         "collected_count": collected_count,
+        "rejected_count": rejected_count,
         "schools_requested": target_schools,
     }
     return contacts, 0, already_saved, meta
@@ -244,6 +259,43 @@ def _distinctive_variations(variations: List[str]) -> List[str]:
     return kept or variations
 
 
+def _company_trait_clauses(traits: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filters on the company of the person's current role (OFF-58), from
+    the parser's company_traits: "tech startups" becomes private, 2-500
+    people, founded 2012+, software industries. Every experience entry
+    carries these company_* fields, verified against the live index."""
+    if not traits:
+        return []
+    out: List[Dict[str, Any]] = []
+    size: Dict[str, int] = {}
+    if traits.get("min_employees"):
+        size["gte"] = int(traits["min_employees"])
+    if traits.get("max_employees"):
+        size["lte"] = int(traits["max_employees"])
+    if size:
+        out.append({"range": {"experience.company_employees_count": size}})
+    types = traits.get("company_types") or []
+    if types:
+        out.append({"bool": {"should": [{"match_phrase": {"experience.company_type": t}} for t in types],
+                             "minimum_should_match": 1}})
+    industries = traits.get("industries") or []
+    if industries:
+        out.append({"bool": {"should": [{"match_phrase": {"experience.company_industry": i}} for i in industries],
+                             "minimum_should_match": 1}})
+    # Founded recently OR funded recently: plenty of real startups have no
+    # founded year on file but do have a recent round, and vice versa.
+    recency: List[Dict[str, Any]] = []
+    if traits.get("founded_after"):
+        recency.append({"range": {"experience.company_founded_year": {"gte": int(traits["founded_after"])}}})
+    if traits.get("funded_after"):
+        recency.append({"range": {"experience.company_last_funding_round_date": {"gte": traits["funded_after"]}}})
+    if traits.get("founded_after") and not traits.get("funded_after"):
+        recency.append({"range": {"experience.company_last_funding_round_date": {"gte": f"{int(traits['founded_after']) + 8}-01-01"}}})
+    if recency:
+        out.append({"bool": {"should": recency, "minimum_should_match": 1}})
+    return out
+
+
 def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Translate Offerloop's parse_search_prompt_structured output into the
@@ -264,6 +316,7 @@ def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         title_variations = _distinctive_variations(title_variations)
     schools = parsed.get("schools") or []
     locations = parsed.get("locations") or []
+    trait_clauses = _company_trait_clauses(parsed.get("company_traits"))
 
     # Current company + title via nested experience with active filter.
     # `active_experience: 1` constrains to the person's current role only.
@@ -297,8 +350,9 @@ def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     "minimum_should_match": 1,
                 }
             })
+        nested_must.extend(trait_clauses)
         must.append({"nested": {"path": "experience", "query": {"bool": {"must": nested_must}}}})
-    elif title_variations:
+    elif title_variations or trait_clauses:
         # Title-only (no company) — match any active role with that title.
         must.append({
             "nested": {
@@ -307,6 +361,7 @@ def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     "bool": {
                         "must": [
                             {"term": {"experience.active_experience": 1}},
+                        ] + ([
                             {
                                 "bool": {
                                     "should": [
@@ -315,7 +370,7 @@ def _build_es_query(parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                                     "minimum_should_match": 1,
                                 }
                             },
-                        ]
+                        ] if title_variations else []) + trait_clauses
                     }
                 },
             }
@@ -514,9 +569,21 @@ def _collect_profiles_parallel(ids: List[int]) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _fits_traits(exp: Dict[str, Any], traits: Optional[Dict[str, Any]]) -> bool:
+    """Loose check that a role's company matches company_traits on size."""
+    if not traits:
+        return False
+    n = exp.get("company_employees_count")
+    if not isinstance(n, (int, float)):
+        return False
+    lo, hi = traits.get("min_employees"), traits.get("max_employees")
+    return (not lo or n >= lo) and (not hi or n <= hi)
+
+
 def _normalize_to_contact(
     prof: Dict[str, Any],
     target_company: Optional[str] = None,
+    traits: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Map a Coresignal multi-source employee profile into Offerloop's canonical
@@ -548,6 +615,14 @@ def _normalize_to_contact(
         tc = target_company.strip().lower()
         for exp in actives:
             if tc and tc in (exp.get("company_name") or "").lower():
+                title = (exp.get("position_title") or "").strip() or title
+                company = (exp.get("company_name") or "").strip()
+                break
+    # A trait search ("startups") describes the role at the matching company,
+    # not whichever active role the person happens to list first.
+    if not company and traits and actives:
+        for exp in actives:
+            if _fits_traits(exp, traits):
                 title = (exp.get("position_title") or "").strip() or title
                 company = (exp.get("company_name") or "").strip()
                 break
@@ -657,6 +732,15 @@ def _normalize_to_contact(
         # which never occurs, so nothing was ever marked verified.
         "EmailVerified": bool(email and email_status == "verified"),
     }
+    # Facts about the current company, for the result checker and the card.
+    current = next((e for e in actives if (e.get("company_name") or "").strip() == company), None)
+    if current:
+        contact["CompanyIndustry"] = (current.get("company_industry") or "").strip()
+        contact["CompanyEmployees"] = current.get("company_employees_count")
+        contact["CompanyType"] = (current.get("company_type") or "").strip()
+        contact["CompanyFounded"] = current.get("company_founded_year")
+        contact["CompanyLastFunding"] = current.get("company_last_funding_round_date") or ""
+        contact["CompanyHQ"] = (current.get("company_hq_city") or "").strip()
     # IsCurrentlyAtTarget mirrors the PDL flag used downstream by the
     # frontend's "still at target company" UI badge.
     if target_company and company:

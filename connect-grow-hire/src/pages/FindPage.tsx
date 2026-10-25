@@ -53,6 +53,27 @@ const TOP_COUNT = 4;
 // Written by the landing page hero search (HeroSearchCTA.PENDING_QUERY_KEY).
 const PENDING_QUERY_KEY = "offerloop_pending_query";
 
+// "USC · San Francisco · tech startups (private, 2–500 people, founded 2012+)":
+// how the backend read the prompt (OFF-58), shown under the results header.
+type CompanyTraits = { label?: string; min_employees?: number | null; max_employees?: number | null; company_types?: string[]; founded_after?: number | null; funded_after?: string | null; industries?: string[] };
+function describeParse(pq: { schools?: string[]; locations?: string[]; companies?: { name: string }[]; company_traits?: CompanyTraits | null } | undefined): string[] {
+  if (!pq) return [];
+  const parts: string[] = [...(pq.schools ?? []), ...(pq.locations ?? []), ...(pq.companies ?? []).map((c) => c.name)];
+  const t = pq.company_traits;
+  if (t) {
+    const facts: string[] = [];
+    if (t.company_types?.includes("Privately Held")) facts.push("private");
+    if (t.company_types?.includes("Public Company")) facts.push("public");
+    if (t.min_employees || t.max_employees) {
+      facts.push(t.min_employees && t.max_employees ? `${t.min_employees}–${t.max_employees} people` : t.max_employees ? `under ${t.max_employees} people` : `${t.min_employees}+ people`);
+    }
+    if (t.founded_after) facts.push(`founded ${t.founded_after}+`);
+    if (t.funded_after) facts.push(`funded since ${t.funded_after.slice(0, 4)}`);
+    parts.push(`${t.label || "companies"}${facts.length ? ` (${facts.join(", ")})` : ""}`);
+  }
+  return parts;
+}
+
 // Puts one `extra` after every `every` items of `list`; leftovers go last.
 function disperse<T>(list: T[], extras: T[], every: number): T[] {
   const out: T[] = [];
@@ -246,6 +267,7 @@ const FindPage: React.FC = () => {
   const [results, setResults] = useState<Person[] | null>(null);
   const [resultsLabel, setResultsLabel] = useState("");
   const [resultsNote, setResultsNote] = useState<string | null>(null);
+  const [readAs, setReadAs] = useState<string[]>([]);
   // How many people a search finds: 1..the plan's cap, remembered per browser.
   const maxCount = TIER_CONFIGS[(authUser?.tier as keyof typeof TIER_CONFIGS) || "free"]?.maxContacts ?? 3;
   const [count, setCountState] = useState(() => {
@@ -272,6 +294,7 @@ const FindPage: React.FC = () => {
     setSearching(true);
     setResultsLabel(prompt);
     setResultsNote(null);
+    setReadAs([]);
     setOrgHint(null);
     try {
       const res = await apiService.runPromptSearch({
@@ -282,9 +305,15 @@ const FindPage: React.FC = () => {
       if (search.abort.signal.aborted || (res as { cancelled?: boolean }).cancelled) return;
       if (isErrorResponse(res)) throw new Error(res.error);
       setResults((res.contacts || []).map(personFromSearch));
-      setOrgHint((res as { parsed_query?: { org_hint?: { id: string; name: string; shortName: string } } }).parsed_query?.org_hint ?? null);
+      const pq = (res as { parsed_query?: Parameters<typeof describeParse>[0] & { org_hint?: { id: string; name: string; shortName: string }; judge_rejected?: number } }).parsed_query;
+      setOrgHint(pq?.org_hint ?? null);
+      setReadAs(describeParse(pq));
       const saved = res.already_saved_contacts?.length ?? 0;
-      setResultsNote(res.message || (saved ? `${saved} more ${saved === 1 ? "match is" : "matches are"} already in your Contacts.` : null));
+      const found = (res.contacts || []).length;
+      const skipped = found < searchCount ? pq?.judge_rejected ?? 0 : 0;
+      setResultsNote(res.message || (skipped
+        ? `Found ${found} of ${searchCount}. We skipped ${skipped} who didn't fit your search, and you're only charged for the ${found} shown.`
+        : saved ? `${saved} more ${saved === 1 ? "match is" : "matches are"} already in your Contacts.` : null));
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
     } catch (e: any) {
       if (search.abort.signal.aborted) return;
@@ -592,6 +621,14 @@ const FindPage: React.FC = () => {
                       {searching ? "Searching…" : `${people.length} ${people.length === 1 ? "person" : "people"} found`}
                     </div>
                     <p className="mt-0.5 text-[13px] text-ink-3">"{resultsLabel}" · 10 credits per person found</p>
+                    {readAs.length > 0 && !searching && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5" style={{ fontFamily: APPLE_FONT }}>
+                        <span className="text-[12.5px] text-[#6E6E73]">Searched for</span>
+                        {readAs.map((part) => (
+                          <span key={part} className="rounded-full bg-[#E8F3EE] px-2.5 py-[3px] text-[12px] font-medium text-[#01754F]">{part}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div>
