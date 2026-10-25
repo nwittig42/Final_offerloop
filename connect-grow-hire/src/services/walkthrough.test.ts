@@ -11,6 +11,7 @@ vi.mock("@/lib/firebase", () => ({ db: {}, auth: { currentUser: null } }));
 import type { Person } from "@/components/find/people/peopleModel";
 import {
   WALKTHROUGH_VERSION,
+  resumeWalkthrough,
   loadDraft,
   matchReasons,
   newWalkthrough,
@@ -89,7 +90,7 @@ describe("normalizeWalkthrough", () => {
   const matches = pickMatches([person("1", "A"), person("2", "B")]);
 
   it("starts fresh from onboarding's pending marker or nothing", () => {
-    expect(normalizeWalkthrough(null)).toEqual({ version: v, status: "pending", step: "matches" });
+    expect(normalizeWalkthrough(null)).toEqual({ version: v, status: "pending", step: "matches", tourStep: "pick" });
     expect(normalizeWalkthrough({ status: "pending", createdAt: "t" })).toMatchObject({ status: "pending", step: "matches", createdAt: "t" });
   });
 
@@ -106,7 +107,7 @@ describe("normalizeWalkthrough", () => {
 
   it("keeps status and a dismissed reminder across an unknown shape", () => {
     expect(normalizeWalkthrough({ version: 0, status: "drafted", step: "weird", reminderDismissedAt: "t" })).toEqual({
-      version: v, status: "drafted", step: "matches", reminderDismissedAt: "t", createdAt: undefined,
+      version: v, status: "drafted", step: "matches", tourStep: "pick", reminderDismissedAt: "t", createdAt: undefined,
     });
     expect(normalizeWalkthrough({ status: "bogus" }).status).toBe("pending");
   });
@@ -149,7 +150,7 @@ describe("shouldAutoOpen / newWalkthrough", () => {
   const t = "2026-10-25T00:00:00Z";
 
   it("builds the pending record onboarding writes", () => {
-    expect(newWalkthrough(t)).toEqual({ version: WALKTHROUGH_VERSION, status: "pending", step: "matches", createdAt: t });
+    expect(newWalkthrough(t)).toEqual({ version: WALKTHROUGH_VERSION, status: "pending", step: "matches", tourStep: "pick", createdAt: t });
   });
 
   it("opens for a fresh walkthrough", () => {
@@ -162,6 +163,27 @@ describe("shouldAutoOpen / newWalkthrough", () => {
     expect(shouldAutoOpen({ ...newWalkthrough(t), status: "completed" })).toBe(false);
     expect(shouldAutoOpen(null)).toBe(false);
     expect(shouldAutoOpen(undefined)).toBe(false);
+  });
+
+  it("resets a v1 state to the first tour step, keeping closedAt, skippedAt, reminder and createdAt", () => {
+    expect(normalizeWalkthrough({ version: 1, status: "in_progress", step: "matches", closedAt: "c", skippedAt: "s", reminderDismissedAt: "r", createdAt: "k" })).toEqual({
+      version: WALKTHROUGH_VERSION, status: "in_progress", step: "matches", tourStep: "pick",
+      closedAt: "c", skippedAt: "s", reminderDismissedAt: "r", createdAt: "k",
+    });
+  });
+
+  it("keeps a saved v2 tour step and falls back to pick for an unknown one", () => {
+    expect(normalizeWalkthrough({ version: WALKTHROUGH_VERSION, status: "in_progress", step: "matches", tourStep: "review", tourContactId: "ranker_1" })).toMatchObject({
+      tourStep: "review", tourContactId: "ranker_1",
+    });
+    expect(normalizeWalkthrough({ version: WALKTHROUGH_VERSION, status: "in_progress", step: "matches", tourStep: "nope" }).tourStep).toBe("pick");
+  });
+
+  it("resumeWalkthrough clears closedAt and skippedAt", () => {
+    const s = resumeWalkthrough({ ...newWalkthrough("t"), closedAt: "c", skippedAt: "s", tourStep: "gmail" });
+    expect(s.closedAt).toBeUndefined();
+    expect(s.skippedAt).toBeUndefined();
+    expect(s.tourStep).toBe("gmail");
   });
 
   it("keeps closedAt and skippedAt through the reset branch", () => {

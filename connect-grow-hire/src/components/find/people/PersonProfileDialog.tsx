@@ -32,6 +32,10 @@ interface PersonProfileDialogProps {
   onContact: () => void;
   // Where "Open in Contacts" goes once they're drafted (same as the card's).
   contactHref?: string;
+  // Replaces that link's navigation (the tour moves on to review first).
+  onOpenContact?: () => void;
+  // Replaces the primary button's price tooltip (the tour's free first email).
+  primaryTitle?: string;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   ensureSaved: (p: Person, opts?: { quiet?: boolean }) => Promise<boolean>;
@@ -86,7 +90,7 @@ function Chip({ children, tone = "plain" }: { children: React.ReactNode; tone?: 
 }
 
 export function PersonProfileDialog({
-  person, contactState, onContact, contactHref = "/contacts", isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
+  person, contactState, onContact, contactHref = "/contacts", onOpenContact, primaryTitle, isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
 }: PersonProfileDialogProps) {
   const queryClient = useQueryClient();
   const creditsView = useCreditsView();
@@ -128,7 +132,16 @@ export function PersonProfileDialog({
   const primary = () => {
     if (!p) return null;
     if (contactState === "drafted") {
-      return <Link to={contactHref} style={PRIMARY}>Open in Contacts</Link>;
+      return (
+        <Link
+          to={contactHref}
+          style={PRIMARY}
+          data-tour="tour-profile-primary"
+          onClick={onOpenContact ? (e) => { e.preventDefault(); onOpenContact(); } : undefined}
+        >
+          Open in Contacts
+        </Link>
+      );
     }
     if (isContactBusy(contactState) || contactState === "no_email" || isSample) {
       const label = contactState === "finding" ? "Finding email…"
@@ -136,14 +149,14 @@ export function PersonProfileDialog({
         : contactState === "no_email" ? "No email found"
         : p.source === "recommended" ? "See email & draft" : "Draft email";
       return (
-        <button type="button" disabled style={DISABLED} title={contactState === "no_email" ? "No credits were charged" : undefined}>
+        <button type="button" disabled style={DISABLED} title={contactState === "no_email" ? "No credits were charged" : undefined} data-tour="tour-profile-primary">
           {isContactBusy(contactState) && <Loader2 className="h-4 w-4 animate-spin" />}
           {label}
         </button>
       );
     }
     return (
-      <button type="button" onClick={onContact} style={PRIMARY} title={contactButtonTitle(p)}>
+      <button type="button" onClick={onContact} style={PRIMARY} title={primaryTitle ?? contactButtonTitle(p)} data-tour="tour-profile-primary">
         {p.source === "recommended" ? "See email & draft" : "Draft email"}
       </button>
     );

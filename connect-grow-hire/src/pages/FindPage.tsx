@@ -3,7 +3,7 @@
 // The search bar and LinkedIn-style filter pills on top swap the gallery for
 // search results in the same card layout.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, ArrowLeft, Users, ChevronRight } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -18,7 +18,7 @@ import { NoSchoolEmptyState } from "@/components/NoSchoolEmptyState";
 import { GoalsPromptBanner } from "@/components/find/GoalsPromptBanner";
 import { IS_DEV_PREVIEW, DEV_MOCK_USER } from "@/lib/devPreview";
 import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
-import { CONTACTS_KEY, THREADS_KEY, normalizeLinkedIn } from "@/components/contacts/contactsModel";
+import { CONTACTS_KEY, THREADS_KEY, normalizeLinkedIn, rankerContactId } from "@/components/contacts/contactsModel";
 import { TIER_CONFIGS } from "@/lib/constants";
 import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
 import { useOrgs } from "@/hooks/useOrgs";
@@ -35,8 +35,10 @@ import {
   personFromRanker, personFromSavedSearch, personFromSearch, type Person,
 } from "@/components/find/people/peopleModel";
 import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder";
-import { WalkthroughDialog } from "@/components/walkthrough/WalkthroughDialog";
-import { useFindWalkthrough } from "@/components/walkthrough/useFindWalkthrough";
+import { ScoutTour } from "@/components/walkthrough/ScoutTour";
+import { findTourPrimaryTitle, findTourView } from "@/components/walkthrough/findTourSteps";
+import { useFirstEmailTour } from "@/components/walkthrough/useFirstEmailTour";
+import { advanceToReview, hasSavedDraft, runTourContact, staleDraftStep } from "@/components/walkthrough/findTourContact";
 
 // First screen loads 40 people; scrolling near the bottom pulls 20 more.
 const FIRST_PAGE = 40;
@@ -185,15 +187,18 @@ const FindPage: React.FC = () => {
   // companies in parallel, mixed round-robin so one firm doesn't take over.
   // pageParam carries who's been shown and which seed comes next.
   type FeedCursor = { seen: string[]; next: number };
-  // The first-email pop-up. Feed pages fetched while it's open (or might
-  // auto-open) skip paid lookups, so the walkthrough's people get them first.
-  // Read through a ref: closing it shouldn't refetch the feed.
-  const walkthrough = useFindWalkthrough(IS_DEV_PREVIEW ? undefined : user?.uid);
-  const holdPaidLookupsRef = useRef(walkthrough.holdPaidLookups);
-  holdPaidLookupsRef.current = walkthrough.holdPaidLookups;
+  // Scout's first-email tour (OFF-60). Feed pages fetched while it's on the
+  // pick step (or drafting, or before we know whether it runs) skip paid
+  // lookups, so the tour's people get them first. Read through a ref:
+  // leaving the step shouldn't refetch the feed.
+  const tour = useFirstEmailTour(IS_DEV_PREVIEW ? undefined : user?.uid);
+  const tourPicking = tour.step === "pick" || tour.step === "draft";
+  const holdPaidLookups = !tour.loaded || tourPicking;
+  const holdPaidLookupsRef = useRef(holdPaidLookups);
+  holdPaidLookupsRef.current = holdPaidLookups;
   const recommended = useInfiniteQuery({
     queryKey: ["findRecommended-v2", user?.uid, seeds],
-    enabled: !!user?.uid && !IS_DEV_PREVIEW && feedProfile !== null && walkthrough.loaded,
+    enabled: !!user?.uid && !IS_DEV_PREVIEW && feedProfile !== null && tour.loaded,
     initialPageParam: { seen: [], next: 0 } as FeedCursor,
     staleTime: 10 * 60 * 1000,
     queryFn: async ({ pageParam: rawParam }) => {
@@ -241,8 +246,8 @@ const FindPage: React.FC = () => {
     () => (recommended.data?.pages ?? []).flatMap((p) => p?.people ?? []).filter((p) => !dismissed.has(p.id)),
     [recommended.data, dismissed],
   );
-  // Also "loading" while the walkthrough state loads (the feed waits on it).
-  const recommendedLoading = (recommended.isLoading || (!!user?.uid && !walkthrough.loaded)) && !IS_DEV_PREVIEW;
+  // Also "loading" while the tour state loads (the feed waits on it).
+  const recommendedLoading = (recommended.isLoading || (!!user?.uid && !tour.loaded)) && !IS_DEV_PREVIEW;
   // Nothing to show after loading: ask for dream companies right in the feed.
   const feedEmpty = !recommendedLoading && feedProfile !== null && recommendedPeople.length === 0 && !recommended.hasNextPage;
 
@@ -436,6 +441,13 @@ const FindPage: React.FC = () => {
   const [draftUrls, setDraftUrls] = useState<Record<string, string>>({});
   // People contacted this session, newest first, for the progress tray.
   const [trayPeople, setTrayPeople] = useState<Person[]>([]);
+  // Tour: a draft is in flight from this page (a reload mid-draft shows the
+  // pick step again), and who had no email last.
+  const [tourDrafting, setTourDrafting] = useState(false);
+  const [noEmailFor, setNoEmailFor] = useState<string | undefined>();
+  // Whose free first email was refused (used up): the bubble asks before charging.
+  const [needsPaymentFor, setNeedsPaymentFor] = useState<string | undefined>();
+  const navigate = useNavigate();
 
   // A card's state: what's in flight this session, else what Contacts says,
   // so someone drafted earlier still reads as drafted after a reload.
@@ -455,11 +467,52 @@ const FindPage: React.FC = () => {
     return c?.gmailDraftUrl || draftUrls[p.id] || null;
   };
 
-  const contact = useCallback(async (person: Person) => {
+  const contact = useCallback(async (person: Person, opts: { paid?: boolean } = {}) => {
     if (person.source === "sample") return;
+    // On the tour's pick step (or a stale draft step after a reload) a
+    // recommended person is drafted in the app only (Gmail comes later, on
+    // Contacts), asking for the free first outreach; paid only when chosen.
+    const inTour = tourPicking && person.source === "recommended";
     setTrayPeople((list) => [person, ...list.filter((q) => q.id !== person.id)].slice(0, 4));
     setContactState(person.id, person.source === "recommended" || (person.source === "search" && !person.email) ? "finding" : "working");
+    let gmailDraft = false;
     try {
+      if (inTour) {
+        setNoEmailFor(undefined);
+        setNeedsPaymentFor(undefined);
+        setTourDrafting(true);
+        const r = await runTourContact(person, {
+          goTo: tour.goTo,
+          reveal: (id, deckId, useFree) => apiService.revealRankerEmail(id, deckId, undefined, useFree ? { useFirstOutreach: true } : undefined),
+          draft: (id, deckId) => apiService.rankerOutreach(id, "draft", deckId, { createGmailDraft: false }),
+          navigate,
+          onWriting: () => setContactState(person.id, "working"),
+          onDrafted: () => {
+            void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
+            setContactState(person.id, "drafted");
+            queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+            queryClient.invalidateQueries({ queryKey: THREADS_KEY });
+            toast({ title: `Drafted an email to ${person.firstName}`, description: "Saved in Contacts." });
+          },
+        }, { paid: opts.paid });
+        setTourDrafting(false);
+        if (r.kind === "no_email") {
+          // The bubble on the cards says so.
+          setContactState(person.id, "no_email");
+          setProfilePerson(null);
+          setNoEmailFor(r.firstName);
+        } else if (r.kind === "free_busy") {
+          setContactState(person.id, "idle");
+          setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+          toast({ title: "One moment", description: "Your free email is still being prepared. Try again in a moment." });
+        } else if (r.kind === "needs_payment") {
+          // The profile's bubble shows the price and a "Use 8 credits" button.
+          setContactState(person.id, "idle");
+          setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+          setNeedsPaymentFor(person.id);
+        }
+        return;
+      }
       if (person.source === "recommended") {
         // Reveal (8 credits, refunded on a miss), then draft to that exact
         // person. The outreach route also saves them to Contacts.
@@ -472,6 +525,10 @@ const FindPage: React.FC = () => {
         setContactState(person.id, "working");
         await apiService.rankerOutreach(person.id, "draft", person.deckId);
         void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
+        // The route doesn't say whether Gmail got a draft too; the contact does.
+        if (user?.uid) {
+          gmailDraft = !!(await firebaseApi.getContact(user.uid, rankerContactId(person.id)).catch(() => null) as { gmailDraftId?: string } | null)?.gmailDraftId;
+        }
       } else {
         let email = person.email;
         if (!email) {
@@ -501,18 +558,46 @@ const FindPage: React.FC = () => {
         if (!res.success || !res.draft_count) throw new Error("No draft was created. Check that Gmail is connected.");
         const url = res.drafts?.[0]?.gmailUrl;
         if (url) setDraftUrls((m) => ({ ...m, [person.id]: url }));
+        gmailDraft = res.deliveryMode !== "fallback";
       }
       setContactState(person.id, "drafted");
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
       queryClient.invalidateQueries({ queryKey: THREADS_KEY });
-      toast({ title: `Drafted an email to ${person.firstName}`, description: "It's in your Gmail drafts and in Contacts." });
+      toast({
+        title: `Drafted an email to ${person.firstName}`,
+        description: gmailDraft ? "It's in your Gmail drafts and in Contacts." : "Saved in Contacts.",
+      });
     } catch (e: any) {
       setContactState(person.id, "idle");
       setTrayPeople((list) => list.filter((q) => q.id !== person.id));
       const msg = e?.status === 402 ? "You're out of credits for this. Contacting someone costs 8 credits." : e?.message || "Try again.";
       toast({ title: "Couldn't contact them", description: msg, variant: "destructive" });
+      // runTourContact already put the tour back on pick.
+      if (inTour) setTourDrafting(false);
     }
-  }, [emailTemplate, queryClient, bookmarks.contactFor]);
+  }, [emailTemplate, queryClient, bookmarks.contactFor, tourPicking, tour.goTo, user?.uid, navigate]);
+
+  // A reload on the tour's draft step: if the picked person's draft got
+  // saved, carry on to review on Contacts; otherwise it reads as pick.
+  const [staleDraftChecked, setStaleDraftChecked] = useState(false);
+  const staleDraft = tour.step === "draft" && !tourDrafting;
+  const staleContactId = tour.state?.tourContactId;
+  useEffect(() => {
+    if (!staleDraft || !user?.uid) return;
+    let cancelled = false;
+    const uid = user.uid;
+    void (staleContactId ? firebaseApi.getContact(uid, staleContactId).catch(() => null) : Promise.resolve(null)).then(async (c) => {
+      if (cancelled) return;
+      const next = staleDraftStep({ step: "draft", drafting: false, contactId: staleContactId, savedDraft: hasSavedDraft(c as Record<string, unknown> | null) });
+      if (next === "review" && staleContactId) {
+        await tour.goTo("review");
+        navigate("/contacts?contact=" + encodeURIComponent(staleContactId));
+      } else {
+        setStaleDraftChecked(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [staleDraft, staleContactId, user?.uid, tour.goTo, navigate]);
 
   const dismiss = (person: Person) => {
     setDismissed((d) => new Set(d).add(person.id));
@@ -550,6 +635,22 @@ const FindPage: React.FC = () => {
   }
 
   const inSearch = results !== null || searching;
+  // The tour's pick and draft steps. A stale "draft" from a reload shows
+  // nothing until it's checked, then "pick". Only a recommended person's
+  // profile is part of the tour; any other profile hides Scout until it closes.
+  const tourStepShown = staleDraft ? (staleDraftChecked ? "pick" : null) : tour.step;
+  const needsPayment = !!profilePerson && profilePerson.id === needsPaymentFor;
+  const tourView = profilePerson && profilePerson.source !== "recommended"
+    ? null
+    : findTourView(tourStepShown, { profileOpen: !!profilePerson, noEmailFor, needsPayment, feedEmpty });
+  // The banner's Continue: bring the tour back where it was. Its later steps live on Contacts.
+  const resumeTour = async () => {
+    const s = tour.state;
+    await tour.resume();
+    if (s?.tourContactId && (s.tourStep === "review" || s.tourStep === "gmail" || s.tourStep === "open")) {
+      navigate("/contacts?contact=" + encodeURIComponent(s.tourContactId));
+    }
+  };
   // Search cards pick up emails that arrived after the search returned.
   const withLateEmail = (p: Person): Person => (p.email ? p : { ...p, email: bookmarks.contactFor(p)?.email || "" });
   // Someone already in "Recently found" doesn't show twice in the feed.
@@ -593,7 +694,7 @@ const FindPage: React.FC = () => {
           <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#F5F5F7]">
             <div className="mx-auto max-w-[1320px] px-6 pb-16 pt-4 sm:px-10">
               {user?.uid && !IS_DEV_PREVIEW && (
-                <FirstEmailReminder uid={user.uid} state={walkthrough.state} onContinue={walkthrough.openNow} />
+                <FirstEmailReminder uid={user.uid} state={tour.state} onContinue={() => void resumeTour()} />
               )}
               <div className="mt-4" data-tour="tour-search-form">
                 <PeopleSearchBar
@@ -777,7 +878,13 @@ const FindPage: React.FC = () => {
                     return <div className={GRID}>{people.map((p) => card(p, false, true))}</div>;
                   }
                   if (people.length <= TOP_COUNT) {
-                    return <div className={GRID}>{people.map((p) => card(p, true))}{foundMixed.map((p) => card(p, false, true, "Your find"))}</div>;
+                    // The tour's spotlight covers only the recommended cards.
+                    return (
+                      <>
+                        <div className={GRID} data-tour="tour-first-cards">{people.map((p) => card(p, true))}</div>
+                        {foundMixed.length > 0 && <div className={`${GRID} mt-4`}>{foundMixed.map((p) => card(p, false, true, "Your find"))}</div>}
+                      </>
+                    );
                   }
                   const top = people.slice(0, TOP_COUNT);
                   const rest = people.slice(TOP_COUNT);
@@ -796,7 +903,7 @@ const FindPage: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className={GRID}>{top.map((p) => card(p, true))}</div>
+                        <div className={GRID} data-tour="tour-first-cards">{top.map((p) => card(p, true))}</div>
                       </section>
                       <div className="mb-3 mt-8 px-1 text-[17px] font-semibold tracking-[-0.01em] text-[#1D1D1F]" style={{ fontFamily: APPLE_FONT }}>
                         More people for you
@@ -838,6 +945,11 @@ const FindPage: React.FC = () => {
         userSchool={userUniversity}
         email={profilePerson ? profilePerson.email || bookmarks.contactFor(profilePerson)?.email || "" : ""}
         onClose={() => setProfilePerson(null)}
+        // During the tour, opening a drafted recommended person moves the tour on to review.
+        onOpenContact={tourPicking && profilePerson?.source === "recommended"
+          ? () => void advanceToReview(profilePerson, { goTo: tour.goTo, navigate })
+          : undefined}
+        primaryTitle={findTourPrimaryTitle(tour.step, { recommended: profilePerson?.source === "recommended", needsPayment })}
       />
       <ContactProgressTray
         items={trayPeople.map((p): TrayItem => ({
@@ -845,7 +957,20 @@ const FindPage: React.FC = () => {
         }))}
         onDismiss={(id) => setTrayPeople((list) => list.filter((q) => q.id !== id))}
       />
-      {!IS_DEV_PREVIEW && <WalkthroughDialog open={walkthrough.open} onExit={walkthrough.exit} />}
+      {!IS_DEV_PREVIEW && tourView && (
+        <ScoutTour
+          target={tourView.target}
+          title={tourView.title}
+          body={tourView.body}
+          action={tourView.action && profilePerson
+            ? { label: tourView.action.label, onClick: () => void contact(profilePerson, { paid: true }) }
+            : undefined}
+          onSkip={() => void tour.skip()}
+          onClose={() => void tour.close()}
+          // Escape closes the profile first; the tour stays.
+          closeOnEscape={!profilePerson}
+        />
+      )}
     </SidebarProvider>
   );
 };

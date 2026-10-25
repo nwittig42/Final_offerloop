@@ -285,9 +285,13 @@ def rank_people_for_user(
         )
         return []
 
+    own_id = own_candidate_id(user_ctx.get("profile") or {})
     scored: list[dict] = []
     for cand in candidates:
         _id = _candidate_id(cand)
+        if own_id and _id == own_id:
+            # Never recommend a user to themselves.
+            continue
         if _id is None:
             # Drop: Rylan uses id as a render key; a null or dup breaks the deck.
             continue
@@ -972,6 +976,16 @@ def _candidate_id(candidate: dict) -> Optional[str]:
             return slug
     pdl_id = (candidate.get("pdlId") or candidate.get("pdl_id") or "").strip()
     return pdl_id or None
+
+
+def own_candidate_id(user_doc: dict) -> Optional[str]:
+    """The candidate id the user's own LinkedIn would get, so the deck can
+    drop them. profile.linkedinUrl first, then top-level linkedinUrl."""
+    user_doc = user_doc or {}
+    url = (user_doc.get("profile") or {}).get("linkedinUrl") or user_doc.get("linkedinUrl") or ""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    return _candidate_id({"LinkedIn": url})
 
 
 def _to_response_dict(scored_item: dict) -> dict:

@@ -12,7 +12,7 @@ import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { Person } from "@/components/find/people/peopleModel";
 
-export const WALKTHROUGH_VERSION = 1;
+export const WALKTHROUGH_VERSION = 2;
 
 /**
  * pending: never opened. in_progress: started, no draft yet. drafted: an
@@ -20,6 +20,8 @@ export const WALKTHROUGH_VERSION = 1;
  */
 export type WalkthroughStatus = "pending" | "in_progress" | "drafted" | "completed";
 export type WalkthroughStep = "matches" | "person" | "draft";
+/** Scout's first-email tour: pick someone on Find, draft, review, push to Gmail, open it there. */
+export type TourStep = "pick" | "draft" | "review" | "gmail" | "open";
 
 /** The bits of a recommended person the walkthrough shows (snapshot, so a refresh shows the same people). */
 export interface WalkthroughMatch {
@@ -47,6 +49,11 @@ export interface WalkthroughState {
   selectedId?: string;
   /** users/{uid}/contacts doc holding the draft. */
   contactId?: string;
+  /** Where Scout's first-email tour is (alongside `step`, which /get-started keeps using). */
+  tourStep?: TourStep;
+  /** The contact the tour drafted for. */
+  tourContactId?: string;
+  tourPersonFirstName?: string;
   /** People we couldn't find an email for (never charged). */
   noEmailIds?: string[];
   /** The Find reminder was closed. */
@@ -74,16 +81,18 @@ const MIN_MATCHES = 3;
 export const contactIdFor = (candidateId: string) => `ranker_${candidateId}`;
 
 const STEPS: WalkthroughStep[] = ["matches", "person", "draft"];
+const TOUR_STEPS: TourStep[] = ["pick", "draft", "review", "gmail", "open"];
 
 /** A saved state, normalized; anything unusable starts over at the matches. */
 export function normalizeWalkthrough(raw: unknown): WalkthroughState {
-  const fresh: WalkthroughState = { version: WALKTHROUGH_VERSION, status: "pending", step: "matches" };
+  const fresh: WalkthroughState = { version: WALKTHROUGH_VERSION, status: "pending", step: "matches", tourStep: "pick" };
   if (!raw || typeof raw !== "object") return fresh;
   const s = raw as Partial<WalkthroughState>;
   const status: WalkthroughStatus = ["pending", "in_progress", "drafted", "completed"].includes(s.status as string)
     ? (s.status as WalkthroughStatus)
     : "pending";
-  const base: WalkthroughState = { ...fresh, ...s, status };
+  const tourStep = TOUR_STEPS.includes(s.tourStep as TourStep) ? (s.tourStep as TourStep) : "pick";
+  const base: WalkthroughState = { ...fresh, ...s, status, tourStep };
   // Older or partial shapes keep the status (and the Find reminder) but restart the steps.
   if (s.version !== WALKTHROUGH_VERSION || !STEPS.includes(s.step as WalkthroughStep)) {
     return {
@@ -114,7 +123,12 @@ export const shouldAutoOpen = (s: WalkthroughState | null | undefined): boolean 
 
 /** The pending record onboarding writes for a brand-new user. */
 export function newWalkthrough(now: string): WalkthroughState {
-  return { version: WALKTHROUGH_VERSION, status: "pending", step: "matches", createdAt: now };
+  return { version: WALKTHROUGH_VERSION, status: "pending", step: "matches", tourStep: "pick", createdAt: now };
+}
+
+/** Bring a closed or skipped tour back, at the step it was on. */
+export function resumeWalkthrough(s: WalkthroughState): WalkthroughState {
+  return { ...s, closedAt: undefined, skippedAt: undefined };
 }
 
 function toMatch(p: Person): WalkthroughMatch {

@@ -17,7 +17,7 @@ const renderWith = (state: WalkthroughState | null, save = vi.fn(async () => {})
 };
 
 describe("FirstEmailReminder", () => {
-  it("shows while the walkthrough is incomplete; Continue reopens the pop-up", async () => {
+  it("shows while the walkthrough is incomplete; Continue resumes the tour", async () => {
     const onContinue = vi.fn();
     renderWith({ version: 1, status: "in_progress", step: "matches" }, vi.fn(async () => {}), onContinue);
     expect(await screen.findByText("Finish your first email")).toBeInTheDocument();
@@ -32,6 +32,16 @@ describe("FirstEmailReminder", () => {
       matches: [{ id: "p1", name: "Pat Kim", firstName: "Pat", title: "", company: "", school: "", location: "", linkedinUrl: "", photoUrl: "", reasons: [], briefing: "", deckId: "", rank: 0 }],
     });
     expect(await screen.findByText(/Your email to Pat is saved/)).toBeInTheDocument();
+  });
+
+  it("mentions the tour's saved draft", async () => {
+    renderWith({ version: 1, status: "in_progress", step: "matches", tourStep: "gmail", tourContactId: "ranker_p1", tourPersonFirstName: "Sam" });
+    expect(await screen.findByText(/Your email to Sam is saved/)).toBeInTheDocument();
+  });
+
+  it("no saved-draft line while the tour is still picking (a picked person had no email)", async () => {
+    renderWith({ version: 1, status: "in_progress", step: "matches", tourStep: "pick", tourContactId: "ranker_p1", tourPersonFirstName: "Sam" });
+    expect(await screen.findByText(/We picked a few people/)).toBeInTheDocument();
   });
 
   it("stays hidden for users without a walkthrough, finished ones, and after dismissing", async () => {

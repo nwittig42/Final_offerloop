@@ -2,7 +2,7 @@
 Contact management routes
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 
@@ -962,6 +962,204 @@ def clear_mcp_unseen():
         return jsonify({"cleared": cleared})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# Scopes that can create a Gmail draft.
+_GMAIL_DRAFT_SCOPES = {
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://mail.google.com/",
+}
+
+
+@contacts_bp.route('/<contact_id>/gmail-draft', methods=['POST'])
+@require_firebase_auth
+def push_contact_gmail_draft(contact_id):
+    """POST /api/contacts/<contact_id>/gmail-draft
+
+    Copy the draft saved on this contact (written in-app by ranker outreach
+    with create_gmail_draft=false) into the user's Gmail drafts. Free; makes
+    no new draft when the contact already has one.
+
+    200 {gmailDraftId, gmailDraftUrl, created}
+    400 no_saved_draft
+    404 contact_not_found
+    409 gmail_not_connected | gmail_scope_missing
+    422 recipient_suppressed (the address bounced before)
+    502 gmail_draft_failed
+    """
+    import logging
+    from app.services import gmail_client
+
+    uid = request.firebase_user['uid']
+    db = get_db()
+    if not db:
+        return jsonify({"error": "Database not initialized"}), 500
+    contact_id = (contact_id or "").strip()
+    if not contact_id:
+        return jsonify({"error": "contact_not_found"}), 404
+
+    user_ref = db.collection('users').document(uid)
+    contact_ref = user_ref.collection('contacts').document(contact_id)
+    snap = contact_ref.get()
+    if not snap.exists:
+        return jsonify({"error": "contact_not_found"}), 404
+    contact = snap.to_dict() or {}
+
+    if contact.get("gmailDraftId"):
+        return jsonify({
+            "gmailDraftId": contact["gmailDraftId"],
+            "gmailDraftUrl": contact.get("gmailDraftUrl") or "",
+            "created": False,
+        })
+
+    subject = (contact.get("emailSubject") or "").strip()
+    body = (contact.get("emailBody") or "").strip()
+    to_email = (contact.get("draftToEmail") or "").strip()
+    if not body or not to_email:
+        return jsonify({"error": "no_saved_draft"}), 400
+
+    try:
+        creds = _load_user_gmail_creds(uid)
+    except Exception:
+        creds = None
+    if not creds:
+        return jsonify({"error": "gmail_not_connected"}), 409
+    # Only these can create drafts (gmail.send can't); no scopes = can't tell, so missing.
+    scopes = set(getattr(creds, "scopes", None) or [])
+    if not (scopes & _GMAIL_DRAFT_SCOPES):
+        return jsonify({"error": "gmail_scope_missing"}), 409
+
+    # Claim the contact before calling Gmail so a double-click or retry can't
+    # create a second draft: create-if-absent on a server-only ledger doc, or
+    # compare-and-set over a stale claim (same pattern as first_email_send).
+    from google.api_core import exceptions as gexc
+    log = logging.getLogger(__name__)
+    claim_ref = user_ref.collection('gmailDraftClaims').document(contact_id)
+    claim_snap = claim_ref.get()
+    now = datetime.utcnow()
+    claim = {"claimedAt": now.isoformat()}
+
+    def save_to_contact(draft_id, draft_url):
+        contact_ref.set({
+            "gmailDraftId": draft_id,
+            "gmailDraftUrl": draft_url,
+            "pipelineStage": "draft_created",
+            "draftStillExists": True,
+        }, merge=True)
+
+    # An earlier call made the Gmail draft but failed to write it to the
+    # contact: finish that write instead of drafting again.
+    prior = (claim_snap.to_dict() or {}) if getattr(claim_snap, "exists", False) else {}
+    if prior.get("draftId"):
+        try:
+            save_to_contact(prior["draftId"], prior.get("draftUrl") or "")
+        except Exception:
+            log.exception("gmail-draft: contact write failed again uid=%s contact=%s", uid, contact_id)
+            return jsonify({"error": "gmail_draft_failed"}), 502
+        try:
+            claim_ref.delete()
+        except Exception:
+            log.warning("gmail-draft: could not clear claim uid=%s contact=%s", uid, contact_id)
+        return jsonify({"gmailDraftId": prior["draftId"], "gmailDraftUrl": prior.get("draftUrl") or "",
+                        "created": False})
+
+    keep_claim = False
+    try:
+        if getattr(claim_snap, "exists", False):
+            started = prior.get("claimedAt") or ""
+            try:
+                fresh = now - datetime.fromisoformat(started) < timedelta(minutes=2)
+            except ValueError:
+                fresh = False
+            if fresh:
+                return jsonify({"error": "draft_in_progress"}), 409
+            claim_ref.update(claim, option=db.write_option(last_update_time=claim_snap.update_time))
+        else:
+            claim_ref.create(claim)
+    except (gexc.Conflict, gexc.FailedPrecondition, gexc.NotFound):
+        return jsonify({"error": "draft_in_progress"}), 409
+
+    try:
+        # A claimer that finished between our first read and our claim has
+        # already written the id; return it rather than drafting again.
+        latest = contact_ref.get().to_dict() or {}
+        done = latest.get("gmailDraftId")
+        if done:
+            return jsonify({"gmailDraftId": done,
+                            "gmailDraftUrl": latest.get("gmailDraftUrl") or "",
+                            "created": False})
+        user_data = {}
+        try:
+            user_snap = user_ref.get()
+            if user_snap.exists:
+                user_data = user_snap.to_dict() or {}
+        except Exception:
+            log.debug("gmail-draft: user doc read failed uid=%s", uid, exc_info=True)
+        user_email = request.firebase_user.get("email") or user_data.get("email") or ""
+        user_tier = user_data.get("subscriptionTier", user_data.get("tier", "free")) or "free"
+        user_info = {"name": user_data.get("name", ""), "email": user_email, "phone": "", "linkedin": ""}
+
+        # Same inputs as ranker outreach: the resume is downloaded once and attached.
+        resume_bytes, resume_filename = None, user_data.get("resumeFileName")
+        resume_url = user_data.get("resumeUrl") or user_data.get("resumeURL")
+        if resume_url:
+            try:
+                resume_bytes, downloaded_name = gmail_client.download_resume_from_url(resume_url)
+                if resume_bytes and not resume_filename:
+                    resume_filename = downloaded_name
+            except Exception as exc:
+                log.warning("gmail-draft: resume download failed uid=%s: %s", uid, exc)
+
+        gmail_contact = {
+            "FirstName": contact.get("firstName") or "",
+            "LastName": contact.get("lastName") or "",
+            "Email": to_email,
+            "Company": contact.get("company") or "",
+            "Title": contact.get("jobTitle") or "",
+            "LinkedIn": contact.get("linkedinUrl") or "",
+            "College": contact.get("college") or "",
+            "EmailSource": contact.get("emailSource") or "",
+        }
+        try:
+            result = gmail_client.create_gmail_draft_for_user(
+                gmail_contact, subject, body, tier=user_tier, user_email=user_email,
+                resume_content=resume_bytes, resume_filename=resume_filename,
+                user_info=user_info, user_id=uid,
+            )
+        except Exception:
+            log.exception("gmail-draft failed uid=%s contact=%s", uid, contact_id)
+            return jsonify({"error": "gmail_draft_failed"}), 502
+
+        # The address bounced before: retrying won't help, so say so.
+        if isinstance(result, str) and result.startswith("suppressed_"):
+            return jsonify({"error": "recipient_suppressed"}), 422
+        draft_id = result.get("draft_id", "") if isinstance(result, dict) else ""
+        if not draft_id or str(draft_id).startswith("mock_"):
+            return jsonify({"error": "gmail_draft_failed"}), 502
+        draft_url = result.get("draft_url") or ""
+
+        # Note the draft on the claim first, so a failed contact write below
+        # leaves it for the next call to finish rather than drafting twice.
+        try:
+            claim_ref.set({"draftId": draft_id, "draftUrl": draft_url}, merge=True)
+        except Exception:
+            log.warning("gmail-draft: could not note draft on claim uid=%s contact=%s", uid, contact_id)
+        try:
+            save_to_contact(draft_id, draft_url)
+        except Exception:
+            keep_claim = True
+            log.exception("gmail-draft: contact write failed uid=%s contact=%s", uid, contact_id)
+            return jsonify({"error": "gmail_draft_failed"}), 502
+        return jsonify({"gmailDraftId": draft_id, "gmailDraftUrl": draft_url, "created": True})
+    finally:
+        if not keep_claim:
+            try:
+                # Only our own claim: a newer caller may have taken over a stale one.
+                if ((claim_ref.get().to_dict() or {}).get("claimedAt")) == claim["claimedAt"]:
+                    claim_ref.delete()
+            except Exception:
+                log.warning("gmail-draft: could not clear claim uid=%s contact=%s", uid, contact_id)
 
 
 @contacts_bp.route('/<contact_id>/send-first-email', methods=['POST'])

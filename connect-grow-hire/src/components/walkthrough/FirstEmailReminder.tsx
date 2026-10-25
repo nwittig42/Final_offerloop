@@ -4,12 +4,12 @@ import { saveWalkthrough, walkthroughIncomplete, type WalkthroughState } from "@
 
 // "Finish your first email" on Find while the first-use walkthrough is
 // incomplete. Only accounts that went through onboarding v2 have a
-// walkthrough, so everyone else never sees it. Continue reopens the
-// walkthrough pop-up; closing the reminder only hides the reminder.
+// walkthrough, so everyone else never sees it. Continue resumes Scout's
+// tour at its saved step; closing the reminder only hides the reminder.
 
 interface FirstEmailReminderProps {
   uid: string;
-  /** From useFindWalkthrough; null when there's no walkthrough (or it hasn't loaded). */
+  /** From useFirstEmailTour; null when there's no walkthrough (or it hasn't loaded). */
   state: WalkthroughState | null;
   onContinue: () => void;
   /** Test seam. */
@@ -22,9 +22,12 @@ export function FirstEmailReminder({ uid, state, onContinue, save = saveWalkthro
   if (!state || !walkthroughIncomplete(state) || state.reminderDismissedAt || dismissed) return null;
 
   const selected = state.matches?.find((m) => m.id === state.selectedId);
+  // The tour's draft (saved once it's past the draft step), else the old pop-up's.
+  const tourDrafted = state.tourStep === "review" || state.tourStep === "gmail" || state.tourStep === "open";
+  const draftedTo = tourDrafted ? state.tourPersonFirstName : state.status === "drafted" ? selected?.firstName : undefined;
   const detail =
-    state.status === "drafted" && selected
-      ? `Your email to ${selected.firstName} is saved. Pick up where you left off.`
+    draftedTo
+      ? `Your email to ${draftedTo} is saved. Pick up where you left off.`
       : "We picked a few people who fit your background. It takes about two minutes.";
 
   const dismiss = () => {

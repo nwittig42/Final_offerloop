@@ -202,6 +202,7 @@ export function ContactConversation({ contact }: { contact: ContactRow }) {
               href={gmailUrl}
               target="_blank"
               rel="noopener noreferrer"
+              data-tour="tour-gmail-button"
               className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-paper-2/60 px-3 text-[13px] text-ink hover:bg-paper-2"
             >
               <img src={GmailLogo} alt="" className="h-3.5 w-auto" /> Gmail
@@ -249,7 +250,8 @@ export function ContactConversation({ contact }: { contact: ContactRow }) {
         </div>
       ) : (
         <>
-          <div className="flex flex-col gap-3">
+          {/* The tour spotlights the messages only, never the reply editor below. */}
+          <div className="flex flex-col gap-3" data-tour="tour-draft">
             {messagesQuery.isLoading ? (
               <div className="py-6 text-center text-[13px] text-ink-3">Loading conversation…</div>
             ) : messagesQuery.isError ? (

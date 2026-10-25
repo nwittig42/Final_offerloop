@@ -259,7 +259,13 @@ def serve(uid: str, db, limit: int, exclude_ids: Optional[set] = None):
     if needs_rebuild(doc, profile, model_version_for(uid)):
         schedule_build(uid, "refresh")
 
-    picked = pick(doc, limit, exclude_ids)
+    # Never recommend a user to themselves, even from a list built before
+    # they added their own LinkedIn.
+    from app.services.person_ranker import own_candidate_id
+    own_id = own_candidate_id(profile)
+    pick_exclude = (set(exclude_ids or ()) | {own_id}) if own_id else exclude_ids
+
+    picked = pick(doc, limit, pick_exclude)
     if not picked:
         return None
 

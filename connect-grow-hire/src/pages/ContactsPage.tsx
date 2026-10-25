@@ -21,6 +21,8 @@ import { ContactList, type ListFilter, type SortDir } from "@/components/contact
 import { ContactDetail } from "@/components/contacts/ContactDetail";
 import { ContactsSpreadsheet } from "@/components/contacts/ContactsSpreadsheet";
 import { ShareContactsDialog } from "@/components/contacts/ShareContactsDialog";
+import { ScoutTour } from "@/components/walkthrough/ScoutTour";
+import { useContactsTour } from "@/components/walkthrough/useContactsTour";
 
 const NEW_ID = "__new__";
 const SORT_KEY = "ofl_contacts_sort";
@@ -51,6 +53,8 @@ export default function ContactsPage() {
     setSearchParams(next, { replace: true });
   };
   const select = (id: string | null) => updateParams({ contact: id });
+  // Scout's first-email tour: review, connect Gmail, open the draft.
+  const contactsTour = useContactsTour(user?.uid, { searchParams, updateParams });
 
   // ?q= pre-fills the search (Loop cards link here filtered by company).
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
@@ -101,6 +105,7 @@ export default function ContactsPage() {
   // nothing (or a since-deleted id) is selected.
   useEffect(() => {
     if (view !== "list" || isLoading || selectedId === NEW_ID) return;
+    if (contactsTour.holdSelection) return;
     if ((location.state as { focusEmail?: string } | null)?.focusEmail && !selectedId) return;
     if (selectedId && rows.some((r) => r.id === selectedId)) return;
     if (selectedId && rows.length > 0) {
@@ -110,7 +115,7 @@ export default function ContactsPage() {
     }
     if (!selectedId && visible.length > 0 && window.matchMedia("(min-width: 768px)").matches) select(visible[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, isLoading, rows, selectedId]);
+  }, [view, isLoading, rows, selectedId, contactsTour.holdSelection]);
 
   const handleExport = () => {
     downloadCsv(
@@ -297,6 +302,7 @@ export default function ContactsPage() {
       </div>
 
       <ShareContactsDialog contacts={shareTargets} onClose={() => setShareTargets(null)} />
+      {contactsTour.view && <ScoutTour {...contactsTour.view} />}
 
       <AlertDialog open={confirmBulkDelete} onOpenChange={(o) => !deleting && setConfirmBulkDelete(o)}>
         <AlertDialogContent>
