@@ -52,7 +52,7 @@ function ShimmerCard({ delay }: { delay: number }) {
   );
 }
 
-export function SearchLoader({ count, grid }: { count: number; grid: string }) {
+export function SearchLoader({ count, grid, onCancel }: { count: number; grid: string; onCancel: () => void }) {
   const [step, setStep] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), STEP_MS);
@@ -91,6 +91,14 @@ export function SearchLoader({ count, grid }: { count: number; grid: string }) {
             <span key={i} className="h-1.5 rounded-full transition-all duration-500" style={{ width: i === step ? 18 : 6, background: i <= step ? GREEN : "#E0E0E5" }} />
           ))}
         </div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-4 inline-flex h-8 items-center gap-2 rounded-full bg-white px-3.5 text-[13px] font-medium text-[#1D1D1F] shadow-[0_1px_2px_rgba(0,0,0,0.06)] hover:bg-[#FAFAFA]"
+        >
+          Cancel search
+          <kbd className="rounded bg-[#F5F5F7] px-1.5 py-px font-sans text-[11px] text-[#86868B]">Esc</kbd>
+        </button>
       </div>
       <div className={grid}>
         {Array.from({ length: count }).map((_, i) => <ShimmerCard key={i} delay={i * 120} />)}

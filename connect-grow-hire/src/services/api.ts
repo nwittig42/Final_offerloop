@@ -1509,9 +1509,13 @@ class ApiService {
    * Prompt-based contact search (new endpoint). Same response shape as free-run plus parsed_query.
    * Works for all tiers; batchSize is capped by tier on backend.
    */
-  async runPromptSearch(data: { prompt: string; batchSize: number; emailTemplate?: EmailTemplate | null; mode?: OutreachMode; filters?: import("@/types/findFilters").PeopleFilters }): Promise<SearchResult> {
+  async runPromptSearch(data: { prompt: string; batchSize: number; emailTemplate?: EmailTemplate | null; mode?: OutreachMode; filters?: import("@/types/findFilters").PeopleFilters; searchId?: string; signal?: AbortSignal }): Promise<SearchResult> {
     const headers = await this.getAuthHeaders();
     const payload: Record<string, unknown> = { prompt: data.prompt.trim(), batchSize: data.batchSize };
+    if (data.searchId) {
+      // Lets cancelPromptSearch stop this run before it charges or saves.
+      payload.searchId = data.searchId;
+    }
     if (data.emailTemplate && hasEmailTemplateValues(data.emailTemplate)) {
       payload.emailTemplate = data.emailTemplate;
     }
@@ -1529,6 +1533,18 @@ class ApiService {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: data.signal,
+    });
+  }
+
+  // Find's Cancel (OFF-56): the search checks this before it charges credits
+  // or saves anyone, so a cancelled search costs nothing.
+  async cancelPromptSearch(searchId: string): Promise<{ ok: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean }>('/prompt-search/cancel', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ searchId }),
     });
   }
 

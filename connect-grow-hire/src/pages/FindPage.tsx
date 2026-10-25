@@ -257,12 +257,18 @@ const FindPage: React.FC = () => {
     try { localStorage.setItem(COUNT_KEY, String(n)); } catch { /* private mode */ }
   };
 
+  // The search in flight, so Cancel (button, Esc or Ctrl+C) can stop it.
+  const activeSearch = useRef<{ id: string; abort: AbortController } | null>(null);
+
   const runSearch = useCallback(async (q: string, rawFilters: PeopleFilters) => {
+    if (activeSearch.current) return;
     // Drop orgs the student has since left, so a stale pill can't linger.
     const f = { ...rawFilters, organizations: rawFilters.organizations.filter((id) => joinedOrgs.some((o) => o.id === id)) };
     setFilters(f);
     const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f, joinedOrgs) : "");
     if (!prompt) { setResults(null); return; }
+    const search = { id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, abort: new AbortController() };
+    activeSearch.current = search;
     setSearching(true);
     setResultsLabel(prompt);
     setResultsNote(null);
@@ -271,7 +277,9 @@ const FindPage: React.FC = () => {
       const res = await apiService.runPromptSearch({
         prompt, batchSize: searchCount, mode: "preview", emailTemplate,
         filters: peopleFiltersActive(f) ? f : undefined,
+        searchId: search.id, signal: search.abort.signal,
       });
+      if (search.abort.signal.aborted || (res as { cancelled?: boolean }).cancelled) return;
       if (isErrorResponse(res)) throw new Error(res.error);
       setResults((res.contacts || []).map(personFromSearch));
       setOrgHint((res as { parsed_query?: { org_hint?: { id: string; name: string; shortName: string } } }).parsed_query?.org_hint ?? null);
@@ -279,14 +287,41 @@ const FindPage: React.FC = () => {
       setResultsNote(res.message || (saved ? `${saved} more ${saved === 1 ? "match is" : "matches are"} already in your Contacts.` : null));
       queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
     } catch (e: any) {
+      if (search.abort.signal.aborted) return;
       const msg = e?.status === 402
         ? "You need more credits for this search. Searches cost 10 credits per person found."
         : e?.message || "Try again in a moment.";
       toast({ title: "Search failed", description: msg, variant: "destructive" });
     } finally {
-      setSearching(false);
+      if (activeSearch.current === search) {
+        activeSearch.current = null;
+        setSearching(false);
+      }
     }
   }, [emailTemplate, queryClient, joinedOrgs, searchCount]);
+
+  const cancelSearch = useCallback(() => {
+    const search = activeSearch.current;
+    if (!search) return;
+    activeSearch.current = null;
+    search.abort.abort();
+    setSearching(false);
+    setResults(null);
+    void apiService.cancelPromptSearch(search.id).catch(() => {});
+    toast({ title: "Search cancelled", description: "No credits were charged." });
+  }, []);
+
+  // Esc or Ctrl+C cancels a running search. Ctrl only (not Cmd), and not
+  // while text is selected, so copying still works.
+  useEffect(() => {
+    if (!searching) return;
+    const onKey = (e: KeyboardEvent) => {
+      const ctrlC = e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c" && !window.getSelection()?.toString();
+      if (e.key === "Escape" || ctrlC) { e.preventDefault(); cancelSearch(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searching, cancelSearch]);
 
   // ?q= hands a query in from elsewhere (Loop cards, Getting Started). Run
   // it once, then drop it (and any legacy ?tab=) from the URL.
@@ -501,6 +536,7 @@ const FindPage: React.FC = () => {
                   count={searchCount}
                   maxCount={maxCount}
                   onCountChange={setCount}
+                  onCancel={cancelSearch}
                 />
               </div>
 
@@ -639,7 +675,7 @@ const FindPage: React.FC = () => {
 
               {/* Gallery */}
               {searching ? (
-                <SearchLoader count={searchCount} grid={GRID} />
+                <SearchLoader count={searchCount} grid={GRID} onCancel={cancelSearch} />
               ) : !inSearch && feedEmpty ? (
                 foundMixed.length > 0 ? <div className={GRID}>{withFound([])}</div> : null
               ) : (recommendedLoading || feedProfile === null || (recommendedPeople.length === 0 && (hasNextPage || isFetchingNextPage))) && !inSearch ? (

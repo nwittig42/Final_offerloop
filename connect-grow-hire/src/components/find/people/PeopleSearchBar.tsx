@@ -230,9 +230,11 @@ interface PeopleSearchBarProps {
   count: number;
   maxCount: number;
   onCountChange: (n: number) => void;
+  // Stops the running search (shown in place of Find people while searching).
+  onCancel: () => void;
 }
 
-export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], showJoinOrg = false, searching, count, maxCount, onCountChange }: PeopleSearchBarProps) {
+export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userSchool, orgs = [], showJoinOrg = false, searching, count, maxCount, onCountChange, onCancel }: PeopleSearchBarProps) {
   const [allOpen, setAllOpen] = useState(false);
   const [allDraft, setAllDraft] = useState<PeopleFilters>(filters);
   useEffect(() => { if (allOpen) setAllDraft(filters); }, [allOpen, filters]);
@@ -273,7 +275,7 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
 
       {/* Composer: reads like writing a message, not a name lookup. */}
       <form
-        onSubmit={(e) => { e.preventDefault(); onSearch(query, filters); }}
+        onSubmit={(e) => { e.preventDefault(); if (!searching) onSearch(query, filters); }}
         className="rounded-[22px] bg-white px-5 pb-3 pt-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] ring-1 ring-transparent transition-shadow focus-within:ring-[#0071E3]/40"
         style={{ fontFamily: APPLE_FONT }}
       >
@@ -283,7 +285,7 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={(e) => {
             // Enter runs the search; Shift+Enter adds a line.
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSearch(query, filters); }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!searching) onSearch(query, filters); }
           }}
           rows={2}
           placeholder={typed}
@@ -298,19 +300,30 @@ export function PeopleSearchBar({ query, onQueryChange, filters, onSearch, userS
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[#F0F0F2] pt-3">
           <CountSlider value={count} max={maxCount} onChange={onCountChange} disabled={searching} />
           <div className="flex shrink-0 items-center gap-2">
-            {query && (
+            {query && !searching && (
               <button type="button" onClick={() => { onQueryChange(""); inputRef.current?.focus(); }} aria-label="Clear" className="flex h-8 w-8 items-center justify-center rounded-full text-[#86868B] hover:bg-[#F5F5F7]">
                 <X className="h-4 w-4" />
               </button>
             )}
+            {searching ? (
+              <button
+                type="button"
+                onClick={onCancel}
+                title="Cancel search (Esc or Ctrl+C)"
+                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[#F5F5F7] px-4 text-[14px] font-medium text-[#1D1D1F] transition-colors hover:bg-[#E8E8ED]"
+              >
+                <X className="h-4 w-4" strokeWidth={2.4} /> Cancel
+              </button>
+            ) : (
             <button
               type="submit"
-              disabled={searching || (!query.trim() && !peopleFiltersActive(filters))}
+              disabled={!query.trim() && !peopleFiltersActive(filters)}
               className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[#0071E3] px-4 text-[14px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
             >
-              {searching ? "Finding people…" : "Find people"}
-              {!searching && <ArrowRight className="h-4 w-4" strokeWidth={2.4} />}
+              Find people
+              <ArrowRight className="h-4 w-4" strokeWidth={2.4} />
             </button>
+            )}
           </div>
         </div>
       </form>

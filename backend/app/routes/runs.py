@@ -122,6 +122,38 @@ def invalidate_contact_dedup_cache():
     return jsonify({"ok": True}), 200
 
 
+# Find's Cancel (OFF-56). The client tags each search with a searchId; Cancel
+# writes users/{uid}/searchCancels/{searchId}, and the search checks it before
+# drafting and again before it charges credits or saves contacts. Firestore,
+# not memory, because gunicorn runs several workers.
+_CANCELLED_RESPONSE = {"cancelled": True, "contacts": [], "already_saved_contacts": [], "total_contacts": 0}
+
+
+def _search_cancelled(db, user_id, search_id):
+    if not (db and user_id and search_id):
+        return False
+    try:
+        return db.collection("users").document(user_id).collection("searchCancels").document(search_id).get().exists
+    except Exception as e:
+        print(f"[ContactSearch] cancel check failed, continuing: {e}")
+        return False
+
+
+@runs_bp.route("/prompt-search/cancel", methods=["POST"])
+@require_firebase_auth
+def cancel_prompt_search():
+    user_id = request.firebase_user["uid"]
+    search_id = str((request.get_json(silent=True) or {}).get("searchId") or "").strip()[:64]
+    if not search_id:
+        return jsonify({"error": "searchId is required"}), 400
+    db = get_db()
+    if db:
+        db.collection("users").document(user_id).collection("searchCancels").document(search_id).set(
+            {"cancelledAt": datetime.utcnow().isoformat() + "Z"}
+        )
+    return jsonify({"ok": True})
+
+
 @runs_bp.route("/prompt-search", methods=["POST"])
 @require_firebase_auth
 def prompt_search():
@@ -149,6 +181,7 @@ def prompt_search():
         data = request.get_json(silent=True) or {}
         prompt = (data.get("prompt") or "").strip()
         batch_size = data.get("batchSize")
+        search_id = str(data.get("searchId") or "").strip()[:64]
 
         # Validate prompt length
         if not prompt:
@@ -554,6 +587,10 @@ def prompt_search():
 
         # Trim to the originally requested count (whether or not dedup ran)
         contacts = contacts[:max_contacts]
+
+        if _search_cancelled(db, user_id, search_id):
+            print(f"[ContactSearch] {search_id} cancelled before enrichment; nothing charged or saved")
+            return jsonify(_CANCELLED_RESPONSE), 200
 
         # Enrichment — deferred out of preview mode. Perplexity talking points,
         # Apify LinkedIn posts, and Perplexity company news are consumed only
@@ -1115,6 +1152,10 @@ def prompt_search():
                     "contacts": contacts,
                 }), 401
             print(f"[Runs] Gmail draft error (prompt-search): {gmail_error}")
+
+        if _search_cancelled(db, user_id, search_id):
+            print(f"[ContactSearch] {search_id} cancelled before save; nothing charged or saved")
+            return jsonify(_CANCELLED_RESPONSE), 200
 
         if not (db and user_id):
             print(f"[Runs] Prompt-search: skipping Firestore save")
