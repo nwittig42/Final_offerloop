@@ -93,6 +93,15 @@ describe("PersonProfileDialog", () => {
     expect(screen.getByRole("link", { name: "Open in Contacts" })).toHaveAttribute("href", "/contacts?contact=abc");
   });
 
+  it("onOpenContact replaces the Open in Contacts navigation (the tour)", () => {
+    const onOpenContact = vi.fn();
+    setup({ contactState: "drafted", contactHref: "/contacts?contact=abc", onOpenContact });
+    const link = screen.getByRole("link", { name: "Open in Contacts" });
+    expect(link).toHaveAttribute("data-tour", "tour-profile-primary");
+    expect(fireEvent.click(link)).toBe(false);
+    expect(onOpenContact).toHaveBeenCalledTimes(1);
+  });
+
   it("no_email shows a disabled No email found", () => {
     setup({ contactState: "no_email" });
     expect(screen.getByRole("button", { name: "No email found" })).toBeDisabled();

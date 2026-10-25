@@ -32,6 +32,8 @@ interface PersonProfileDialogProps {
   onContact: () => void;
   // Where "Open in Contacts" goes once they're drafted (same as the card's).
   contactHref?: string;
+  // Replaces that link's navigation (the tour moves on to review first).
+  onOpenContact?: () => void;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   ensureSaved: (p: Person, opts?: { quiet?: boolean }) => Promise<boolean>;
@@ -86,7 +88,7 @@ function Chip({ children, tone = "plain" }: { children: React.ReactNode; tone?: 
 }
 
 export function PersonProfileDialog({
-  person, contactState, onContact, contactHref = "/contacts", isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
+  person, contactState, onContact, contactHref = "/contacts", onOpenContact, isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
 }: PersonProfileDialogProps) {
   const queryClient = useQueryClient();
   const creditsView = useCreditsView();
@@ -128,7 +130,16 @@ export function PersonProfileDialog({
   const primary = () => {
     if (!p) return null;
     if (contactState === "drafted") {
-      return <Link to={contactHref} style={PRIMARY} data-tour="tour-profile-primary">Open in Contacts</Link>;
+      return (
+        <Link
+          to={contactHref}
+          style={PRIMARY}
+          data-tour="tour-profile-primary"
+          onClick={onOpenContact ? (e) => { e.preventDefault(); onOpenContact(); } : undefined}
+        >
+          Open in Contacts
+        </Link>
+      );
     }
     if (isContactBusy(contactState) || contactState === "no_email" || isSample) {
       const label = contactState === "finding" ? "Finding email…"

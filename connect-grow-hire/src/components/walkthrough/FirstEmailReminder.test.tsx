@@ -39,6 +39,11 @@ describe("FirstEmailReminder", () => {
     expect(await screen.findByText(/Your email to Sam is saved/)).toBeInTheDocument();
   });
 
+  it("no saved-draft line while the tour is still picking (a picked person had no email)", async () => {
+    renderWith({ version: 1, status: "in_progress", step: "matches", tourStep: "pick", tourContactId: "ranker_p1", tourPersonFirstName: "Sam" });
+    expect(await screen.findByText(/We picked a few people/)).toBeInTheDocument();
+  });
+
   it("stays hidden for users without a walkthrough, finished ones, and after dismissing", async () => {
     for (const state of [
       null,

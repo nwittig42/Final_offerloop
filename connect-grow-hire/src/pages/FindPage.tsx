@@ -38,6 +38,7 @@ import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder"
 import { ScoutTour } from "@/components/walkthrough/ScoutTour";
 import { findTourView } from "@/components/walkthrough/findTourSteps";
 import { useFirstEmailTour } from "@/components/walkthrough/useFirstEmailTour";
+import { advanceToReview, hasSavedDraft, runTourContact, staleDraftStep } from "@/components/walkthrough/findTourContact";
 import { liveWalkthroughServices } from "@/pages/walkthroughServices";
 
 // First screen loads 40 people; scrolling near the bottom pulls 20 more.
@@ -475,40 +476,51 @@ const FindPage: React.FC = () => {
     setContactState(person.id, person.source === "recommended" || (person.source === "search" && !person.email) ? "finding" : "working");
     let gmailDraft = false;
     try {
-      if (person.source === "recommended") {
-        let useFree = false;
-        if (inTour) {
-          setNoEmailFor(undefined);
-          setTourDrafting(true);
-          [, useFree] = await Promise.all([tour.goTo("draft"), liveWalkthroughServices.loadFirstOutreach()]);
+      if (inTour) {
+        setNoEmailFor(undefined);
+        setTourDrafting(true);
+        const r = await runTourContact(person, {
+          goTo: tour.goTo,
+          loadFirstOutreach: () => liveWalkthroughServices.loadFirstOutreach(),
+          reveal: (id, deckId, useFree) => apiService.revealRankerEmail(id, deckId, undefined, useFree ? { useFirstOutreach: true } : undefined),
+          draft: (id, deckId) => apiService.rankerOutreach(id, "draft", deckId, { createGmailDraft: false }),
+          navigate,
+          onWriting: () => setContactState(person.id, "working"),
+          onDrafted: () => {
+            void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
+            setContactState(person.id, "drafted");
+            queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+            queryClient.invalidateQueries({ queryKey: THREADS_KEY });
+            toast({ title: `Drafted an email to ${person.firstName}`, description: "Saved in Contacts." });
+          },
+        });
+        setTourDrafting(false);
+        if (r.kind === "no_email") {
+          // The bubble on the cards says so.
+          setContactState(person.id, "no_email");
+          setProfilePerson(null);
+          setNoEmailFor(r.firstName);
+        } else if (r.kind === "free_busy") {
+          setContactState(person.id, "idle");
+          setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+          toast({ title: "One moment", description: "Your free email is still being prepared. Try again in a moment." });
         }
+        return;
+      }
+      if (person.source === "recommended") {
         // Reveal (8 credits, refunded on a miss), then draft to that exact
         // person. The outreach route also saves them to Contacts.
-        const reveal = await apiService.revealRankerEmail(person.id, person.deckId, undefined, useFree ? { useFirstOutreach: true } : undefined)
-          .catch((e) => {
-            // The free outreach went elsewhere since we checked: pay as usual.
-            if (useFree && (e?.message === "free_outreach_unavailable" || e?.message === "free_outreach_in_use")) {
-              return apiService.revealRankerEmail(person.id, person.deckId);
-            }
-            throw e;
-          });
+        const reveal = await apiService.revealRankerEmail(person.id, person.deckId);
         if (!reveal.email) {
           setContactState(person.id, "no_email");
-          if (inTour) {
-            setProfilePerson(null);
-            setNoEmailFor(person.firstName || person.name);
-            await tour.goTo("pick");
-            setTourDrafting(false);
-            return;
-          }
           toast({ title: "No email found", description: `We couldn't find a verified address for ${person.firstName}. No credits were charged.` });
           return;
         }
         setContactState(person.id, "working");
-        await apiService.rankerOutreach(person.id, "draft", person.deckId, inTour ? { createGmailDraft: false } : undefined);
+        await apiService.rankerOutreach(person.id, "draft", person.deckId);
         void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
         // The route doesn't say whether Gmail got a draft too; the contact does.
-        if (!inTour && user?.uid) {
+        if (user?.uid) {
           gmailDraft = !!(await firebaseApi.getContact(user.uid, rankerContactId(person.id)).catch(() => null) as { gmailDraftId?: string } | null)?.gmailDraftId;
         }
       } else {
@@ -549,23 +561,37 @@ const FindPage: React.FC = () => {
         title: `Drafted an email to ${person.firstName}`,
         description: gmailDraft ? "It's in your Gmail drafts and in Contacts." : "Saved in Contacts.",
       });
-      if (inTour) {
-        const contactId = rankerContactId(person.id);
-        await tour.goTo("review", { tourContactId: contactId, tourPersonFirstName: person.firstName });
-        setTourDrafting(false);
-        navigate("/contacts?contact=" + encodeURIComponent(contactId));
-      }
     } catch (e: any) {
       setContactState(person.id, "idle");
       setTrayPeople((list) => list.filter((q) => q.id !== person.id));
       const msg = e?.status === 402 ? "You're out of credits for this. Contacting someone costs 8 credits." : e?.message || "Try again.";
       toast({ title: "Couldn't contact them", description: msg, variant: "destructive" });
-      if (inTour) {
-        await tour.goTo("pick").catch(() => {});
-        setTourDrafting(false);
-      }
+      // runTourContact already put the tour back on pick.
+      if (inTour) setTourDrafting(false);
     }
   }, [emailTemplate, queryClient, bookmarks.contactFor, tourPicking, tour.goTo, user?.uid, navigate]);
+
+  // A reload on the tour's draft step: if the picked person's draft got
+  // saved, carry on to review on Contacts; otherwise it reads as pick.
+  const [staleDraftChecked, setStaleDraftChecked] = useState(false);
+  const staleDraft = tour.step === "draft" && !tourDrafting;
+  const staleContactId = tour.state?.tourContactId;
+  useEffect(() => {
+    if (!staleDraft || !user?.uid) return;
+    let cancelled = false;
+    const uid = user.uid;
+    void (staleContactId ? firebaseApi.getContact(uid, staleContactId).catch(() => null) : Promise.resolve(null)).then(async (c) => {
+      if (cancelled) return;
+      const next = staleDraftStep({ step: "draft", drafting: false, contactId: staleContactId, savedDraft: hasSavedDraft(c as Record<string, unknown> | null) });
+      if (next === "review" && staleContactId) {
+        await tour.goTo("review");
+        navigate("/contacts?contact=" + encodeURIComponent(staleContactId));
+      } else {
+        setStaleDraftChecked(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [staleDraft, staleContactId, user?.uid, tour.goTo, navigate]);
 
   const dismiss = (person: Person) => {
     setDismissed((d) => new Set(d).add(person.id));
@@ -603,8 +629,13 @@ const FindPage: React.FC = () => {
   }
 
   const inSearch = results !== null || searching;
-  // The tour's pick and draft steps (a stale "draft" from a reload is "pick").
-  const tourView = findTourView(tour.step === "draft" && !tourDrafting ? "pick" : tour.step, { profileOpen: !!profilePerson, noEmailFor });
+  // The tour's pick and draft steps. A stale "draft" from a reload shows
+  // nothing until it's checked, then "pick". Only a recommended person's
+  // profile is part of the tour; any other profile hides Scout until it closes.
+  const tourStepShown = staleDraft ? (staleDraftChecked ? "pick" : null) : tour.step;
+  const tourView = profilePerson && profilePerson.source !== "recommended"
+    ? null
+    : findTourView(tourStepShown, { profileOpen: !!profilePerson, noEmailFor });
   // The banner's Continue: bring the tour back where it was. Its later steps live on Contacts.
   const resumeTour = async () => {
     const s = tour.state;
@@ -840,7 +871,13 @@ const FindPage: React.FC = () => {
                     return <div className={GRID}>{people.map((p) => card(p, false, true))}</div>;
                   }
                   if (people.length <= TOP_COUNT) {
-                    return <div className={GRID} data-tour="tour-first-cards">{people.map((p) => card(p, true))}{foundMixed.map((p) => card(p, false, true, "Your find"))}</div>;
+                    // The tour's spotlight covers only the recommended cards.
+                    return (
+                      <>
+                        <div className={GRID} data-tour="tour-first-cards">{people.map((p) => card(p, true))}</div>
+                        {foundMixed.length > 0 && <div className={`${GRID} mt-4`}>{foundMixed.map((p) => card(p, false, true, "Your find"))}</div>}
+                      </>
+                    );
                   }
                   const top = people.slice(0, TOP_COUNT);
                   const rest = people.slice(TOP_COUNT);
@@ -901,6 +938,10 @@ const FindPage: React.FC = () => {
         userSchool={userUniversity}
         email={profilePerson ? profilePerson.email || bookmarks.contactFor(profilePerson)?.email || "" : ""}
         onClose={() => setProfilePerson(null)}
+        // During the tour, opening a drafted recommended person moves the tour on to review.
+        onOpenContact={tourPicking && profilePerson?.source === "recommended"
+          ? () => void advanceToReview(profilePerson, { goTo: tour.goTo, navigate })
+          : undefined}
       />
       <ContactProgressTray
         items={trayPeople.map((p): TrayItem => ({

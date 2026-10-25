@@ -22,8 +22,9 @@ export function FirstEmailReminder({ uid, state, onContinue, save = saveWalkthro
   if (!state || !walkthroughIncomplete(state) || state.reminderDismissedAt || dismissed) return null;
 
   const selected = state.matches?.find((m) => m.id === state.selectedId);
-  // The tour's draft (tourContactId), else the old pop-up's.
-  const draftedTo = state.tourContactId ? state.tourPersonFirstName : state.status === "drafted" ? selected?.firstName : undefined;
+  // The tour's draft (saved once it's past the draft step), else the old pop-up's.
+  const tourDrafted = state.tourStep === "review" || state.tourStep === "gmail" || state.tourStep === "open";
+  const draftedTo = tourDrafted ? state.tourPersonFirstName : state.status === "drafted" ? selected?.firstName : undefined;
   const detail =
     draftedTo
       ? `Your email to ${draftedTo} is saved. Pick up where you left off.`
