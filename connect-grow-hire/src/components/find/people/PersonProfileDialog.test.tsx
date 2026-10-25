@@ -190,4 +190,9 @@ describe("PersonProfileDialog", () => {
     expect(screen.getByRole("button", { name: "See email & draft" })).toHaveAttribute("title", contactButtonTitle(person));
     expect(contactButtonTitle(person)).toMatch(/8 credits/);
   });
+
+  it("primaryTitle replaces the cost title (the tour's free first email)", () => {
+    setup({ primaryTitle: "Free: your first email is on us" });
+    expect(screen.getByRole("button", { name: "See email & draft" })).toHaveAttribute("title", "Free: your first email is on us");
+  });
 });

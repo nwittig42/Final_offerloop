@@ -1,8 +1,9 @@
 import { contactIdFor, type TourStep, type WalkthroughState } from "@/services/walkthrough";
 
-// Find's contact(p) while the tour is picking: reveal (with the free first
-// outreach when it's left), write the draft in the app only, then on to
-// Contacts. The API calls come in as deps so this can be tested on its own.
+// Find's contact(p) while the tour is picking: reveal (asking for the free
+// first outreach; the backend decides and charges nothing when it refuses),
+// write the draft in the app only, then on to Contacts. A paid reveal only
+// ever follows the user's explicit "Use 8 credits". The API calls come in as deps so this can be tested on its own.
 
 export interface TourPerson {
   id: string;
@@ -13,7 +14,6 @@ export interface TourPerson {
 
 export interface TourContactDeps {
   goTo: (step: TourStep, patch?: Partial<WalkthroughState>) => Promise<void>;
-  loadFirstOutreach: () => Promise<boolean>;
   /** useFree spends the free first outreach; otherwise the normal paid reveal. */
   reveal: (id: string, deckId: string, useFree: boolean) => Promise<{ email: string | null }>;
   /** In-app draft only (createGmailDraft: false). */
@@ -25,7 +25,12 @@ export interface TourContactDeps {
   onDrafted?: () => void;
 }
 
-export type TourContactResult = { kind: "drafted" } | { kind: "no_email"; firstName: string } | { kind: "free_busy" };
+export type TourContactResult =
+  | { kind: "drafted" }
+  | { kind: "no_email"; firstName: string }
+  | { kind: "free_busy" }
+  /** The free first outreach is used up; ask before the 8-credit reveal. */
+  | { kind: "needs_payment"; firstName: string };
 
 const code = (e: unknown) => (e instanceof Error ? e.message : "");
 const tourPatch = (p: TourPerson) => ({ tourContactId: contactIdFor(p.id), tourPersonFirstName: p.firstName });
@@ -38,14 +43,16 @@ export async function advanceToReview(p: TourPerson, deps: Pick<TourContactDeps,
 }
 
 /**
- * Any failure other than "no email" or "free outreach busy" returns the tour
- * to pick and rethrows, so the caller shows its usual error.
+ * Any failure other than "no email", "free outreach busy" or "needs payment"
+ * returns the tour to pick and rethrows, so the caller shows its usual error.
+ * opts.paid: the user chose to pay; the normal reveal (refunded on a miss).
  */
-export async function runTourContact(p: TourPerson, deps: TourContactDeps): Promise<TourContactResult> {
+export async function runTourContact(p: TourPerson, deps: TourContactDeps, opts: { paid?: boolean } = {}): Promise<TourContactResult> {
   const backToPick = () => deps.goTo("pick").catch(() => {});
+  const useFree = !opts.paid;
   try {
     // Who was picked is saved with the step, so a reload mid-draft can resume.
-    const [, useFree] = await Promise.all([deps.goTo("draft", tourPatch(p)), deps.loadFirstOutreach()]);
+    await deps.goTo("draft", tourPatch(p));
     let reveal: { email: string | null };
     try {
       reveal = await deps.reveal(p.id, p.deckId, useFree);
@@ -54,8 +61,9 @@ export async function runTourContact(p: TourPerson, deps: TourContactDeps): Prom
       if (c === "candidate_not_found") {
         reveal = { email: null };
       } else if (useFree && c === "free_outreach_unavailable") {
-        // Spent since we checked: the normal reveal (refunded on a miss).
-        reveal = await deps.reveal(p.id, p.deckId, false);
+        // Never a silent charge: show the price and let them choose.
+        await backToPick();
+        return { kind: "needs_payment", firstName: p.firstName || p.name };
       } else if (c === "free_outreach_in_use") {
         // Another reveal holds it right now. Never a silent charge: try again later.
         await backToPick();

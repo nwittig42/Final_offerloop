@@ -36,10 +36,9 @@ import {
 } from "@/components/find/people/peopleModel";
 import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder";
 import { ScoutTour } from "@/components/walkthrough/ScoutTour";
-import { findTourView } from "@/components/walkthrough/findTourSteps";
+import { findTourPrimaryTitle, findTourView } from "@/components/walkthrough/findTourSteps";
 import { useFirstEmailTour } from "@/components/walkthrough/useFirstEmailTour";
 import { advanceToReview, hasSavedDraft, runTourContact, staleDraftStep } from "@/components/walkthrough/findTourContact";
-import { liveWalkthroughServices } from "@/pages/walkthroughServices";
 
 // First screen loads 40 people; scrolling near the bottom pulls 20 more.
 const FIRST_PAGE = 40;
@@ -446,6 +445,8 @@ const FindPage: React.FC = () => {
   // pick step again), and who had no email last.
   const [tourDrafting, setTourDrafting] = useState(false);
   const [noEmailFor, setNoEmailFor] = useState<string | undefined>();
+  // Whose free first email was refused (used up): the bubble asks before charging.
+  const [needsPaymentFor, setNeedsPaymentFor] = useState<string | undefined>();
   const navigate = useNavigate();
 
   // A card's state: what's in flight this session, else what Contacts says,
@@ -466,11 +467,11 @@ const FindPage: React.FC = () => {
     return c?.gmailDraftUrl || draftUrls[p.id] || null;
   };
 
-  const contact = useCallback(async (person: Person) => {
+  const contact = useCallback(async (person: Person, opts: { paid?: boolean } = {}) => {
     if (person.source === "sample") return;
     // On the tour's pick step (or a stale draft step after a reload) a
     // recommended person is drafted in the app only (Gmail comes later, on
-    // Contacts), with the free first outreach if it's left.
+    // Contacts), asking for the free first outreach; paid only when chosen.
     const inTour = tourPicking && person.source === "recommended";
     setTrayPeople((list) => [person, ...list.filter((q) => q.id !== person.id)].slice(0, 4));
     setContactState(person.id, person.source === "recommended" || (person.source === "search" && !person.email) ? "finding" : "working");
@@ -478,10 +479,10 @@ const FindPage: React.FC = () => {
     try {
       if (inTour) {
         setNoEmailFor(undefined);
+        setNeedsPaymentFor(undefined);
         setTourDrafting(true);
         const r = await runTourContact(person, {
           goTo: tour.goTo,
-          loadFirstOutreach: () => liveWalkthroughServices.loadFirstOutreach(),
           reveal: (id, deckId, useFree) => apiService.revealRankerEmail(id, deckId, undefined, useFree ? { useFirstOutreach: true } : undefined),
           draft: (id, deckId) => apiService.rankerOutreach(id, "draft", deckId, { createGmailDraft: false }),
           navigate,
@@ -493,7 +494,7 @@ const FindPage: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: THREADS_KEY });
             toast({ title: `Drafted an email to ${person.firstName}`, description: "Saved in Contacts." });
           },
-        });
+        }, { paid: opts.paid });
         setTourDrafting(false);
         if (r.kind === "no_email") {
           // The bubble on the cards says so.
@@ -504,6 +505,11 @@ const FindPage: React.FC = () => {
           setContactState(person.id, "idle");
           setTrayPeople((list) => list.filter((q) => q.id !== person.id));
           toast({ title: "One moment", description: "Your free email is still being prepared. Try again in a moment." });
+        } else if (r.kind === "needs_payment") {
+          // The profile's bubble shows the price and a "Use 8 credits" button.
+          setContactState(person.id, "idle");
+          setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+          setNeedsPaymentFor(person.id);
         }
         return;
       }
@@ -633,9 +639,10 @@ const FindPage: React.FC = () => {
   // nothing until it's checked, then "pick". Only a recommended person's
   // profile is part of the tour; any other profile hides Scout until it closes.
   const tourStepShown = staleDraft ? (staleDraftChecked ? "pick" : null) : tour.step;
+  const needsPayment = !!profilePerson && profilePerson.id === needsPaymentFor;
   const tourView = profilePerson && profilePerson.source !== "recommended"
     ? null
-    : findTourView(tourStepShown, { profileOpen: !!profilePerson, noEmailFor });
+    : findTourView(tourStepShown, { profileOpen: !!profilePerson, noEmailFor, needsPayment, feedEmpty });
   // The banner's Continue: bring the tour back where it was. Its later steps live on Contacts.
   const resumeTour = async () => {
     const s = tour.state;
@@ -942,6 +949,7 @@ const FindPage: React.FC = () => {
         onOpenContact={tourPicking && profilePerson?.source === "recommended"
           ? () => void advanceToReview(profilePerson, { goTo: tour.goTo, navigate })
           : undefined}
+        primaryTitle={findTourPrimaryTitle(tour.step, { recommended: profilePerson?.source === "recommended", needsPayment })}
       />
       <ContactProgressTray
         items={trayPeople.map((p): TrayItem => ({
@@ -954,6 +962,9 @@ const FindPage: React.FC = () => {
           target={tourView.target}
           title={tourView.title}
           body={tourView.body}
+          action={tourView.action && profilePerson
+            ? { label: tourView.action.label, onClick: () => void contact(profilePerson, { paid: true }) }
+            : undefined}
           onSkip={() => void tour.skip()}
           onClose={() => void tour.close()}
           // Escape closes the profile first; the tour stays.

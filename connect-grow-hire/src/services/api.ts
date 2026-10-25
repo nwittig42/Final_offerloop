@@ -2329,7 +2329,7 @@ async sendFirstEmail(contactId: string, body: {
  */
 async pushContactGmailDraft(contactId: string): Promise<
   | { ok: true; gmailDraftUrl: string; created: boolean }
-  | { ok: false; reason: "gmail_not_connected" | "gmail_scope_missing" | "no_saved_draft" | "draft_in_progress" | "error" }
+  | { ok: false; reason: "gmail_not_connected" | "gmail_scope_missing" | "no_saved_draft" | "draft_in_progress" | "recipient_suppressed" | "error" }
 > {
   const headers = await this.getAuthHeaders();
   try {
@@ -2340,7 +2340,7 @@ async pushContactGmailDraft(contactId: string): Promise<
     return { ok: true, gmailDraftUrl: res.gmailDraftUrl || '', created: res.created === true };
   } catch (err) {
     const code = err instanceof Error ? err.message : '';
-    if (code === 'gmail_not_connected' || code === 'gmail_scope_missing' || code === 'no_saved_draft' || code === 'draft_in_progress') {
+    if (code === 'gmail_not_connected' || code === 'gmail_scope_missing' || code === 'no_saved_draft' || code === 'draft_in_progress' || code === 'recipient_suppressed') {
       return { ok: false, reason: code };
     }
     return { ok: false, reason: 'error' };

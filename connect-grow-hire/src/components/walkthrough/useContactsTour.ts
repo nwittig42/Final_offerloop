@@ -70,6 +70,8 @@ export function useContactsTour(
   const [gmailError, setGmailError] = useState<string | null>(null);
   const [pushError, setPushError] = useState<string | null>(null);
   const [allSet, setAllSet] = useState(false);
+  // Gmail can already take drafts (the gmail step opened without an OAuth return).
+  const [connected, setConnected] = useState(false);
 
   // Mid-tour with nobody selected (e.g. /contacts typed in): show the tour's contact.
   useEffect(() => {
@@ -139,6 +141,23 @@ export function useContactsTour(
     })();
   }, [tour.loaded, returned, tour.active, tour.step, contactId, searchParams, canSend, push]);
 
+  // The gmail step without an OAuth return (e.g. a reload after a failed
+  // push): if Gmail can already take drafts, offer the push, not Connect.
+  const checkedGmail = useRef(false);
+  const onGmailStep = shown && tour.step === "gmail";
+  useEffect(() => {
+    if (!onGmailStep || returned || checkedGmail.current) return;
+    checkedGmail.current = true;
+    let cancelled = false;
+    void canSend().then((ok) => {
+      if (!cancelled && ok) setConnected(true);
+    });
+    return () => {
+      cancelled = true;
+      checkedGmail.current = false;
+    };
+  }, [onGmailStep, returned, canSend]);
+
   // "Looks good": already able to draft in Gmail goes straight to the push.
   const reviewed = useCallback(async () => {
     setPushing(true);
@@ -185,9 +204,9 @@ export function useContactsTour(
     const done = () => setAllSet(false);
     view = { ...ALL_SET_VIEW, onSkip: done, onClose: done };
   } else if (shown) {
-    const v = contactsTourView(tour.step, { firstName, gmailError, pushing, pushError });
+    const v = contactsTourView(tour.step, { firstName, gmailError, pushing, pushError, connected });
     if (v) {
-      const onAction = tour.step === "review" ? reviewed : pushError && !gmailError ? push : connect;
+      const onAction = tour.step === "review" ? reviewed : (pushError || connected) && !gmailError ? push : connect;
       view = {
         target: v.target,
         title: v.title,

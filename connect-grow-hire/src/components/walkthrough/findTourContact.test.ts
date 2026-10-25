@@ -9,7 +9,6 @@ const makeDeps = (over: Partial<TourContactDeps> = {}) => {
   const calls: string[] = [];
   const deps: TourContactDeps = {
     goTo: vi.fn(async (step: string) => { calls.push(`goTo:${step}`); }),
-    loadFirstOutreach: vi.fn(async () => true),
     reveal: vi.fn(async () => ({ email: "pat@x.com" })),
     draft: vi.fn(async () => { calls.push("draft"); }),
     navigate: vi.fn((to: string) => { calls.push(`navigate:${to}`); }),
@@ -29,21 +28,29 @@ describe("runTourContact", () => {
     expect(calls).toEqual(["goTo:draft", "draft", "goTo:review", "navigate:/contacts?contact=ranker_p1"]);
   });
 
-  it("not eligible for the free outreach: a normal reveal", async () => {
-    const { deps } = makeDeps({ loadFirstOutreach: vi.fn(async () => false) });
+  it("always asks for the free outreach first; the backend decides", async () => {
+    const { deps } = makeDeps();
     await runTourContact(person, deps);
     expect(deps.reveal).toHaveBeenCalledTimes(1);
-    expect(deps.reveal).toHaveBeenCalledWith("p1", "d1", false);
+    expect(deps.reveal).toHaveBeenCalledWith("p1", "d1", true);
   });
 
-  it("free outreach unavailable: falls back to the paid reveal", async () => {
-    const reveal = vi.fn(async (_id: string, _deck: string, free: boolean) => {
-      if (free) throw err("free_outreach_unavailable");
-      return { email: "pat@x.com" };
-    });
+  it("free outreach unavailable: no second (paid) reveal, back to pick asking to pay", async () => {
+    const reveal = vi.fn(async () => { throw err("free_outreach_unavailable"); });
     const { deps } = makeDeps({ reveal });
-    expect(await runTourContact(person, deps)).toEqual({ kind: "drafted" });
-    expect(reveal.mock.calls.map((c) => c[2])).toEqual([true, false]);
+    expect(await runTourContact(person, deps)).toEqual({ kind: "needs_payment", firstName: "Pat" });
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(deps.draft).not.toHaveBeenCalled();
+    expect(deps.goTo).toHaveBeenLastCalledWith("pick");
+    expect(deps.navigate).not.toHaveBeenCalled();
+  });
+
+  it("paid (after the user chose Use 8 credits): one paid reveal, then the same draft flow", async () => {
+    const { deps, calls } = makeDeps();
+    expect(await runTourContact(person, deps, { paid: true })).toEqual({ kind: "drafted" });
+    expect(deps.reveal).toHaveBeenCalledTimes(1);
+    expect(deps.reveal).toHaveBeenCalledWith("p1", "d1", false);
+    expect(calls).toEqual(["goTo:draft", "draft", "goTo:review", "navigate:/contacts?contact=ranker_p1"]);
   });
 
   it("free outreach in use: no paid call, back to pick", async () => {

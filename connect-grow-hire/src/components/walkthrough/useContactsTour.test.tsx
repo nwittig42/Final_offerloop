@@ -95,7 +95,8 @@ describe("useContactsTour", () => {
   });
 
   it("Connect Gmail starts OAuth coming back to this contact", async () => {
-    const { result, deps } = setup(AT("gmail"), "contact=ranker_7");
+    const { result, deps } = setup(AT("gmail"), "contact=ranker_7", { gmailStatus: vi.fn(async () => ({ connected: false })) });
+    await waitFor(() => expect(deps.gmailStatus).toHaveBeenCalled());
     await waitFor(() => expect(result.current.tour.view?.action?.label).toBe("Connect Gmail"));
     await act(async () => result.current.tour.view!.action!.onClick());
     expect(deps.startOAuth).toHaveBeenCalledWith("/contacts?contact=ranker_7&tour=gmail");
@@ -173,6 +174,32 @@ describe("useContactsTour", () => {
     await act(async () => result.current.tour.view!.action!.onClick());
     await waitFor(() => expect(saved()?.tourStep).toBe("open"));
     expect(deps.startOAuth).not.toHaveBeenCalled();
+  });
+
+  it("gmail step reloaded with Gmail already connected: Put it in Gmail pushes, no OAuth", async () => {
+    const { result, deps, saved } = setup(AT("gmail"), "contact=ranker_7");
+    await waitFor(() => expect(result.current.tour.view?.action?.label).toBe("Put it in Gmail"));
+    expect(deps.pushDraft).not.toHaveBeenCalled();
+    await act(async () => result.current.tour.view!.action!.onClick());
+    await waitFor(() => expect(saved()?.tourStep).toBe("open"));
+    expect(deps.pushDraft).toHaveBeenCalledWith("ranker_7");
+    expect(deps.startOAuth).not.toHaveBeenCalled();
+  });
+
+  it("gmail step reloaded without Gmail: still Connect Gmail", async () => {
+    const { result, deps } = setup(AT("gmail"), "contact=ranker_7", { gmailStatus: vi.fn(async () => ({ connected: false })) });
+    await waitFor(() => expect(deps.gmailStatus).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.tour.view?.action?.label).toBe("Connect Gmail"));
+  });
+
+  it("a suppressed address: explains, no Try again, only Not now", async () => {
+    const { result, deps } = setup(AT("gmail"), "contact=ranker_7&tour=gmail&connected=gmail", {
+      pushDraft: vi.fn(async () => ({ ok: false as const, reason: "recipient_suppressed" as const })),
+    });
+    await waitFor(() => expect(result.current.tour.view?.body).toBe("Gmail won't take a draft to this address. It bounced before."));
+    expect(result.current.tour.view?.action).toBeUndefined();
+    expect(result.current.tour.view?.secondary?.label).toBe("Not now");
+    expect(deps.pushDraft).toHaveBeenCalledTimes(1);
   });
 
   it("open: clicking the Gmail button completes the tour and shows You're all set briefly", async () => {

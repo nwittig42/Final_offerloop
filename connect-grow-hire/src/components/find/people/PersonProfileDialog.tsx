@@ -34,6 +34,8 @@ interface PersonProfileDialogProps {
   contactHref?: string;
   // Replaces that link's navigation (the tour moves on to review first).
   onOpenContact?: () => void;
+  // Replaces the primary button's price tooltip (the tour's free first email).
+  primaryTitle?: string;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   ensureSaved: (p: Person, opts?: { quiet?: boolean }) => Promise<boolean>;
@@ -88,7 +90,7 @@ function Chip({ children, tone = "plain" }: { children: React.ReactNode; tone?: 
 }
 
 export function PersonProfileDialog({
-  person, contactState, onContact, contactHref = "/contacts", onOpenContact, isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
+  person, contactState, onContact, contactHref = "/contacts", onOpenContact, primaryTitle, isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
 }: PersonProfileDialogProps) {
   const queryClient = useQueryClient();
   const creditsView = useCreditsView();
@@ -154,7 +156,7 @@ export function PersonProfileDialog({
       );
     }
     return (
-      <button type="button" onClick={onContact} style={PRIMARY} title={contactButtonTitle(p)} data-tour="tour-profile-primary">
+      <button type="button" onClick={onContact} style={PRIMARY} title={primaryTitle ?? contactButtonTitle(p)} data-tour="tour-profile-primary">
         {p.source === "recommended" ? "See email & draft" : "Draft email"}
       </button>
     );

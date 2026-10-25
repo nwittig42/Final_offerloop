@@ -19,7 +19,7 @@ export const ALL_SET_VIEW = { target: null, title: "You're all set", body: "Your
 
 export function contactsTourView(
   step: TourStep | null,
-  ctx: { firstName: string; gmailError?: string | null; pushing?: boolean; pushError?: string | null },
+  ctx: { firstName: string; gmailError?: string | null; pushing?: boolean; pushError?: string | null; connected?: boolean },
 ): ContactsTourView | null {
   const pushing = !!ctx.pushing;
   if (step === "review") {
@@ -31,6 +31,19 @@ export function contactsTourView(
     };
   }
   if (step === "gmail") {
+    // Trying again can't fix these: only Not now.
+    const dead = !ctx.gmailError && (ctx.pushError === "recipient_suppressed" || ctx.pushError === "no_saved_draft");
+    if (dead && !pushing) {
+      return {
+        target: null,
+        title: "Connect Gmail",
+        body: ctx.pushError === "recipient_suppressed"
+          ? "Gmail won't take a draft to this address. It bounced before."
+          : "Something went wrong putting it in your Gmail drafts.",
+        action: null,
+        secondary: { label: "Not now" },
+      };
+    }
     const retry = !!ctx.gmailError || !!ctx.pushError;
     return {
       target: null,
@@ -42,7 +55,7 @@ export function contactsTourView(
           : ctx.pushError
             ? "Something went wrong putting it in your Gmail drafts."
             : "Connect Gmail so this goes out from your own inbox. Google will ask you to tick a few boxes. Tick all of them.",
-      action: { label: retry ? "Try again" : "Connect Gmail", disabled: pushing },
+      action: { label: retry ? "Try again" : ctx.connected ? "Put it in Gmail" : "Connect Gmail", disabled: pushing },
       secondary: { label: "Not now" },
     };
   }

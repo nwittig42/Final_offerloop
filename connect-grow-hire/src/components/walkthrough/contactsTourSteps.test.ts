@@ -50,6 +50,26 @@ describe("contactsTourView", () => {
     expect(v?.action).toEqual({ label: "Try again", disabled: false });
   });
 
+  it("gmail, already connected (a reload after a failed push): Put it in Gmail", () => {
+    const v = contactsTourView("gmail", { firstName: "Pat", connected: true });
+    expect(v?.action).toEqual({ label: "Put it in Gmail", disabled: false });
+    expect(v?.secondary).toEqual({ label: "Not now" });
+  });
+
+  it("gmail after a suppressed address: explains, only Not now", () => {
+    const v = contactsTourView("gmail", { firstName: "Pat", pushError: "recipient_suppressed" });
+    expect(v?.body).toBe("Gmail won't take a draft to this address. It bounced before.");
+    expect(v?.action).toBeNull();
+    expect(v?.secondary).toEqual({ label: "Not now" });
+  });
+
+  it("gmail with no saved draft: the error copy, only Not now", () => {
+    const v = contactsTourView("gmail", { firstName: "Pat", pushError: "no_saved_draft", connected: true });
+    expect(v?.body).toBe("Something went wrong putting it in your Gmail drafts.");
+    expect(v?.action).toBeNull();
+    expect(v?.secondary).toEqual({ label: "Not now" });
+  });
+
   it("open: spotlights the Gmail button", () => {
     expect(contactsTourView("open", { firstName: "Pat" })).toEqual({
       target: '[data-tour="tour-gmail-button"]',
