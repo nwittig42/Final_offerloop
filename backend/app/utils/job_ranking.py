@@ -107,8 +107,18 @@ def _safe_str_list(val) -> list[str]:
 
 
 def infer_field(profile: dict) -> Optional[str]:
-    # 1. Explicit careerTrack from onboarding (highest priority)
-    career_track = _safe_str((profile.get("goals") or {}).get("careerTrack")).lower().strip()
+    # 1. Explicit careerTrack (highest priority).
+    #    Read BOTH paths. AccountSettings — the only surface that can still set
+    #    a career track — writes `careerTrack` flat at the top level and never
+    #    writes a `goals` map, and the current onboarding flow writes
+    #    `goals.careerTrack` as "" (career tracks were removed from onboarding;
+    #    see OnboardingFlow's completion payload). Reading goals-only meant the
+    #    user's explicitly chosen track never applied and this always fell
+    #    through to the resume's major.
+    career_track = _safe_str(
+        (profile.get("goals") or {}).get("careerTrack")
+        or profile.get("careerTrack")
+    ).lower().strip()
     if career_track:
         category = CAREER_TRACK_MAP.get(career_track)
         if category:
@@ -333,22 +343,34 @@ def deterministic_score(job: dict, profile: dict) -> float:
         except (ValueError, TypeError):
             pass
 
-    # Dream company bonus
-    dream_companies = _safe_str_list((profile.get("goals") or {}).get("dreamCompanies"))
+    # Dream company bonus. Read both paths — AccountSettings writes
+    # `dreamCompanies` flat at the top level and never writes a `goals` map, so
+    # goals-only meant this bonus could not fire for anyone. job_ranker_signals
+    # already reads both, which is why the +25 boost worked while this +15 did
+    # not.
+    dream_companies = _safe_str_list(
+        (profile.get("goals") or {}).get("dreamCompanies")
+        or profile.get("dreamCompanies")
+    )
     if dream_companies:
         job_company = _safe_str(job.get("company")).lower().strip()
         if job_company and any(dc.lower().strip() in job_company or job_company in dc.lower().strip()
                                for dc in dream_companies):
             score += 15
 
-    # Location preference bonus — preferredLocation may be a string OR a list (multi-city onboarding)
-    pref_location = _safe_str((profile.get("location") or {}).get("preferredLocation")).strip()
+    # Location preference bonus. preferredLocation is a LIST for multi-city
+    # users (AccountSettings assigns careerInfo.preferredLocations to it), and
+    # _safe_str joins lists on ", " — so ["New York", "Chicago"] became the
+    # string "new york, chicago", which is never a substring of a real job
+    # location. Match any one of the preferred locations instead.
+    pref_locations = [p.strip().lower() for p in
+                      _safe_str_list((profile.get("location") or {}).get("preferredLocation"))
+                      if p.strip()]
     job_location = _normalize_location(job.get("location")).lower()
     if job.get("remote_derived") or "remote" in job_location:
         score += 5
-    if pref_location and pref_location.lower() not in ("", "remote"):
-        if pref_location.lower() in job_location:
-            score += 10
+    if any(p in job_location for p in pref_locations if p not in ("", "remote")):
+        score += 10
 
     return score
 
@@ -515,9 +537,13 @@ def rank_with_gpt(jobs: list[dict], profile: dict) -> list[dict]:
         if flatten_experience_title(e.get("title", "")) and e.get("company")
     ]) or "None listed"
 
+    # Same dual-path read as deterministic_score / infer_field: these live at
+    # the top level for anyone who set them in AccountSettings, so goals-only
+    # meant the GPT reranker was never told the user's track or dream companies.
     goals = profile.get("goals") or {}
-    career_track = goals.get("careerTrack", "")
-    dream_companies = goals.get("dreamCompanies") or []
+    career_track = goals.get("careerTrack") or profile.get("careerTrack") or ""
+    dream_companies = (goals.get("dreamCompanies")
+                       or profile.get("dreamCompanies") or [])
     pref_location = (profile.get("location") or {}).get("preferredLocation", "")
 
     profile_str = f"""STUDENT PROFILE:
