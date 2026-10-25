@@ -113,8 +113,16 @@ def hunter_email(first_name: str, last_name: str, company: str) -> Optional[Dict
         domain = get_smart_company_domain(company)
         if not domain:
             return None
+        # max_retries is really max ATTEMPTS: find_email_with_hunter loops
+        # `for attempt in range(max_retries)`. Passing 0 made that loop empty,
+        # so from 2026-09-07 until 2026-10-18 this rung never issued a single
+        # HTTP request — it fell straight through to "all retry attempts
+        # exhausted" and reported a miss. Hunter looked worthless because it
+        # was never asked (a sample lookup it had been "missing" returns at
+        # score 97 in 0.7s). 1 = one attempt, still no retry: this is the fast
+        # rung, and a retry would cost more than the answer is worth here.
         email, score = find_email_with_hunter(
-            first, last, domain, timeout=HUNTER_TIMEOUT_SECONDS, max_retries=0,
+            first, last, domain, timeout=HUNTER_TIMEOUT_SECONDS, max_retries=1,
         )
         email = (email or "").strip().lower()
         score = int(score or 0)
