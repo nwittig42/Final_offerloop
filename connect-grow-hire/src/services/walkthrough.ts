@@ -51,6 +51,10 @@ export interface WalkthroughState {
   noEmailIds?: string[];
   /** The Find reminder was closed. */
   reminderDismissedAt?: string;
+  /** The auto-opened popup was closed; don't open it again by itself. */
+  closedAt?: string;
+  /** They chose to skip the walkthrough. */
+  skippedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -82,7 +86,14 @@ export function normalizeWalkthrough(raw: unknown): WalkthroughState {
   const base: WalkthroughState = { ...fresh, ...s, status };
   // Older or partial shapes keep the status (and the Find reminder) but restart the steps.
   if (s.version !== WALKTHROUGH_VERSION || !STEPS.includes(s.step as WalkthroughStep)) {
-    return { ...fresh, status, reminderDismissedAt: s.reminderDismissedAt, createdAt: s.createdAt };
+    return {
+      ...fresh,
+      status,
+      reminderDismissedAt: s.reminderDismissedAt,
+      closedAt: s.closedAt,
+      skippedAt: s.skippedAt,
+      createdAt: s.createdAt,
+    };
   }
   const matches = Array.isArray(s.matches) ? s.matches : [];
   const selected = matches.find((m) => m.id === s.selectedId);
@@ -96,6 +107,15 @@ export function normalizeWalkthrough(raw: unknown): WalkthroughState {
 /** Still something to finish (drives the Find reminder). */
 export const walkthroughIncomplete = (s: WalkthroughState | null | undefined): boolean =>
   !!s && s.status !== "completed";
+
+/** Open the popup on its own: unfinished, and not closed or skipped before. */
+export const shouldAutoOpen = (s: WalkthroughState | null | undefined): boolean =>
+  !!s && walkthroughIncomplete(s) && !s.closedAt && !s.skippedAt;
+
+/** The pending record onboarding writes for a brand-new user. */
+export function newWalkthrough(now: string): WalkthroughState {
+  return { version: WALKTHROUGH_VERSION, status: "pending", step: "matches", createdAt: now };
+}
 
 function toMatch(p: Person): WalkthroughMatch {
   return {

@@ -31,6 +31,10 @@ export interface Person {
   orgId?: string;
   // Real graduation year from an org directory; absent when it doesn't list one.
   gradYear?: number | null;
+  // Every school they attended (OFF-57); [] when the source sent none.
+  schools?: string[];
+  // Year they joined their current company, when the ranker sent one.
+  joinedYear?: number | null;
 }
 
 function str(v: unknown): string {
@@ -80,6 +84,10 @@ export function personFromRanker(raw: Record<string, any>, index: number, deckId
     .filter(Boolean)
     .map((r: string) => r.charAt(0).toUpperCase() + r.slice(1));
 
+  const school = titleCase(str(p.college) || str(p.school) || str(p.university));
+  const sentSchools = Array.isArray(p.schools) ? p.schools.map(str).filter(Boolean) : [];
+  const schools = sentSchools.length ? sentSchools : school ? [school] : [];
+
   return {
     id,
     source: "recommended",
@@ -89,7 +97,9 @@ export function personFromRanker(raw: Record<string, any>, index: number, deckId
     title: titleCase(str(p.title) || str(p.job_title)),
     company: titleCase(str(p.company) || str(p.company_name)),
     location: titleCase(str(p.location) || [str(p.city), str(p.state)].filter(Boolean).join(", ")),
-    school: titleCase(str(p.college) || str(p.school) || str(p.university)),
+    school,
+    schools,
+    joinedYear: typeof p.joinedYear === "number" ? p.joinedYear : null,
     linkedinUrl: str(p.linkedinUrl) || str(p.linkedin_url) || str(p.linkedin),
     photoUrl: str(p.photo_url) || str(p.photoUrl) || str(p.picture),
     email: "",

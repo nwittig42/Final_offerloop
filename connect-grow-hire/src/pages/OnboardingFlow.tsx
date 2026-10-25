@@ -23,6 +23,7 @@ import { OB, obPrimaryButton } from "./onboardingTheme";
 import { OrgMembershipEditor } from "@/components/orgs/OrgMembershipEditor";
 import { useOrgs } from "@/hooks/useOrgs";
 import { trackFeatureActionCompleted } from "@/lib/analytics";
+import { newWalkthrough } from "@/services/walkthrough";
 
 // Resume-first onboarding: intro slides, then a single resume/LinkedIn page.
 // "builder" (the free resume generator) shares the resume phase on the rail.
@@ -117,6 +118,7 @@ export const OnboardingFlow = ({ onComplete, preview = false }: OnboardingFlowPr
     // A .edu unlocks student pricing (Pricing.tsx reads `isStudent`). With the
     // trial step gone this now derives from the sign-up email only.
     const isStudent = email.toLowerCase().trim().endsWith(".edu");
+    const now = new Date().toISOString();
     return {
       isStudent,
       profile: { fullName, firstName, lastName, email, phone: prefill.phone || "", linkedinUrl },
@@ -135,7 +137,9 @@ export const OnboardingFlow = ({ onComplete, preview = false }: OnboardingFlowPr
       careerTrackLabels: [],
       targetIndustries: [],
       goals: { careerTrack: "", careerTracks: [], targetIndustries: [] },
-      onboarding: { completedAt: new Date().toISOString() },
+      onboarding: { completedAt: now },
+      // Queues the first-email walkthrough, which opens on Find.
+      walkthrough: newWalkthrough(now),
       // Gmail isn't connected during onboarding anymore (OFF-50); this badges
       // the Settings Gmail card so connecting it is the next nudge.
       inboxConnectSkipped: true,

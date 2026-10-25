@@ -2,7 +2,8 @@
 // white surface with a soft shadow and no borders, the system font, a strict
 // black/grey text scale, grey capsule chips, and capsule buttons (blue for
 // the main action). Same content as the app's People card: who they are,
-// where they work, why we picked them, Info and Contact.
+// where they work, why we picked them, and Contact. The whole card opens
+// their profile; the buttons and links inside keep their own actions.
 import { Bookmark, Check, GraduationCap, Loader2, Mail, MapPin, User, Users, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { CompanyLogo } from "@/components/CompanyLogo";
@@ -27,18 +28,32 @@ const INK_2 = "#6E6E73";   // secondary text
 const INK_3 = "#86868B";   // tertiary text, icons
 const FILL = "#F5F5F7";    // grey fills: chips, secondary buttons
 
+// The fit label for a ranker score, or null below "Good fit".
+export function fitLabel(score: number | null): "Strong fit" | "Good fit" | null {
+  if (score === null || score < 6.5) return null;
+  return score >= 8 ? "Strong fit" : "Good fit";
+}
+
+// What Contact costs, as the hover title on the card's and the profile's button.
+export function contactButtonTitle(person: Person): string {
+  if (person.source === "sample") return "Example card";
+  if (person.source === "recommended") return "Finds their email and drafts an outreach (8 credits, refunded if no email is found)";
+  return person.email ? "Drafts an outreach email" : "Finds their email and drafts an outreach (free, already paid for in your search)";
+}
+
 function FitBadge({ score, sample }: { score: number | null; sample: boolean }) {
   if (sample) {
     return <span className="rounded-full px-2 py-[3px] text-[11px] font-semibold" style={{ background: FILL, color: INK_3 }}>Example</span>;
   }
-  if (score === null || score < 6.5) return null;
-  const strong = score >= 8;
+  const label = fitLabel(score);
+  if (!label) return null;
+  const strong = label === "Strong fit";
   return (
     <span
       className="rounded-full px-2 py-[3px] text-[11px] font-semibold"
       style={strong ? { background: "#E8F1FD", color: "#0066CC" } : { background: FILL, color: INK_2 }}
     >
-      {strong ? "Strong fit" : "Good fit"}
+      {label}
     </span>
   );
 }
@@ -103,7 +118,8 @@ interface PersonCardProps {
   person: Person;
   contactState: ContactState;
   onContact: () => void;
-  onInfo: () => void;
+  // Opens their profile; makes the whole card clickable (not for samples).
+  onOpen?: () => void;
   onDismiss?: () => void;
   // Top connection: gold ring + "Top match" capsule (placeholder until the
   // pairing algorithm picks these for real).
@@ -121,16 +137,31 @@ interface PersonCardProps {
   emailHref?: string | null;
 }
 
-export function PersonCard({ person, contactState, onContact, onInfo, onDismiss, featured = false, found = false, foundLabel = "Just found", bookmarked = false, onToggleBookmark, userSchool = null, contactHref = "/contacts", emailHref = null }: PersonCardProps) {
+export function PersonCard({ person, contactState, onContact, onOpen, onDismiss, featured = false, found = false, foundLabel = "Just found", bookmarked = false, onToggleBookmark, userSchool = null, contactHref = "/contacts", emailHref = null }: PersonCardProps) {
   const linkedIn = linkedInHref(person.linkedinUrl);
   const isSample = person.source === "sample";
   const reason = person.reasons[0] || (featured ? "Most in common with you" : "");
   const busy = isContactBusy(contactState);
   const drafted = contactState === "drafted";
+  const openable = !!onOpen && !isSample;
+  // Anything clickable inside the card keeps its click to itself.
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
 
   return (
     <article
-      className="group relative flex flex-col rounded-[22px] bg-white p-[18px] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)]"
+      {...(openable && {
+        role: "button",
+        tabIndex: 0,
+        "aria-label": `Open ${person.name}`,
+        onClick: onOpen,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            onOpen!();
+          }
+        },
+      })}
+      className={`group relative flex flex-col rounded-[22px] bg-white p-[18px] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)]${openable ? " cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0071E3] focus-visible:ring-offset-2" : ""}`}
       style={{
         fontFamily: APPLE_FONT,
         boxShadow: busy
@@ -145,7 +176,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
       {onDismiss && !isSample && (
         <button
           type="button"
-          onClick={onDismiss}
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
           aria-label={`Hide ${person.name}`}
           title="Not interested"
           className="absolute -left-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-white opacity-0 shadow-[0_1px_4px_rgba(0,0,0,0.15)] transition-opacity focus:opacity-100 group-hover:opacity-100"
@@ -180,7 +211,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
         {onToggleBookmark && !isSample && !busy && !drafted && (
           <button
             type="button"
-            onClick={onToggleBookmark}
+            onClick={(e) => { e.stopPropagation(); onToggleBookmark(); }}
             aria-pressed={bookmarked}
             aria-label={bookmarked ? `Remove ${person.name} from Saved` : `Save ${person.name} to Contacts`}
             title={bookmarked ? "Saved. Find it in Contacts > Saved" : "Save for later (goes to Contacts > Saved)"}
@@ -211,6 +242,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
       {person.email && (person.source === "directory" || person.orgBadge) && (
         <a
           href={`mailto:${person.email}`}
+          onClick={stop}
           className="mt-2.5 flex min-w-0 items-center gap-1.5 text-[12.5px] hover:underline"
           style={{ color: INK_2 }}
           title={person.email}
@@ -280,7 +312,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
           </div>
         </div>
       ) : drafted ? (
-        <div className="mt-auto flex gap-2 pt-4">
+        <div className="mt-auto flex gap-2 pt-4" onClick={stop}>
           <Link
             to={contactHref}
             className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[13px] font-medium transition-colors hover:bg-[#E8E8ED]"
@@ -307,16 +339,8 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
           )}
         </div>
       ) : (
-        <div className="mt-auto flex gap-2 pt-4">
+        <div className="mt-auto flex gap-2 pt-4" onClick={stop}>
           {linkedIn && <LinkedInLink href={linkedIn} name={person.name} />}
-          <button
-            type="button"
-            onClick={onInfo}
-            className="h-8 flex-1 rounded-full text-[13px] font-medium transition-colors hover:bg-[#E8E8ED]"
-            style={{ background: FILL, color: INK }}
-          >
-            Info
-          </button>
           {contactState === "no_email" ? (
             <span className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12px]" style={{ background: FILL, color: INK_3 }} title="No credits were charged">
               No email found
@@ -326,7 +350,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
               type="button"
               onClick={onContact}
               disabled={isSample}
-              title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : person.email ? "Drafts an outreach email" : "Finds their email and drafts an outreach (free, already paid for in your search)"}
+              title={contactButtonTitle(person)}
               className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
             >
               Contact

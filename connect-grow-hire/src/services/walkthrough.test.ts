@@ -13,10 +13,12 @@ import {
   WALKTHROUGH_VERSION,
   loadDraft,
   matchReasons,
+  newWalkthrough,
   normalizeWalkthrough,
   pickMatches,
   saveDraft,
   saveWalkthrough,
+  shouldAutoOpen,
   walkthroughIncomplete,
   type WalkthroughMatch,
 } from "./walkthrough";
@@ -140,5 +142,31 @@ describe("persistence", () => {
     expect(await loadDraft("u1", "ranker_c1")).toEqual({ to: "pat@x.com", subject: "Hi", body: "Hello" });
     firestore.getDoc.mockResolvedValueOnce({ exists: () => true, data: () => ({ emailSubject: "", emailBody: "" }) });
     expect(await loadDraft("u1", "ranker_c1")).toBeNull();
+  });
+});
+
+describe("shouldAutoOpen / newWalkthrough", () => {
+  const t = "2026-10-25T00:00:00Z";
+
+  it("builds the pending record onboarding writes", () => {
+    expect(newWalkthrough(t)).toEqual({ version: WALKTHROUGH_VERSION, status: "pending", step: "matches", createdAt: t });
+  });
+
+  it("opens for a fresh walkthrough", () => {
+    expect(shouldAutoOpen(newWalkthrough(t))).toBe(true);
+  });
+
+  it("stays closed once closed, skipped, completed, or missing", () => {
+    expect(shouldAutoOpen({ ...newWalkthrough(t), closedAt: t })).toBe(false);
+    expect(shouldAutoOpen({ ...newWalkthrough(t), skippedAt: t })).toBe(false);
+    expect(shouldAutoOpen({ ...newWalkthrough(t), status: "completed" })).toBe(false);
+    expect(shouldAutoOpen(null)).toBe(false);
+    expect(shouldAutoOpen(undefined)).toBe(false);
+  });
+
+  it("keeps closedAt and skippedAt through the reset branch", () => {
+    expect(normalizeWalkthrough({ version: 0, status: "pending", step: "bogus", closedAt: "x", skippedAt: "y" })).toMatchObject({
+      closedAt: "x", skippedAt: "y",
+    });
   });
 });
