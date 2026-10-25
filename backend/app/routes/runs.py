@@ -8,7 +8,10 @@ import traceback
 import threading
 from datetime import datetime
 from typing import Dict, Tuple, Optional
-from app.services.pdl_client import get_contact_identity, search_contacts_from_prompt
+# get_contact_identity is a pure dedup-key helper, no vendor call. PDL's
+# search_contacts_from_prompt used to be imported here too; the PDL rung was
+# removed from this ladder on 2026-08-31 and the import was left dangling.
+from app.services.pdl_client import get_contact_identity
 from app.services.prompt_parser import parse_search_prompt_structured
 from app.services import coresignal_client
 from flask import Blueprint, request, jsonify
@@ -126,14 +129,17 @@ def invalidate_contact_dedup_cache():
 @require_firebase_auth
 def prompt_search():
     """
-    Prompt-based contact search for all tiers. Parses natural language prompt,
-    runs PDL search, then same email/draft/save pipeline as free-run.
+    Prompt-based contact search for all tiers. Parses the natural language
+    prompt, runs the warehouse -> Coresignal -> Hunter ladder, then the same
+    email/draft/save pipeline as free-run.
     Request: { "prompt": "...", "batchSize": 5 }
     Response: same shape as free-run plus parsed_query.
     """
-    # PDL is the primary provider. PDL_OUTAGE_ACTIVE remains the global
-    # kill switch — set to True in feature_flags.py if the operator needs to
-    # take all contact search dark (e.g. PDL credits exhausted, vendor outage).
+    # PDL_OUTAGE_ACTIVE is legacy-named — PDL was dropped from this ladder on
+    # 2026-08-31 — but it is still the global kill switch for contact search.
+    # Set it True in feature_flags.py to take all contact search dark (vendor
+    # outage, credits exhausted). Renaming it is a separate change: it is read
+    # in several places and the name is load-bearing in operator runbooks.
     if PDL_OUTAGE_ACTIVE:
         return jsonify({"error": "service_unavailable", "message": "Contact search temporarily unavailable.", "code": "PDL_OUTAGE"}), 503
 
@@ -234,24 +240,28 @@ def prompt_search():
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
             }), 400
 
-        # Provider routing: PDL is primary. The pdl_client cache check happens
-        # FIRST inside search_contacts_from_prompt (Firestore, 30-day TTL) so
-        # a repeat query returns 0-credit cached contacts. PDL supports the
-        # full set of filters (school/alumni, company, title, location), so
-        # we no longer need the no-company 503 gate that existed during the
-        # Hunter bridge. Coresignal/Hunter remain wired up in code as a
-        # reliability fallback only if PDL itself is down.
+        # Provider ladder: firm_employees warehouse (free) -> Coresignal ->
+        # Hunter bridge. PDL is NOT in this path; its rung was removed on
+        # 2026-08-31 when the subscription was retired (see the note at the
+        # Coresignal call below). The comment that used to sit here claimed
+        # "PDL is primary" and survived that change by ~2 months, which is
+        # long enough to mislead a reader into thinking this route still
+        # spends PDL credits. Verified against the provider_calls ledger
+        # 2026-10-22: zero pdl/person_search rows in 30 days, 152
+        # coresignal/member_search.
         #
-        # Credit-efficiency: pdl_client.search_contacts_from_prompt now caps
-        # the PDL fetch at max_contacts + min(exclude_count, 3), so the
-        # worst-case credit burn per search is ~max_contacts + 3.
+        # This ladder duplicates app/services/engine_search.engine_search_contacts,
+        # which every other people-search surface routes through and which
+        # returns the same 4-tuple. Consolidating is worthwhile but is a
+        # behaviour-affecting refactor of the busiest route, so it is tracked
+        # separately rather than done in passing.
         # ---- JIT firm-employee cache lookup (Phase 3) ---------------------
-        # Check firm_employees BEFORE PDL. Gated by ENABLE_FIRM_CACHE_LOOKUP
+        # Check firm_employees BEFORE the vendor. Gated by ENABLE_FIRM_CACHE_LOOKUP
         # env flag (independent of the write flag). Returns cache hits in
         # App-shape with Email="" — the existing email-quality machinery
         # downstream flags them so nothing breaks. If cache fills the whole
-        # tier limit, PDL is skipped entirely (0 credits). If partial, PDL
-        # is called for the remainder and results are deduped.
+        # tier limit the vendor is skipped entirely (0 credits). If partial,
+        # Coresignal is called for the remainder and results are deduped.
         cache_hits: list[dict] = []
         cache_hit_metadata: dict | None = None
         try:
@@ -264,30 +274,30 @@ def prompt_search():
                 if cache_hits:
                     print(f"[FirmCache] LOOKUP hit — {len(cache_hits)}/{max_contacts} served from firm_employees")
         except Exception as e:
-            print(f"[FirmCache] lookup failed (non-fatal, falling through to PDL): {e}")
+            print(f"[FirmCache] lookup failed (non-fatal, falling through to the vendor): {e}")
             cache_hits = []
             cache_hit_metadata = None
 
         try:
             if len(cache_hits) >= max_contacts:
-                # Full cache hit — skip PDL entirely (0 credits).
+                # Full cache hit — skip the vendor entirely (0 credits).
                 contacts = cache_hits[:max_contacts]
                 retry_level_used = 0
                 already_saved_contacts = []
                 adjacency_metadata = cache_hit_metadata or {}
                 adjacency_metadata.setdefault("provider", "firm_cache")
-                print(f"[FirmCache] LOOKUP full-hit — skipped PDL, saved ~${max_contacts * 0.20:.2f} in credits")
+                print(f"[FirmCache] LOOKUP full-hit — skipped the vendor, saved ~${max_contacts * 0.08:.2f} in credits")
             else:
-                # Partial or empty cache — call PDL for the remainder. Cache
-                # hits are added to the exclusion set so PDL won't re-return them.
-                pdl_target = max_contacts - len(cache_hits)
-                pdl_exclude = set(seen_contact_set or set())
+                # Partial or empty cache — call the vendor for the remainder.
+                # Cache hits join the exclusion set so it can't re-sell them.
+                vendor_target = max_contacts - len(cache_hits)
+                vendor_exclude = set(seen_contact_set or set())
                 for ch in cache_hits:
                     fn = (ch.get("FirstName") or "").strip().lower()
                     ln = (ch.get("LastName") or "").strip().lower()
                     co = (ch.get("Company") or "").strip().lower()
                     if fn and ln and co:
-                        pdl_exclude.add((fn, ln, co))
+                        vendor_exclude.add((fn, ln, co))
                 # Provider ladder unified with the mobile engine
                 # (2026-08-27): warehouse hits stay first (free), then
                 # Coresignal PRIMARY for the remainder (photo-rich, current,
@@ -298,7 +308,7 @@ def prompt_search():
                 try:
                     if getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
                         remainder, retry_level_used, already_saved_contacts, remainder_meta = coresignal_client.search_contacts_from_prompt(
-                            parsed, pdl_target, exclude_keys=pdl_exclude, user_profile=user_data
+                            parsed, vendor_target, exclude_keys=vendor_exclude, user_profile=user_data
                         )
                         remainder_meta = remainder_meta or {}
                         remainder_meta.setdefault("provider", "coresignal")
