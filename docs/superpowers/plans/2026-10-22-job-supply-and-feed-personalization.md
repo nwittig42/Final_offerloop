@@ -84,9 +84,25 @@ campus programs), 5 manual rows. Dry run: ~3,577 early-career jobs in 8 minutes.
 Roughly +50% early-career supply, weighted to finance.
 
 Watch on first live run: with the tier-1 regex fix, a large share of the dry run's 3,107 tier-2
-jobs become tier-1, and tier-1 gates Firecrawl + PDL enrichment
-(`writer._apply_enrichment_gate`). Firecrawl is ~$10 at that volume; **get the PDL per-call cost
-before the run, not after.**
+jobs become tier-1, and tier-1 gates Firecrawl + PDL title enrichment
+(`writer._apply_enrichment_gate`). Firecrawl is ~$10 at that volume.
+
+**Corrected — the earlier "get the PDL per-call cost first" framing was wrong.** Title
+enrichment is not an open-ended per-call spend:
+
+- `pdl_title_cache.py:29-33` — a **fixed 50,000-credit pool, not monthly**, with a circuit
+  breaker at 45,000 (90%) and `MAX_PER_RUN = 100`. The crawl physically cannot overrun it; worst
+  case enrichment defers to the next run.
+- Enrichment is cached per **unique title slug** in `job_title_enrichments/{slug}`, so cost
+  scales with distinct titles, not job count. Thousands of jobs sharing "2027 Summer Analyst"
+  cost one credit between them.
+
+So the gate is **remaining pool headroom**, not price. Check it with:
+
+    PYTHONPATH=$PWD python -m backend.scripts.provider_spend_summary --days=30
+
+which prints `pdl_usage/title_enrich` credits used against the breaker, plus how many unique
+titles are already cached.
 
 ### B2. Workday + Avature board enumeration (free, highest new-inventory yield)
 Our `workday.csv` holds one URL per tenant. Workday tenants run many career sites and the
@@ -319,9 +335,40 @@ repeating in a feed within N days.
 
 ---
 
+## Adjacent finding: the Coresignal migration is incomplete on the busiest surface
+
+Not job-feed work, but it is live vendor spend and it surfaced while pricing B1.
+
+`engine_search.py` was built 2026-08-31 as "the one door every people-search surface walks
+through" — warehouse first, then Coresignal — and its docstring calls PDL **"the retired PDL
+key"**. Six surfaces route through it: `runs_similar`, the MCP `find_contacts`, `agent_actions`,
+`alumni_discovery`, `recruiter_finder`, `find_people_public`.
+
+**`runs.py` is not one of them.** The main website contact search still imports
+`pdl_client.search_contacts_from_prompt` directly and its comment at `runs.py:237-243` still
+says *"Provider routing: PDL is primary [...] Coresignal/Hunter remain wired up in code as a
+reliability fallback only if PDL itself is down."* The call order is firm cache → PDL →
+Coresignal for the remainder only. `PEOPLE_DATA_LABS_API_KEY` is still populated.
+
+Why it matters: `metering.PROVIDER_RATES` prices **PDL at $0.20/credit against Coresignal at
+$0.04 member_search / $0.08 member_collect** — PDL is 2.5-5x the cost. So either the highest
+-traffic search path is paying a premium the rest of the app stopped paying, or the key is dead
+and every website search burns a failed round-trip before falling back.
+
+Both clients are metered (`@meter_call("pdl", "person_search")` at `pdl_client.py:3643`,
+`@meter_call("coresignal", ...)` at `coresignal_client.py:72`), so `provider_calls` settles it.
+Run the summary above: if PDL rows appear in the last 30 days, `runs.py` is still spending on it.
+
+Next step either way: point `runs.py` at `engine_search`, which is a drop-in — it returns the
+same 4-tuple contract as `pdl_client.search_contacts_from_prompt` specifically so every call
+site can swap without changes.
+
+---
+
 ## Decisions needed from Nick
 
-1. **PDL per-call cost** — gates B1's first live run (Firecrawl is ~$10; PDL unknown).
+1. **PDL title-enrichment headroom** — gates B1's first live run. Not a per-call price; see B1.
+   Run `provider_spend_summary` and check credits used against the 45,000 breaker.
 2. **Phase B stopping point.** B1+B2 are free and large. B3 reuses an existing subscription. B4
    is real build effort — worth it only if B3's numbers are poor.
 3. **Does personalization wait for Phase B?** C1-C3 are independently worth doing and do not
@@ -333,3 +380,7 @@ repeating in a feed within N days.
    Job Board visit catches the user when they care but reaches fewer of them.
 6. **What is an industry match worth in C2?** Needs a number. Location is 10 and field alignment
    is 40, so somewhere between those.
+7. **Is `runs.py` supposed to still be on PDL?** See the adjacent finding. If PDL is retired as
+   `engine_search` claims, the website's main contact search should move to `engine_search` and
+   the PDL key should come out of the people-search path (the job pipeline's title enrichment is
+   a separate pool and would keep working).
