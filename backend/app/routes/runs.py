@@ -154,6 +154,32 @@ def cancel_prompt_search():
     return jsonify({"ok": True})
 
 
+_LATE_EMAIL_WAIT_SECONDS = 120
+
+
+def _finish_emails_later(enrichment_id, late, user_id):
+    """Background half of the search's email pass. `late` is
+    [(pid, contact, doc_ref)] for saved contacts the bulk job covers."""
+    try:
+        from app.services import fullenrich_client
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        db = get_db()
+        ready, hits = fullenrich_client.fetch_bulk(enrichment_id, wait_seconds=_LATE_EMAIL_WAIT_SECONDS, db=db)
+        gained = []
+        for pid, contact, ref in late:
+            hit = (hits or {}).get(pid)
+            if not hit:
+                continue
+            ref.update({"email": hit["email"], "emailSource": "fullenrich_backfill", "emailVerified": True})
+            gained.append({**contact, "Email": hit["email"], "WorkEmail": hit["email"],
+                           "EmailSource": "fullenrich_backfill", "EmailVerified": True})
+        if gained:
+            cache_pdl_contacts(gained, shape="app", async_write=True)
+        print(f"[ContactSearch] late email pass uid={user_id}: {len(gained)}/{len(late)} found (ready={ready})")
+    except Exception as e:
+        print(f"[ContactSearch] late email pass failed: {e}")
+
+
 # Contact on a Find card whose search came back without an email (OFF-56).
 # The search already charged find_contact (which includes the email), so this
 # second try is free, and it runs once per contact. Same ladder as the search's
@@ -877,6 +903,9 @@ def prompt_search():
         _FE_BACKFILL_CAP = 6
         _fe_wait = int(os.environ.get("FE_SEARCH_WAIT_SECONDS", "75"))
         _gained_email = []
+        # FullEnrich job still running when the wait ran out (preview only):
+        # finished in the background after the response, see below.
+        _fe_pending_eid, _fe_pending = "", []
         _missing = [c for c in contacts
                     if not (c.get("Email") or c.get("email") or "").strip()][:_FE_BACKFILL_CAP]
         if _missing:
@@ -922,6 +951,8 @@ def prompt_search():
                     if _eid:
                         _ready, _hits = fullenrich_client.fetch_bulk(
                             _eid, wait_seconds=_fe_wait, db=_fe_db)
+                        if not _ready and outreach_mode == "preview":
+                            _fe_pending_eid, _fe_pending = _eid, list(_still)
                         for _i, _hit in (_hits or {}).items():
                             _c = _still[int(_i)]
                             _c["Email"] = _hit["email"]
@@ -1259,6 +1290,7 @@ def prompt_search():
             print(f"[Runs] Prompt-search: skipping Firestore save")
         credits_used = 0
         credits_remaining = None
+        saved_refs = {}
         if db and user_id:
             try:
                 credits_amount = CREDIT_COSTS['find_contact'] * len(contacts)
@@ -1384,7 +1416,8 @@ def prompt_search():
                         contact_doc["draftToEmail"] = contact.get("_sentRecipientEmail") or contact_doc["draftToEmail"]
                         if contact.get("gmailThreadId"):
                             contact_doc["gmailThreadId"] = contact["gmailThreadId"]
-                    contacts_ref.add(contact_doc)
+                    _, _doc_ref = contacts_ref.add(contact_doc)
+                    saved_refs[id(contact)] = _doc_ref
                     saved_count += 1
                     # Avoid duplicates within same batch
                     if email:
@@ -1397,6 +1430,18 @@ def prompt_search():
             except Exception as save_error:
                 print(f"⚠️ Error saving contacts (prompt-search): {save_error}")
                 traceback.print_exc()
+
+        # Late email pass: the FullEnrich job usually finishes 20-60s after the
+        # search's short wait gives up, so finish it in the background and
+        # write the emails onto the saved contacts; Find refetches Contacts and
+        # the cards fill in. The search itself never waits longer.
+        emails_pending = 0
+        if _fe_pending_eid and saved_refs:
+            _late = [(str(i), c, saved_refs[id(c)]) for i, c in enumerate(_fe_pending) if id(c) in saved_refs]
+            if _late:
+                emails_pending = len(_late)
+                threading.Thread(target=_finish_emails_later, args=(_fe_pending_eid, _late, user_id),
+                                 daemon=True).start()
 
         # Metrics: log email_generated per contact with email (outside save block
         # so events fire even if Firestore save fails — emails were already generated)
@@ -1430,6 +1475,7 @@ def prompt_search():
             "tier": user_tier,
             "user_email": user_email,
             "credits_used": credits_used,
+            "emails_pending": emails_pending,
             "parsed_query": parsed_query_payload,
             "search_broadened": search_broadened,
             "retry_level_used": retry_level_used,

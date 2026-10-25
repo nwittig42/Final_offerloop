@@ -48,6 +48,10 @@ const COUNT_KEY = "offerloop_find_count";
 // are mixed in among recommended cards.
 const FOUND_LEAD = 8;
 const FOUND_EVERY = 6;
+// How long, and how often, to re-read Contacts for late emails. The backend
+// gives the email lookup 2 minutes after the search returns.
+const EMAIL_POLL_MS = 130_000;
+const EMAIL_POLL_EVERY = 6_000;
 // How many people lead the feed as "Top connections".
 const TOP_COUNT = 4;
 // Written by the landing page hero search (HeroSearchCTA.PENDING_QUERY_KEY).
@@ -268,6 +272,9 @@ const FindPage: React.FC = () => {
   const [resultsLabel, setResultsLabel] = useState("");
   const [resultsNote, setResultsNote] = useState<string | null>(null);
   const [readAs, setReadAs] = useState<string[]>([]);
+  // Emails the backend is still finding after the search returned; Contacts
+  // is refetched until this time so the cards fill in (OFF-56).
+  const [emailPollUntil, setEmailPollUntil] = useState(0);
   // How many people a search finds: 1..the plan's cap, remembered per browser.
   const maxCount = TIER_CONFIGS[(authUser?.tier as keyof typeof TIER_CONFIGS) || "free"]?.maxContacts ?? 3;
   const [count, setCountState] = useState(() => {
@@ -308,6 +315,7 @@ const FindPage: React.FC = () => {
       const pq = (res as { parsed_query?: Parameters<typeof describeParse>[0] & { org_hint?: { id: string; name: string; shortName: string }; judge_rejected?: number } }).parsed_query;
       setOrgHint(pq?.org_hint ?? null);
       setReadAs(describeParse(pq));
+      if ((res as { emails_pending?: number }).emails_pending) setEmailPollUntil(Date.now() + EMAIL_POLL_MS);
       const saved = res.already_saved_contacts?.length ?? 0;
       const found = (res.contacts || []).length;
       const skipped = found < searchCount ? pq?.judge_rejected ?? 0 : 0;
@@ -399,6 +407,15 @@ const FindPage: React.FC = () => {
     ? found.filter((f) => f.query === activeFilter).map((f) => f.person)
     : found.slice(0, FOUND_LEAD).map((f) => f.person);
   const foundMixed = activeFilter ? [] : found.slice(FOUND_LEAD).map((f) => f.person);
+  const missingEmails = (results ?? []).some((p) => !p.email && !bookmarks.contactFor(p)?.email);
+  useEffect(() => {
+    if (!emailPollUntil || !missingEmails) return;
+    const t = setInterval(() => {
+      if (Date.now() > emailPollUntil) { setEmailPollUntil(0); return; }
+      void queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+    }, EMAIL_POLL_EVERY);
+    return () => clearInterval(t);
+  }, [emailPollUntil, missingEmails, queryClient]);
   const foundLinkedIns = useMemo(
     () => new Set(found.map((f) => normalizeLinkedIn(f.person.linkedinUrl)).filter(Boolean)),
     [found],
@@ -523,9 +540,11 @@ const FindPage: React.FC = () => {
   }
 
   const inSearch = results !== null || searching;
+  // Search cards pick up emails that arrived after the search returned.
+  const withLateEmail = (p: Person): Person => (p.email ? p : { ...p, email: bookmarks.contactFor(p)?.email || "" });
   // Someone already in "Recently found" doesn't show twice in the feed.
   const people = inSearch
-    ? results ?? []
+    ? (results ?? []).map(withLateEmail)
     : recommendedPeople.filter((p) => !foundLinkedIns.has(normalizeLinkedIn(p.linkedinUrl)));
 
   const card = (p: Person, featured = false, found = false, foundLabel?: string) => (
