@@ -643,29 +643,43 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
       : 0;
 
   // The matches step is a wide card gallery; everything else is a reading column.
-  const shell = (content: React.ReactNode, opts: { wide?: boolean } = {}) => (
-    <div className="min-h-screen flex flex-col" style={{ background: OB.pageBg, color: OB.heading, fontFamily: OB.fontBody }}>
-      <header
-        style={{ padding: "20px clamp(16px, 5vw, 40px)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
-      >
-        <img src={OfferloopLogo} alt="Offerloop" style={{ height: 34 }} />
-        <button type="button" onClick={saveAndExit} style={linkButton}>
-          Save and finish later
-        </button>
-      </header>
-      <main className="flex-1 flex justify-center" style={{ padding: "8px 16px 48px" }}>
-        <div style={{ width: "100%", maxWidth: opts.wide ? 1080 : 640 }}>
-          <Progress index={progressIndex} />
-          {notice && (
-            <p role={notice.tone === "error" ? "alert" : "status"} style={{ ...notStyle(notice.tone), margin: "0 0 18px", maxWidth: 640 }}>
-              {notice.text}
-            </p>
-          )}
-          {content}
-        </div>
-      </main>
+  const body = (content: React.ReactNode, opts: { wide?: boolean }) => (
+    <div style={{ width: "100%", maxWidth: opts.wide ? 1080 : 640 }}>
+      <Progress index={progressIndex} />
+      {notice && (
+        <p role={notice.tone === "error" ? "alert" : "status"} style={{ ...notStyle(notice.tone), margin: "0 0 18px", maxWidth: 640 }}>
+          {notice.text}
+        </p>
+      )}
+      {content}
     </div>
   );
+  const shell = (content: React.ReactNode, opts: { wide?: boolean } = {}) =>
+    mode === "modal" ? (
+      // Inside the pop-up: no page background or logo; the dialog's X sits top right.
+      <div style={{ color: OB.heading, fontFamily: OB.fontBody, padding: "18px clamp(16px, 4vw, 32px) 32px" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", paddingRight: 36, marginBottom: 8 }}>
+          <button type="button" onClick={saveAndExit} style={linkButton}>
+            Save and finish later
+          </button>
+        </div>
+        <div className="flex justify-center">{body(content, opts)}</div>
+      </div>
+    ) : (
+      <div className="min-h-screen flex flex-col" style={{ background: OB.pageBg, color: OB.heading, fontFamily: OB.fontBody }}>
+        <header
+          style={{ padding: "20px clamp(16px, 5vw, 40px)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
+        >
+          <img src={OfferloopLogo} alt="Offerloop" style={{ height: 34 }} />
+          <button type="button" onClick={saveAndExit} style={linkButton}>
+            Save and finish later
+          </button>
+        </header>
+        <main className="flex-1 flex justify-center" style={{ padding: "8px 16px 48px" }}>
+          {body(content, opts)}
+        </main>
+      </div>
+    );
 
   const h1 = (text: React.ReactNode) => (
     <h1
@@ -1014,7 +1028,15 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
             Search on Find
           </button>
           {!matchesFailed && !preview && (
-            <button type="button" onClick={() => navigate("/account-settings")} style={{ ...linkButton, marginTop: 4 }}>
+            <button
+              type="button"
+              onClick={() => {
+                // In the pop-up, record the close before leaving Find.
+                if (mode === "modal") onExitRef.current?.("later");
+                navigate("/account-settings");
+              }}
+              style={{ ...linkButton, marginTop: 4 }}
+            >
               Add target companies in Settings
             </button>
           )}

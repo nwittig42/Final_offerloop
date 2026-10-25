@@ -35,6 +35,8 @@ import {
   personFromRanker, personFromSavedSearch, personFromSearch, type Person,
 } from "@/components/find/people/peopleModel";
 import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder";
+import { WalkthroughDialog } from "@/components/walkthrough/WalkthroughDialog";
+import { useFindWalkthrough } from "@/components/walkthrough/useFindWalkthrough";
 
 // First screen loads 40 people; scrolling near the bottom pulls 20 more.
 const FIRST_PAGE = 40;
@@ -158,9 +160,13 @@ const FindPage: React.FC = () => {
   // companies in parallel, mixed round-robin so one firm doesn't take over.
   // pageParam carries who's been shown and which seed comes next.
   type FeedCursor = { seen: string[]; next: number };
+  // The first-email pop-up. While it's open (or might auto-open) the feed
+  // skips paid lookups, so the walkthrough's people get them first.
+  const walkthrough = useFindWalkthrough(IS_DEV_PREVIEW ? undefined : user?.uid);
+  const { holdPaidLookups } = walkthrough;
   const recommended = useInfiniteQuery({
-    queryKey: ["findRecommended-v2", user?.uid, seeds],
-    enabled: !!user?.uid && !IS_DEV_PREVIEW && feedProfile !== null,
+    queryKey: ["findRecommended-v2", user?.uid, seeds, holdPaidLookups],
+    enabled: !!user?.uid && !IS_DEV_PREVIEW && feedProfile !== null && walkthrough.loaded,
     initialPageParam: { seen: [], next: 0 } as FeedCursor,
     staleTime: 10 * 60 * 1000,
     queryFn: async ({ pageParam: rawParam }) => {
@@ -174,8 +180,10 @@ const FindPage: React.FC = () => {
       const seen = new Set(pageParam.seen);
 
       const requests = [
-        ...(first ? [apiService.getRankerCandidates({ limit: want, exclude: pageParam.seen })] : []),
-        ...batch.map((company) => apiService.getRankerCandidates({ limit: perCompany, company, exclude: pageParam.seen })),
+        ...(first ? [apiService.getRankerCandidates({ limit: want, exclude: pageParam.seen, allowPaidLookups: !holdPaidLookups })] : []),
+        ...batch.map((company) => apiService.getRankerCandidates({
+          limit: perCompany, company, exclude: pageParam.seen, allowPaidLookups: !holdPaidLookups,
+        })),
       ];
       const settled = await Promise.allSettled(requests);
       if (settled.every((r) => r.status === "rejected")) throw new Error("Couldn't load recommendations");
@@ -207,7 +215,8 @@ const FindPage: React.FC = () => {
     () => (recommended.data?.pages ?? []).flatMap((p) => p?.people ?? []).filter((p) => !dismissed.has(p.id)),
     [recommended.data, dismissed],
   );
-  const recommendedLoading = recommended.isLoading && !IS_DEV_PREVIEW;
+  // Also "loading" while the walkthrough state loads (the feed waits on it).
+  const recommendedLoading = (recommended.isLoading || (!!user?.uid && !walkthrough.loaded)) && !IS_DEV_PREVIEW;
   // Nothing to show after loading: ask for dream companies right in the feed.
   const feedEmpty = !recommendedLoading && feedProfile !== null && recommendedPeople.length === 0 && !recommended.hasNextPage;
 
@@ -534,7 +543,9 @@ const FindPage: React.FC = () => {
           <GoalsPromptBanner />
           <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#F5F5F7]">
             <div className="mx-auto max-w-[1320px] px-6 pb-16 pt-4 sm:px-10">
-              {user?.uid && !IS_DEV_PREVIEW && <FirstEmailReminder uid={user.uid} />}
+              {user?.uid && !IS_DEV_PREVIEW && (
+                <FirstEmailReminder uid={user.uid} state={walkthrough.state} onContinue={walkthrough.openNow} />
+              )}
               <div className="mt-4" data-tour="tour-search-form">
                 <PeopleSearchBar
                   query={query}
@@ -771,6 +782,7 @@ const FindPage: React.FC = () => {
         }))}
         onDismiss={(id) => setTrayPeople((list) => list.filter((q) => q.id !== id))}
       />
+      {!IS_DEV_PREVIEW && <WalkthroughDialog open={walkthrough.open} onExit={walkthrough.exit} />}
     </SidebarProvider>
   );
 };

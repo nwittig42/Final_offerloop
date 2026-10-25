@@ -158,6 +158,24 @@ describe("WalkthroughFlow, modal mode", () => {
     expect(screen.getByTestId("where")).toHaveTextContent(/^\/find$/);
   });
 
+  it('modal mode: "Add target companies in Settings" calls onExit("later") and opens Settings', async () => {
+    const { s } = makeServices(null, { loadPeople: vi.fn(async () => ({ people: [], reason: "sparse_profile" })) });
+    const { onExit } = renderModal(s);
+    fireEvent.click(await screen.findByRole("button", { name: "Add target companies in Settings" }));
+    expect(onExit).toHaveBeenCalledWith("later");
+    expect(await screen.findByTestId("left")).toHaveTextContent("/account-settings");
+  });
+
+  it("modal mode: no full-page frame (no logo), but Save and finish later is still there", async () => {
+    const { s } = makeServices();
+    const { onExit, container } = renderModal(s);
+    await screen.findByRole("list", { name: "Your matches" });
+    expect(screen.queryByRole("img", { name: "Offerloop" })).not.toBeInTheDocument();
+    expect(container.querySelector(".min-h-screen")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save and finish later" }));
+    expect(onExit).toHaveBeenCalledWith("later");
+  });
+
   it('modal mode: a completed walkthrough calls onExit("find")', async () => {
     const { s } = makeServices({ version: WALKTHROUGH_VERSION, status: "completed", step: "draft" });
     const { onExit } = renderModal(s);

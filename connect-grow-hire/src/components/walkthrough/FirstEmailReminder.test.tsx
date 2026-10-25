@@ -7,20 +7,23 @@ vi.mock("@/lib/firebase", () => ({ db: {}, auth: { currentUser: null } }));
 import { FirstEmailReminder } from "./FirstEmailReminder";
 import type { WalkthroughState } from "@/services/walkthrough";
 
-const renderWith = (state: WalkthroughState | null, save = vi.fn(async () => {})) => {
+const renderWith = (state: WalkthroughState | null, save = vi.fn(async () => {}), onContinue = vi.fn()) => {
   render(
     <MemoryRouter>
-      <FirstEmailReminder uid="u1" load={async () => state} save={save} />
+      <FirstEmailReminder uid="u1" state={state} onContinue={onContinue} save={save} />
     </MemoryRouter>,
   );
   return save;
 };
 
 describe("FirstEmailReminder", () => {
-  it("shows while the walkthrough is incomplete and links back to it", async () => {
-    renderWith({ version: 1, status: "in_progress", step: "matches" });
+  it("shows while the walkthrough is incomplete; Continue reopens the pop-up", async () => {
+    const onContinue = vi.fn();
+    renderWith({ version: 1, status: "in_progress", step: "matches" }, vi.fn(async () => {}), onContinue);
     expect(await screen.findByText("Finish your first email")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue" })).toHaveAttribute("href", "/get-started");
+    expect(screen.queryByRole("link", { name: "Continue" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
   it("mentions the saved draft", async () => {
@@ -39,7 +42,7 @@ describe("FirstEmailReminder", () => {
     ] as Array<WalkthroughState | null>) {
       const { unmount } = render(
         <MemoryRouter>
-          <FirstEmailReminder uid="u1" load={async () => state} save={vi.fn()} />
+          <FirstEmailReminder uid="u1" state={state} onContinue={vi.fn()} save={vi.fn()} />
         </MemoryRouter>,
       );
       await new Promise((r) => setTimeout(r, 0));
