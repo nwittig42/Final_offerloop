@@ -16,6 +16,7 @@ vi.mock("@/services/api", () => ({ apiService: {}, BACKEND_URL: "" }));
 vi.mock("@/services/firebaseApi", () => ({ firebaseApi: {} }));
 
 import { WalkthroughFlow, type WalkthroughExit } from "./WalkthroughFlow";
+import { useFindWalkthrough } from "./useFindWalkthrough";
 import { PREVIEW_PEOPLE, type WalkthroughServices } from "@/pages/walkthroughServices";
 import { WALKTHROUGH_VERSION, pickMatches, type EmailDraft, type WalkthroughState } from "@/services/walkthrough";
 
@@ -181,5 +182,41 @@ describe("WalkthroughFlow, modal mode", () => {
     const { onExit } = renderModal(s);
     await waitFor(() => expect(onExit).toHaveBeenCalledWith("find"));
     expect(screen.queryByTestId("left")).not.toBeInTheDocument();
+  });
+
+  it("closing the pop-up while matches are still loading keeps closedAt (the flow doesn't save after it's gone)", async () => {
+    // One saved walkthrough shared by the pop-up's owner (the hook) and the flow, like users/{uid}.walkthrough.
+    let stored: WalkthroughState | null = { version: WALKTHROUGH_VERSION, status: "pending", step: "matches" };
+    const load = async () => stored;
+    const save = async (_uid: string, next: WalkthroughState) => {
+      stored = next;
+    };
+    let finishPeople: (v: { people: typeof PREVIEW_PEOPLE }) => void = () => {};
+    const { s } = makeServices(null, {
+      loadState: vi.fn(load),
+      saveState: vi.fn(save),
+      loadPeople: vi.fn(() => new Promise<{ people: typeof PREVIEW_PEOPLE }>((r) => (finishPeople = r))),
+    });
+    const Harness = () => {
+      const w = useFindWalkthrough("u1", { load, save });
+      return (
+        <>
+          <button type="button" onClick={() => w.exit("later")}>Close pop-up</button>
+          {w.open && <WalkthroughFlow mode="modal" services={s} gmailReturnPath="/find?walkthrough=1" onExit={w.exit} />}
+        </>
+      );
+    };
+    render(
+      <MemoryRouter initialEntries={["/find"]}>
+        <Harness />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(s.loadPeople).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Close pop-up" }));
+    await waitFor(() => expect(stored?.closedAt).toEqual(expect.any(String)));
+    // The matches arrive after the pop-up is gone.
+    finishPeople({ people: PREVIEW_PEOPLE });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stored?.closedAt).toEqual(expect.any(String));
   });
 });

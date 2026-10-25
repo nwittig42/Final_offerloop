@@ -160,12 +160,14 @@ const FindPage: React.FC = () => {
   // companies in parallel, mixed round-robin so one firm doesn't take over.
   // pageParam carries who's been shown and which seed comes next.
   type FeedCursor = { seen: string[]; next: number };
-  // The first-email pop-up. While it's open (or might auto-open) the feed
-  // skips paid lookups, so the walkthrough's people get them first.
+  // The first-email pop-up. Feed pages fetched while it's open (or might
+  // auto-open) skip paid lookups, so the walkthrough's people get them first.
+  // Read through a ref: closing it shouldn't refetch the feed.
   const walkthrough = useFindWalkthrough(IS_DEV_PREVIEW ? undefined : user?.uid);
-  const { holdPaidLookups } = walkthrough;
+  const holdPaidLookupsRef = useRef(walkthrough.holdPaidLookups);
+  holdPaidLookupsRef.current = walkthrough.holdPaidLookups;
   const recommended = useInfiniteQuery({
-    queryKey: ["findRecommended-v2", user?.uid, seeds, holdPaidLookups],
+    queryKey: ["findRecommended-v2", user?.uid, seeds],
     enabled: !!user?.uid && !IS_DEV_PREVIEW && feedProfile !== null && walkthrough.loaded,
     initialPageParam: { seen: [], next: 0 } as FeedCursor,
     staleTime: 10 * 60 * 1000,
@@ -178,12 +180,11 @@ const FindPage: React.FC = () => {
       const batch = seeds.slice(pageParam.next, pageParam.next + (first ? 4 : 2));
       const perCompany = Math.ceil(want / Math.max(1, batch.length)) + 4;
       const seen = new Set(pageParam.seen);
+      const allowPaidLookups = !holdPaidLookupsRef.current;
 
       const requests = [
-        ...(first ? [apiService.getRankerCandidates({ limit: want, exclude: pageParam.seen, allowPaidLookups: !holdPaidLookups })] : []),
-        ...batch.map((company) => apiService.getRankerCandidates({
-          limit: perCompany, company, exclude: pageParam.seen, allowPaidLookups: !holdPaidLookups,
-        })),
+        ...(first ? [apiService.getRankerCandidates({ limit: want, exclude: pageParam.seen, allowPaidLookups })] : []),
+        ...batch.map((company) => apiService.getRankerCandidates({ limit: perCompany, company, exclude: pageParam.seen, allowPaidLookups })),
       ];
       const settled = await Promise.allSettled(requests);
       if (settled.every((r) => r.status === "rejected")) throw new Error("Couldn't load recommendations");

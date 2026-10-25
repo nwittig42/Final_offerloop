@@ -271,10 +271,29 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
   // State changes are saved but never wait on the save: a failed write just
   // means a refresh resumes a step earlier.
   const stateRef = useRef<WalkthroughState | null>(null);
+  // Once the flow is gone (the pop-up was closed) a late async step must not
+  // save: its state predates the close and would wipe closedAt.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const update = useCallback(
     (patch: Partial<WalkthroughState>) => {
       const base = stateRef.current ?? normalizeWalkthrough(null);
-      const next: WalkthroughState = { ...base, ...patch, version: WALKTHROUGH_VERSION };
+      const next: WalkthroughState = {
+        ...base,
+        ...patch,
+        version: WALKTHROUGH_VERSION,
+        // How the pop-up was closed or skipped, and the reminder's dismissal,
+        // are never undone by a step change.
+        closedAt: patch.closedAt ?? base.closedAt,
+        skippedAt: patch.skippedAt ?? base.skippedAt,
+        reminderDismissedAt: patch.reminderDismissedAt ?? base.reminderDismissedAt,
+      };
+      if (!mountedRef.current) return next;
       stateRef.current = next;
       setState(next);
       if (uid) services.saveState(uid, next).catch((e) => console.warn("[walkthrough] progress save failed", e));
