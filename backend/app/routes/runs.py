@@ -902,6 +902,11 @@ def prompt_search():
         # stay email-less rather than blocking forever.
         _FE_BACKFILL_CAP = 6
         _fe_wait = int(os.environ.get("FE_SEARCH_WAIT_SECONDS", "75"))
+        if outreach_mode == "preview":
+            # Preview (Find) finishes the job in the background and the cards
+            # fill in (_finish_emails_later), so waiting here only delays the
+            # results; one quick poll still catches jobs that finish at once.
+            _fe_wait = min(_fe_wait, 1)
         _gained_email = []
         # FullEnrich job still running when the wait ran out (preview only):
         # finished in the background after the response, see below.
