@@ -56,7 +56,12 @@ logger = logging.getLogger("metering")
 # ---------------------------------------------------------------------------
 
 PROVIDER_RATES: Dict[str, Dict[str, float]] = {
-    "pdl":         {"person_search": 0.20, "person_enrich": 0.20},
+    # title_enrich draws on the same fixed 50k pool as the person endpoints
+    # (see pdl_title_cache). It is the largest PDL consumer by volume — 17k
+    # credits as of 2026-10-22 — and was unmetered until then, so none of that
+    # spend appeared in provider_calls or reached the spend alerter.
+    "pdl":         {"person_search": 0.20, "person_enrich": 0.20,
+                    "title_enrich": 0.20},
     "coresignal":  {"member_search": 0.04, "member_collect": 0.08},
     "hunter":      {"domain_search": 0.004, "email_finder": 0.003, "email_verify": 0.002},
     "apify":       {"linkedin_posts": 0.005, "sales_nav": 0.005},
@@ -401,6 +406,12 @@ def _credits_for(provider: str, endpoint: str, result: Any, kwargs: Dict[str, An
             return 0
         if provider == "pdl" and endpoint == "person_enrich":
             return 1 if result else 0
+        if provider == "pdl" and endpoint == "title_enrich":
+            # 1 per API call even on a no-match, to match the pool counter:
+            # pdl_title_cache calls _increment_usage() unconditionally after
+            # the request returns. Keep these two in step or the ledger and
+            # the circuit breaker will disagree about how much is left.
+            return 1
         if provider == "coresignal" and endpoint == "member_search":
             # search_contacts_from_prompt returns
             # (contacts, retry_level, saved, meta)

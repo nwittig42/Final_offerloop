@@ -2866,9 +2866,16 @@ def clean_location_name(location, use_pdl_api=True):
     return expanded_location
 
 
+@meter_call("pdl", "title_enrich")
 def enrich_job_title_with_pdl(job_title):
     """Use PDL Job Title Enrichment API to get standardized job titles
     OPTIMIZED: Uses connection pooling for better performance
+
+    Metered: this is the largest PDL consumer by volume (17k credits of the
+    fixed 50k pool as of 2026-10-22) and used to be the only PDL endpoint
+    with no @meter_call, so its spend never reached provider_calls or the
+    spend alerter. Callers go through pdl_title_cache, which only reaches
+    here on a cache miss, so one call here is one billed credit.
     """
     try:
         print(f"Enriching job title: {job_title}")

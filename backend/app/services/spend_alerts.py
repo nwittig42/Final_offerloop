@@ -259,19 +259,35 @@ def check_and_alert(force: bool = False) -> Dict[str, Any]:
     # metering row was missed. Coresignal's tank is the one-time grant
     # (never resets); FullEnrich's is the monthly subscription allowance.
     if db is not None:
+        # PDL's title-enrichment pool. Budget is the CIRCUIT BREAKER (45k of
+        # the 50k pool), not the pool itself, because the breaker is where
+        # enrichment actually stops — matching "the docs the clients stop on".
+        # Until 2026-10-22 this pool had no gauge and enrich_job_title_with_pdl
+        # had no @meter_call, so 17k credits of burn were invisible to both the
+        # dollar windows and these gauges. It is also the one tank that fails
+        # silently: when it trips, job titles just stop being standardised.
+        try:
+            from app.services.pdl_title_cache import TOTAL_BUDGET_CIRCUIT_BREAKER
+            _pdl_budget = float(TOTAL_BUDGET_CIRCUIT_BREAKER)
+        except Exception:  # noqa: BLE001
+            _pdl_budget = 45_000.0
+
+        # (kind, doc_path, budget, period_key, label, spend_field)
         gauges = [
             ("fullenrich_tank", ("meta", "fullenrichBudget"),
              float(os.getenv("FULLENRICH_BUDGET") or 450),
-             now.strftime("%Y-%m"), "FullEnrich monthly credits"),
+             now.strftime("%Y-%m"), "FullEnrich monthly credits", "spent_estimate"),
             ("coresignal_tank", ("meta", "coresignalTestBudget"),
              float(os.getenv("CORESIGNAL_TEST_BUDGET") or 1500),
-             "grant", "Coresignal grant credits"),
+             "grant", "Coresignal grant credits", "spent_estimate"),
+            ("pdl_title_tank", ("pdl_usage", "title_enrich"),
+             _pdl_budget, "pool", "PDL title-enrichment pool", "credits_used"),
         ]
-        for kind, doc_path, budget, period_key, label in gauges:
+        for kind, doc_path, budget, period_key, label, spend_field in gauges:
             try:
                 snap = db.collection(doc_path[0]).document(doc_path[1]).get()
                 doc = (snap.to_dict() or {}) if snap.exists else {}
-                tank_spent = float(doc.get("spent_estimate", 0.0))
+                tank_spent = float(doc.get(spend_field, 0.0) or 0.0)
                 # The FullEnrich doc is month-stamped; an older month means
                 # the counter has effectively reset to zero.
                 if kind == "fullenrich_tank" and doc.get("month") not in (None, period_key):
