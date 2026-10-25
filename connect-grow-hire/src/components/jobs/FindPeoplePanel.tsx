@@ -7,14 +7,16 @@ import {
 } from "./icons";
 
 // Inline Find People panel that lives inside JobDetail. Two stacked actions:
-//   1. Find Hiring Managers -> onFind() (the /find-hiring-manager flow).
+//   1. Find contacts -> onFind() (the /find-contacts flow: team leader, likely
+//      interviewer and recruiter, run in FindContactsModal).
 //   2. Find People -> onFindEmployees(count) (the /find-employee flow), with a
 //      1 to 5 quantity slider for how many teammates to surface.
-// Costs mirror backend CREDIT_COSTS: HM 10/contact, employee 4/contact. Both
-// gated to non-free tiers; free users see an upgrade affordance. The actual
-// searches run in the shared FindHumansModal.
+// Costs mirror the backend: contacts 5/person (RECRUITER_CREDIT_COST, charged
+// once per job, so the modal handles a short balance), employee 4/contact.
+// Find contacts is open to every tier, same as the job card button; Find People
+// is gated to non-free tiers. The employee search runs in FindHumansModal.
 
-const HM_CREDITS = 10;       // find_hiring_manager
+const CONTACT_CREDITS = 5;   // find_contacts, per person
 const EMPLOYEE_CREDITS = 4;  // find_employee
 const MIN_PEOPLE = 1;
 const MAX_PEOPLE = 5;
@@ -36,8 +38,6 @@ export function FindPeoplePanel({
   onUpgradeClick,
 }: FindPeoplePanelProps) {
   const hasPremiumAccess = userPlan !== "free";
-  // Per-column credit checks — HM and employee searches cost different amounts.
-  const notEnoughHm = hasPremiumAccess && currentCredits < HM_CREDITS;
   const notEnoughEmployee = hasPremiumAccess && currentCredits < EMPLOYEE_CREDITS;
   const [count, setCount] = useState(DEFAULT_PEOPLE);
 
@@ -45,12 +45,6 @@ export function FindPeoplePanel({
   // the count rises. The shared .slider-custom track is transparent, so without
   // this the slider is invisible on the white panel.
   const sliderPct = ((count - MIN_PEOPLE) / (MAX_PEOPLE - MIN_PEOPLE)) * 100;
-
-  const hmLabel = !hasPremiumAccess
-    ? "Upgrade to Find Hiring Managers"
-    : notEnoughHm
-      ? "Not enough credits"
-      : "Find Hiring Managers";
 
   const peopleLabel = !hasPremiumAccess
     ? "Upgrade to Find People"
@@ -69,39 +63,25 @@ export function FindPeoplePanel({
           buttons share a baseline even though the right column is taller. The
           row wraps to stacked when the pane is too narrow for two columns. */}
       <div className="jb-fp-actions">
-        {/* Left column: Hiring Manager */}
+        {/* Left column: the hiring team (leader, interviewer, recruiter) */}
         <div className="jb-fp-col">
           <div className="jb-fp-role">
             <div className="jb-fp-role-meta">
               <div className="jb-fp-role-head">
                 <span className="jb-fp-role-icon"><IconRocket /></span>
-                <span className="jb-fp-role-name">Hiring Manager</span>
-                <span className="jb-fp-premium-tag">Premium</span>
+                <span className="jb-fp-role-name">Hiring team</span>
               </div>
+              <div className="jb-fp-role-credits">Team leader, likely interviewer and recruiter</div>
             </div>
-            {!hasPremiumAccess && (
-              <span className="jb-fp-counter locked"><IconLock /></span>
-            )}
           </div>
 
           <div className="jb-fp-col-action">
-            <button
-              className="jb-fp-cta"
-              type="button"
-              disabled={notEnoughHm}
-              onClick={() => {
-                if (!hasPremiumAccess) {
-                  onUpgradeClick?.();
-                  return;
-                }
-                if (!notEnoughHm) onFind();
-              }}
-            >
+            <button className="jb-fp-cta" type="button" onClick={onFind}>
               <IconSearchSmall />
-              {hmLabel}
+              Find contacts
             </button>
             <span style={{ fontSize: 12, color: "var(--ink-7)", textAlign: "center" }}>
-              {HM_CREDITS} credits each
+              {CONTACT_CREDITS} credits each
             </span>
           </div>
         </div>
@@ -178,7 +158,7 @@ export function FindPeoplePanel({
 
       {!hasPremiumAccess && (
         <p style={{ fontSize: 12, color: "var(--ink-5)", margin: 0 }}>
-          Finding people requires a Premium plan.{" "}
+          Finding people on the team requires a Premium plan.{" "}
           <button
             type="button"
             onClick={onUpgradeClick}

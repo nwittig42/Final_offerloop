@@ -16,7 +16,7 @@
 //
 // Data flow: getJobFeed -> buildSectionedJobs (Recent-wins dedup) -> render.
 // Quick-filter chips are visual-only this pass (counts hardcoded from frames).
-// People CTA opens existing FindHumansModal.
+// Hiring team CTA opens FindContactsModal; People on the team opens FindHumansModal.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -44,6 +44,10 @@ import {
   FindHumansModal,
   type FindHumansJob,
 } from "@/components/jobs/FindHumansModal";
+import {
+  FindContactsModal,
+  type FindContactsJob,
+} from "@/components/jobs/FindContactsModal";
 import { toast } from "@/hooks/use-toast";
 
 import { JobCard } from "@/components/jobs/JobCard";
@@ -234,10 +238,9 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
   const [findHumansJob, setFindHumansJob] = useState<FindHumansJob | null>(null);
-  // Which search the Find the Humans modal runs, plus the requested count for
-  // the employee / hiring-manager flows.
-  const [findHumansKind, setFindHumansKind] = useState<"employee" | "hiring-manager">("hiring-manager");
+  // Requested count for the employee search in the Find the Humans modal.
   const [findHumansCount, setFindHumansCount] = useState(3);
+  const [findContactsJob, setFindContactsJob] = useState<FindContactsJob | null>(null);
 
   // Saved snapshots (full job data, not just IDs). Drive the Saved
   // top-level tab. Storing the full snapshot means a bookmarked job stays
@@ -845,12 +848,7 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
     };
   };
 
-  const openFindHumans = (
-    j: ProtoJob,
-    kind: "employee" | "hiring-manager" = "hiring-manager",
-    count = 3,
-  ) => {
-    setFindHumansKind(kind);
+  const openFindEmployees = (j: ProtoJob, count = 3) => {
     setFindHumansCount(count);
     setFindHumansJob(toFindHumansJob(j));
   };
@@ -1455,8 +1453,10 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
                           toast({ title: "Job link copied" });
                         }
                       }}
-                      onFindPeople={() => openFindHumans(selectedJob, "hiring-manager")}
-                      onFindEmployees={(count) => openFindHumans(selectedJob, "employee", count)}
+                      onFindPeople={() =>
+                        setFindContactsJob({ id: selectedJob.id, title: selectedJob.title, company: selectedJob.company })
+                      }
+                      onFindEmployees={(count) => openFindEmployees(selectedJob, count)}
                       userPlan={user?.tier ?? "free"}
                       currentCredits={creditsView.balance}
                     />
@@ -1520,8 +1520,13 @@ export const JobBoardPage: React.FC<JobBoardPageProps> = ({ view = "list", onVie
         open={!!findHumansJob}
         onOpenChange={(o) => !o && setFindHumansJob(null)}
         job={findHumansJob}
-        kind={findHumansKind}
+        kind="employee"
         count={findHumansCount}
+      />
+      <FindContactsModal
+        open={!!findContactsJob}
+        onOpenChange={(o) => !o && setFindContactsJob(null)}
+        job={findContactsJob}
       />
     </SidebarProvider>
   );

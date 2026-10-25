@@ -91,7 +91,6 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
   const [, setDescVersion] = useState(0);
   const bumpDesc = () => setDescVersion((v) => v + 1);
   const [findHumansJob, setFindHumansJob] = useState<FindHumansJob | null>(null);
-  const [findHumansKind, setFindHumansKind] = useState<"employee" | "hiring-manager">("hiring-manager");
   const [findHumansCount, setFindHumansCount] = useState(3);
   const [findContactsJob, setFindContactsJob] = useState<FindContactsJob | null>(null);
 
@@ -219,10 +218,10 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
     if (j.applyUrl) window.open(j.applyUrl, "_blank", "noopener,noreferrer");
   };
 
-  const openFindHumans = useCallback(
-    (j: ProtoJob, kind: "employee" | "hiring-manager" = "hiring-manager", count = 3) => {
+  // Employee search only; the hiring team goes through FindContactsModal.
+  const openFindEmployees = useCallback(
+    (j: ProtoJob, count = 3) => {
       const cached = descriptionCache.get(j.id);
-      setFindHumansKind(kind);
       setFindHumansCount(count);
       setFindHumansJob({
         id: j.id,
@@ -445,8 +444,10 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
                   toast({ title: "Job link copied" });
                 }
               }}
-              onFindPeople={() => openFindHumans(detailJob, "hiring-manager", 3)}
-              onFindEmployees={(count) => openFindHumans(detailJob, "employee", count)}
+              onFindPeople={() =>
+                setFindContactsJob({ id: detailJob.id, title: detailJob.title, company: detailJob.company })
+              }
+              onFindEmployees={(count) => openFindEmployees(detailJob, count)}
               onAutoApply={
                 detailJob.autoApplyEligible ? () => handleAutoApply(detailJob) : undefined
               }
@@ -462,7 +463,7 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
         open={!!findHumansJob}
         onOpenChange={(o) => !o && setFindHumansJob(null)}
         job={findHumansJob}
-        kind={findHumansKind}
+        kind="employee"
         count={findHumansCount}
       />
 
