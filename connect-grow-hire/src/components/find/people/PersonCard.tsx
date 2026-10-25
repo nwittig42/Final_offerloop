@@ -28,18 +28,25 @@ const INK_2 = "#6E6E73";   // secondary text
 const INK_3 = "#86868B";   // tertiary text, icons
 const FILL = "#F5F5F7";    // grey fills: chips, secondary buttons
 
+// The fit label for a ranker score, or null below "Good fit".
+export function fitLabel(score: number | null): "Strong fit" | "Good fit" | null {
+  if (score === null || score < 6.5) return null;
+  return score >= 8 ? "Strong fit" : "Good fit";
+}
+
 function FitBadge({ score, sample }: { score: number | null; sample: boolean }) {
   if (sample) {
     return <span className="rounded-full px-2 py-[3px] text-[11px] font-semibold" style={{ background: FILL, color: INK_3 }}>Example</span>;
   }
-  if (score === null || score < 6.5) return null;
-  const strong = score >= 8;
+  const label = fitLabel(score);
+  if (!label) return null;
+  const strong = label === "Strong fit";
   return (
     <span
       className="rounded-full px-2 py-[3px] text-[11px] font-semibold"
       style={strong ? { background: "#E8F1FD", color: "#0066CC" } : { background: FILL, color: INK_2 }}
     >
-      {strong ? "Strong fit" : "Good fit"}
+      {label}
     </span>
   );
 }

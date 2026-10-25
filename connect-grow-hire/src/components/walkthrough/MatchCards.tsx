@@ -64,7 +64,7 @@ export const initialsOf = (name: string) =>
  * Their photo, or a monogram in the Offerloop palette when there's none (or
  * the LinkedIn hotlink has expired).
  */
-export function ProfilePortrait({ match, style }: { match: WalkthroughMatch; style?: React.CSSProperties }) {
+export function ProfilePortrait({ match, style }: { match: Pick<WalkthroughMatch, "name" | "photoUrl">; style?: React.CSSProperties }) {
   const [broken, setBroken] = useState(false);
   const frame: React.CSSProperties = {
     position: "relative",

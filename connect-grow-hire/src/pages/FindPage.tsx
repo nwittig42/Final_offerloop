@@ -26,7 +26,7 @@ import { orgLogo } from "@/lib/orgLogos";
 import type { Org } from "@/services/api";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
 import { ContactProgressTray, type TrayItem } from "@/components/find/people/ContactProgressTray";
-import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
+import { PersonProfileDialog } from "@/components/find/people/PersonProfileDialog";
 import { SearchLoader } from "@/components/find/people/SearchLoader";
 import { GOLD_RING } from "@/components/find/people/PersonAvatar";
 import { seedCompanies, type FeedProfile } from "@/components/find/people/feedSeeds";
@@ -384,7 +384,7 @@ const FindPage: React.FC = () => {
     () => new Set(found.map((f) => normalizeLinkedIn(f.person.linkedinUrl)).filter(Boolean)),
     [found],
   );
-  const [infoPerson, setInfoPerson] = useState<Person | null>(null);
+  const [profilePerson, setProfilePerson] = useState<Person | null>(null);
   const setContactState = (id: string, s: ContactState) => setContactStates((m) => ({ ...m, [id]: s }));
   // Gmail links from this session's drafts, until Contacts refetches.
   const [draftUrls, setDraftUrls] = useState<Record<string, string>>({});
@@ -520,7 +520,7 @@ const FindPage: React.FC = () => {
       contactHref={contactHrefFor(p)}
       emailHref={emailHrefFor(p)}
       onContact={() => contact(p)}
-      onOpen={() => setInfoPerson(p)}
+      onOpen={() => setProfilePerson(p)}
       onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
       bookmarked={bookmarks.isBookmarked(p)}
       onToggleBookmark={() => void bookmarks.toggle(p)}
@@ -771,11 +771,16 @@ const FindPage: React.FC = () => {
         </MainContentWrapper>
       </div>
 
-      <PersonInfoDialog
-        person={infoPerson}
-        contactState={infoPerson ? stateFor(infoPerson) : "idle"}
-        onContact={() => infoPerson && contact(infoPerson)}
-        onClose={() => setInfoPerson(null)}
+      <PersonProfileDialog
+        person={profilePerson}
+        contactState={profilePerson ? stateFor(profilePerson) : "idle"}
+        onContact={() => profilePerson && contact(profilePerson)}
+        contactHref={profilePerson ? contactHrefFor(profilePerson) : undefined}
+        isBookmarked={!!profilePerson && bookmarks.isBookmarked(profilePerson)}
+        onToggleBookmark={() => { if (profilePerson) void bookmarks.toggle(profilePerson); }}
+        ensureSaved={bookmarks.ensureSaved}
+        userSchool={userUniversity}
+        onClose={() => setProfilePerson(null)}
       />
       <ContactProgressTray
         items={trayPeople.map((p): TrayItem => ({

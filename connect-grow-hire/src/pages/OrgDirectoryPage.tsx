@@ -16,7 +16,8 @@ import { apiService, type DirectoryMember, type EmailTemplate } from "@/services
 import { toast } from "@/hooks/use-toast";
 import { CONTACTS_KEY, THREADS_KEY } from "@/components/contacts/contactsModel";
 import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
-import { PersonInfoDialog } from "@/components/find/people/PersonInfoDialog";
+import { PersonProfileDialog } from "@/components/find/people/PersonProfileDialog";
+import { useBookmarks } from "@/components/find/people/useBookmarks";
 import { personFromDirectory, type Person } from "@/components/find/people/peopleModel";
 import { orgAccent, orgMonogram } from "@/hooks/useOrgs";
 import { orgLogo } from "@/lib/orgLogos";
@@ -91,7 +92,9 @@ export default function OrgDirectoryPage() {
   const [sort, setSort] = useState<Sort>("complete");
   const [shown, setShown] = useState(PAGE);
   const [contactStates, setContactStates] = useState<Record<string, ContactState>>({});
-  const [infoPerson, setInfoPerson] = useState<Person | null>(null);
+  const [profilePerson, setProfilePerson] = useState<Person | null>(null);
+  // Save / Meeting prep in the profile write to Contacts like Find's do.
+  const bookmarks = useBookmarks();
 
   const people = useMemo(() => {
     if (!data) return [];
@@ -318,7 +321,7 @@ export default function OrgDirectoryPage() {
                         person={person}
                         contactState={stateFor(person)}
                         onContact={() => contact(person)}
-                        onOpen={() => setInfoPerson(person)}
+                        onOpen={() => setProfilePerson(person)}
                       />
                     ))}
                   </div>
@@ -332,11 +335,14 @@ export default function OrgDirectoryPage() {
           </div>
         </MainContentWrapper>
       </div>
-      <PersonInfoDialog
-        person={infoPerson}
-        contactState={infoPerson ? stateFor(infoPerson) : "idle"}
-        onContact={() => infoPerson && contact(infoPerson)}
-        onClose={() => setInfoPerson(null)}
+      <PersonProfileDialog
+        person={profilePerson}
+        contactState={profilePerson ? stateFor(profilePerson) : "idle"}
+        onContact={() => profilePerson && contact(profilePerson)}
+        isBookmarked={!!profilePerson && bookmarks.isBookmarked(profilePerson)}
+        onToggleBookmark={() => { if (profilePerson) void bookmarks.toggle(profilePerson); }}
+        ensureSaved={bookmarks.ensureSaved}
+        onClose={() => setProfilePerson(null)}
       />
     </SidebarProvider>
   );
