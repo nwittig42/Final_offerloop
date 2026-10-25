@@ -26,6 +26,8 @@ export interface ScoutTourProps {
   onSkip: () => void;
   /** ✕ and Escape. */
   onClose: () => void;
+  /** False while something underneath (e.g. a dialog) owns Escape. Default true. */
+  closeOnEscape?: boolean;
 }
 
 interface Box {
@@ -80,7 +82,7 @@ function place(box: Box | null, vw: number, vh: number, groupH: number): { place
   return { placement: "corner", style: { right: EDGE + 8, bottom: EDGE + 8 } };
 }
 
-export function ScoutTour({ target, title, body, action, secondary, onSkip, onClose }: ScoutTourProps) {
+export function ScoutTour({ target, title, body, action, secondary, onSkip, onClose, closeOnEscape = true }: ScoutTourProps) {
   const [box, setBox] = useState<Box | null>(null);
   const [timedOut, setTimedOut] = useState(false);
   const [viewport, setViewport] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
@@ -153,15 +155,17 @@ export function ScoutTour({ target, title, body, action, secondary, onSkip, onCl
     return () => window.removeEventListener("resize", onResize);
   }, [target]);
 
+  const visible = !target || !!box || timedOut;
+
+  // Escape closes only once the bubble is showing (nothing to close before).
   useEffect(() => {
+    if (!visible || !closeOnEscape) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
-
-  const visible = !target || !!box || timedOut;
+  }, [visible, closeOnEscape]);
   const spot = target && !timedOut ? box : null;
 
   // Keep the real height of the yeti + bubble for placement math.

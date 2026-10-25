@@ -84,6 +84,19 @@ describe("ScoutTour", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closeOnEscape={false} leaves Escape to whatever is open underneath", () => {
+    addTarget();
+    const { onClose } = renderTour({ closeOnEscape: false });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("Escape does nothing while the bubble is still waiting for its target", () => {
+    const { onClose } = renderTour();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("clicks on the spotlighted element reach the page", () => {
     const { el, onClick } = addTarget();
     renderTour();

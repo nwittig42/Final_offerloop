@@ -128,7 +128,7 @@ export function PersonProfileDialog({
   const primary = () => {
     if (!p) return null;
     if (contactState === "drafted") {
-      return <Link to={contactHref} style={PRIMARY}>Open in Contacts</Link>;
+      return <Link to={contactHref} style={PRIMARY} data-tour="tour-profile-primary">Open in Contacts</Link>;
     }
     if (isContactBusy(contactState) || contactState === "no_email" || isSample) {
       const label = contactState === "finding" ? "Finding email…"
@@ -136,14 +136,14 @@ export function PersonProfileDialog({
         : contactState === "no_email" ? "No email found"
         : p.source === "recommended" ? "See email & draft" : "Draft email";
       return (
-        <button type="button" disabled style={DISABLED} title={contactState === "no_email" ? "No credits were charged" : undefined}>
+        <button type="button" disabled style={DISABLED} title={contactState === "no_email" ? "No credits were charged" : undefined} data-tour="tour-profile-primary">
           {isContactBusy(contactState) && <Loader2 className="h-4 w-4 animate-spin" />}
           {label}
         </button>
       );
     }
     return (
-      <button type="button" onClick={onContact} style={PRIMARY} title={contactButtonTitle(p)}>
+      <button type="button" onClick={onContact} style={PRIMARY} title={contactButtonTitle(p)} data-tour="tour-profile-primary">
         {p.source === "recommended" ? "See email & draft" : "Draft email"}
       </button>
     );
