@@ -23,7 +23,7 @@ import { ProfilePortrait } from "@/components/walkthrough/MatchCards";
 import { OB } from "@/pages/onboardingTheme";
 import { sameUniversity } from "@/lib/universityLogos";
 import { relationFor, type Person } from "./peopleModel";
-import { fitLabel, isContactBusy, type ContactState } from "./PersonCard";
+import { contactButtonTitle, fitLabel, isContactBusy, type ContactState } from "./PersonCard";
 
 interface PersonProfileDialogProps {
   person: Person | null;
@@ -37,6 +37,8 @@ interface PersonProfileDialogProps {
   ensureSaved: (p: Person, opts?: { quiet?: boolean }) => Promise<boolean>;
   // The signed-in student's school, for the "Went to …" chip.
   userSchool?: string | null;
+  // Their email when we have it (the person's own, or their Contacts row's).
+  email?: string;
   onClose: () => void;
 }
 
@@ -84,7 +86,7 @@ function Chip({ children, tone = "plain" }: { children: React.ReactNode; tone?: 
 }
 
 export function PersonProfileDialog({
-  person, contactState, onContact, contactHref = "/contacts", isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, onClose,
+  person, contactState, onContact, contactHref = "/contacts", isBookmarked, onToggleBookmark, ensureSaved, userSchool = null, email = "", onClose,
 }: PersonProfileDialogProps) {
   const queryClient = useQueryClient();
   const creditsView = useCreditsView();
@@ -141,7 +143,7 @@ export function PersonProfileDialog({
       );
     }
     return (
-      <button type="button" onClick={onContact} style={PRIMARY}>
+      <button type="button" onClick={onContact} style={PRIMARY} title={contactButtonTitle(p)}>
         {p.source === "recommended" ? "See email & draft" : "Draft email"}
       </button>
     );
@@ -158,6 +160,8 @@ export function PersonProfileDialog({
     <>
       <Dialog open={!!p} onOpenChange={(o) => { if (!o) onClose(); }}>
         <DialogContent
+          // No title line means no description; tell Radix so it doesn't warn.
+          {...(!p?.title && { "aria-describedby": undefined })}
           className="max-h-[92vh] max-w-[820px] overflow-y-auto rounded-[20px] p-0 sm:rounded-[20px]"
           style={{ fontFamily: OB.fontBody, color: OB.heading }}
         >
@@ -180,6 +184,11 @@ export function PersonProfileDialog({
                   </DialogDescription>
                 )}
                 {placeLine && <div className="mt-3 text-[14px]" style={{ color: OB.ink3 }}>{placeLine}</div>}
+                {email && (
+                  <a href={`mailto:${email}`} className="mt-1 block w-fit max-w-full truncate text-[14px] hover:underline" style={{ color: OB.primary }}>
+                    {email}
+                  </a>
+                )}
                 {p.joinedYear ? <div className="mt-1 text-[14px]" style={{ color: OB.ink3 }}>Joined {p.joinedYear}</div> : null}
 
                 {(p.orgBadge || alumOf || relation !== "Employee" || fit) && (

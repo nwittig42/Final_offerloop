@@ -4,13 +4,14 @@ import {
   loadWalkthrough,
   saveWalkthrough,
   shouldAutoOpen,
+  walkthroughIncomplete,
   type WalkthroughState,
 } from "@/services/walkthrough";
 import type { WalkthroughExit } from "./WalkthroughFlow";
 
 // The first-email pop-up on Find. It opens by itself once for a new user
 // (until they close or skip it), and again on the Gmail OAuth return
-// (/find?walkthrough=1). While it's open, or before we know whether it will
+// (/find?walkthrough=1) if it isn't finished. While it's open, or before we know whether it will
 // open, Find's feed holds off on paid lookups.
 
 export function useFindWalkthrough(
@@ -44,7 +45,8 @@ export function useFindWalkthrough(
       .then((s) => {
         if (cancelled) return;
         setState(s);
-        setOpen(!!s && (shouldAutoOpen(s) || gmailReturn.current));
+        // A Gmail return reopens it only while it's unfinished.
+        setOpen(!!s && walkthroughIncomplete(s) && (shouldAutoOpen(s) || gmailReturn.current));
         setLoaded(true);
       });
     return () => {

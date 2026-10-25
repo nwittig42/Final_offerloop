@@ -93,4 +93,12 @@ describe("PersonCard open", () => {
     setup();
     expect(screen.queryByRole("button", { name: "Info" })).toBeNull();
   });
+
+  it("an openable card shows a keyboard focus ring", () => {
+    setup();
+    const card = screen.getByRole("button", { name: "Open Ada Lovelace" });
+    for (const c of ["focus-visible:outline-none", "focus-visible:ring-2", "focus-visible:ring-[#0071E3]", "focus-visible:ring-offset-2"]) {
+      expect(card.className).toContain(c);
+    }
+  });
 });

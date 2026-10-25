@@ -31,4 +31,25 @@ describe("WalkthroughDialog", () => {
     render(<WalkthroughDialog open={false} onExit={vi.fn()} />);
     expect(screen.queryByTestId("flow")).not.toBeInTheDocument();
   });
+
+  it("a click outside doesn't close it", async () => {
+    const onExit = vi.fn();
+    render(<WalkthroughDialog open onExit={onExit} />);
+    // Radix starts listening for outside pointers a tick after opening.
+    await new Promise((r) => setTimeout(r, 10));
+    const overlay = document.querySelector("[data-state=open].fixed.inset-0") as HTMLElement;
+    expect(overlay).toBeTruthy();
+    fireEvent.pointerDown(overlay);
+    fireEvent.pointerUp(overlay);
+    fireEvent.click(overlay);
+    expect(onExit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("flow")).toBeInTheDocument();
+  });
+
+  it('Escape still calls onExit("later")', () => {
+    const onExit = vi.fn();
+    render(<WalkthroughDialog open onExit={onExit} />);
+    fireEvent.keyDown(document.activeElement || document.body, { key: "Escape" });
+    expect(onExit).toHaveBeenCalledWith("later");
+  });
 });

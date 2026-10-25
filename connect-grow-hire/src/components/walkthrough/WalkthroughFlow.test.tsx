@@ -219,4 +219,24 @@ describe("WalkthroughFlow, modal mode", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(stored?.closedAt).toEqual(expect.any(String));
   });
+
+  it("closing the pop-up mid-edit still saves the latest text", async () => {
+    const { s } = atDraft();
+    const { unmount } = renderModal(s);
+    const box = await screen.findByLabelText("Email");
+    fireEvent.change(box, { target: { value: "First" } });
+    fireEvent.change(box, { target: { value: "Latest words" } });
+    expect(s.saveDraft).not.toHaveBeenCalled();
+    unmount();
+    expect(s.saveDraft).toHaveBeenCalledTimes(1);
+    expect(s.saveDraft).toHaveBeenCalledWith("u1", "ranker_preview-0", { subject: DRAFT.subject, body: "Latest words" });
+  });
+
+  it("unmounting with nothing pending doesn't save", async () => {
+    const { s } = atDraft();
+    const { unmount } = renderModal(s);
+    await screen.findByLabelText("Email");
+    unmount();
+    expect(s.saveDraft).not.toHaveBeenCalled();
+  });
 });

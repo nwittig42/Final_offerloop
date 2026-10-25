@@ -342,6 +342,7 @@ export default function OrgDirectoryPage() {
         isBookmarked={!!profilePerson && bookmarks.isBookmarked(profilePerson)}
         onToggleBookmark={() => { if (profilePerson) void bookmarks.toggle(profilePerson); }}
         ensureSaved={bookmarks.ensureSaved}
+        email={profilePerson?.email}
         onClose={() => setProfilePerson(null)}
       />
     </SidebarProvider>

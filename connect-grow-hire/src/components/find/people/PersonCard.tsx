@@ -34,6 +34,13 @@ export function fitLabel(score: number | null): "Strong fit" | "Good fit" | null
   return score >= 8 ? "Strong fit" : "Good fit";
 }
 
+// What Contact costs, as the hover title on the card's and the profile's button.
+export function contactButtonTitle(person: Person): string {
+  if (person.source === "sample") return "Example card";
+  if (person.source === "recommended") return "Finds their email and drafts an outreach (8 credits, refunded if no email is found)";
+  return person.email ? "Drafts an outreach email" : "Finds their email and drafts an outreach (free, already paid for in your search)";
+}
+
 function FitBadge({ score, sample }: { score: number | null; sample: boolean }) {
   if (sample) {
     return <span className="rounded-full px-2 py-[3px] text-[11px] font-semibold" style={{ background: FILL, color: INK_3 }}>Example</span>;
@@ -154,7 +161,7 @@ export function PersonCard({ person, contactState, onContact, onOpen, onDismiss,
           }
         },
       })}
-      className={`group relative flex flex-col rounded-[22px] bg-white p-[18px] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)]${openable ? " cursor-pointer" : ""}`}
+      className={`group relative flex flex-col rounded-[22px] bg-white p-[18px] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)]${openable ? " cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0071E3] focus-visible:ring-offset-2" : ""}`}
       style={{
         fontFamily: APPLE_FONT,
         boxShadow: busy
@@ -343,7 +350,7 @@ export function PersonCard({ person, contactState, onContact, onOpen, onDismiss,
               type="button"
               onClick={onContact}
               disabled={isSample}
-              title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : person.email ? "Drafts an outreach email" : "Finds their email and drafts an outreach (free, already paid for in your search)"}
+              title={contactButtonTitle(person)}
               className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
             >
               Contact

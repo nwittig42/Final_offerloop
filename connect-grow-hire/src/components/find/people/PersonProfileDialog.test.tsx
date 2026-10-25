@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PersonProfileDialog } from "./PersonProfileDialog";
+import { contactButtonTitle } from "./PersonCard";
 import type { Person } from "./peopleModel";
 
 const api = vi.hoisted(() => ({ createCoffeeChatPrep: vi.fn() }));
@@ -153,5 +154,31 @@ describe("PersonProfileDialog", () => {
     openPrep();
     fireEvent.click(await screen.findByRole("button", { name: "Run prep" }));
     await waitFor(() => expect(toastFn).toHaveBeenCalledWith(expect.objectContaining({ title: "Meeting prep failed", description: "Boom" })));
+  });
+
+  it("shows the email as a mailto link when we have one", () => {
+    setup({ email: "ada@analytical.co" });
+    const link = screen.getByRole("link", { name: "ada@analytical.co" });
+    expect(link).toHaveAttribute("href", "mailto:ada@analytical.co");
+  });
+
+  it("shows no email line without one", () => {
+    setup({ email: "" });
+    expect(screen.queryByRole("link", { name: /@/ })).toBeNull();
+    expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
+  });
+
+  it("no title: the dialog has no description and Radix doesn't warn", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setup({ person: { ...bare, title: "" } });
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("aria-describedby");
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("Description"))).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("the primary contact button carries the card's cost title", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "See email & draft" })).toHaveAttribute("title", contactButtonTitle(person));
+    expect(contactButtonTitle(person)).toMatch(/8 credits/);
   });
 });

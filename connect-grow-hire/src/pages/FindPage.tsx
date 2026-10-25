@@ -780,6 +780,7 @@ const FindPage: React.FC = () => {
         onToggleBookmark={() => { if (profilePerson) void bookmarks.toggle(profilePerson); }}
         ensureSaved={bookmarks.ensureSaved}
         userSchool={userUniversity}
+        email={profilePerson ? profilePerson.email || bookmarks.contactFor(profilePerson)?.email || "" : ""}
         onClose={() => setProfilePerson(null)}
       />
       <ContactProgressTray

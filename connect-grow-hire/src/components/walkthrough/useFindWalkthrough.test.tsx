@@ -118,4 +118,10 @@ describe("useFindWalkthrough", () => {
     expect(result.current.open).toBe(false);
     expect(result.current.holdPaidLookups).toBe(false);
   });
+
+  it("a completed walkthrough doesn't reopen on /find?walkthrough=1", async () => {
+    const { result } = setup({ ...PENDING, status: "completed" }, "/find?walkthrough=1");
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.open).toBe(false);
+  });
 });

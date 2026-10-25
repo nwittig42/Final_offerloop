@@ -3,7 +3,7 @@
 // written); un-bookmarking removes them, but only while they've never been
 // emailed. Recommended people use the deterministic doc id the backend's
 // ranker outreach also writes to, so a later Contact fills the same row.
-import { createElement, useCallback, useMemo } from "react";
+import { createElement, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { ToastAction } from "@/components/ui/toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,6 +21,33 @@ export function neverEmailed(c: ContactDoc): boolean {
   return !c.emailBody && !c.gmailDraftId && !c.gmailThreadId && !c.emailSent && !c.inOutbox;
 }
 
+type ContactIndex = { byId: Map<string, ContactDoc>; byLinkedIn: Map<string, ContactDoc>; byEmail: Map<string, ContactDoc> };
+
+function indexContacts(list: ContactDoc[]): ContactIndex {
+  const byId = new Map<string, ContactDoc>();
+  const byLinkedIn = new Map<string, ContactDoc>();
+  const byEmail = new Map<string, ContactDoc>();
+  for (const c of list) {
+    if (c.id) byId.set(c.id, c);
+    const li = normalizeLinkedIn(c.linkedinUrl);
+    if (li) byLinkedIn.set(li, c);
+    if (c.email) byEmail.set(c.email.toLowerCase(), c);
+  }
+  return { byId, byLinkedIn, byEmail };
+}
+
+// Match by ranker doc id, then normalized LinkedIn, then email.
+function lookup(index: ContactIndex, p: Person): ContactDoc | undefined {
+  if (p.source === "recommended") {
+    const hit = index.byId.get(rankerContactId(p.id));
+    if (hit) return hit;
+  }
+  const li = normalizeLinkedIn(p.linkedinUrl);
+  if (li && index.byLinkedIn.has(li)) return index.byLinkedIn.get(li);
+  if (p.email && index.byEmail.has(p.email.toLowerCase())) return index.byEmail.get(p.email.toLowerCase());
+  return undefined;
+}
+
 export function useBookmarks() {
   const { user } = useFirebaseAuth();
   const uid = user?.uid;
@@ -29,36 +56,16 @@ export function useBookmarks() {
   const key = [...CONTACTS_KEY, uid];
 
   // Same query (and cache) the Contacts page reads.
+  const contactsFn = useCallback(() => firebaseApi.getContacts(uid!), [uid]);
   const contactsQuery = useQuery({
     queryKey: key,
-    queryFn: () => firebaseApi.getContacts(uid!),
+    queryFn: contactsFn,
     enabled: !!uid,
   });
 
   // Indexes for "is this person already in Contacts?"
-  const index = useMemo(() => {
-    const byId = new Map<string, ContactDoc>();
-    const byLinkedIn = new Map<string, ContactDoc>();
-    const byEmail = new Map<string, ContactDoc>();
-    for (const c of (contactsQuery.data ?? []) as ContactDoc[]) {
-      if (c.id) byId.set(c.id, c);
-      const li = normalizeLinkedIn(c.linkedinUrl);
-      if (li) byLinkedIn.set(li, c);
-      if (c.email) byEmail.set(c.email.toLowerCase(), c);
-    }
-    return { byId, byLinkedIn, byEmail };
-  }, [contactsQuery.data]);
-
-  const findContact = useCallback((p: Person): ContactDoc | undefined => {
-    if (p.source === "recommended") {
-      const hit = index.byId.get(rankerContactId(p.id));
-      if (hit) return hit;
-    }
-    const li = normalizeLinkedIn(p.linkedinUrl);
-    if (li && index.byLinkedIn.has(li)) return index.byLinkedIn.get(li);
-    if (p.email && index.byEmail.has(p.email.toLowerCase())) return index.byEmail.get(p.email.toLowerCase());
-    return undefined;
-  }, [index]);
+  const index = useMemo(() => indexContacts((contactsQuery.data ?? []) as ContactDoc[]), [contactsQuery.data]);
+  const findContact = useCallback((p: Person) => lookup(index, p), [index]);
 
   // Filled only for people saved and not yet emailed. Once Contact drafts
   // to someone the card shows "Drafted" instead.
@@ -138,11 +145,29 @@ export function useBookmarks() {
   }, [uid, findContact, queryClient, save]);
 
   // Saves a person if they aren't in Contacts yet; never removes anyone.
-  const ensureSaved = useCallback(async (p: Person, opts?: { quiet?: boolean }): Promise<boolean> => {
-    if (!uid || p.source === "sample") return false;
-    if (findContact(p)) return true;
-    return save(p, !!opts?.quiet);
-  }, [uid, findContact, save]);
+  // Checks the loaded list (waiting for it if it's still loading), so a
+  // drafted or emailed person is never overwritten with a fresh Saved row;
+  // if the list can't load, nothing is written. Calls already running for
+  // the same person share one write.
+  const inFlight = useRef(new Map<string, Promise<boolean>>());
+  const ensureSaved = useCallback((p: Person, opts?: { quiet?: boolean }): Promise<boolean> => {
+    if (!uid || p.source === "sample") return Promise.resolve(false);
+    const running = inFlight.current.get(p.id);
+    if (running) return running;
+    const run = (async () => {
+      let list: ContactDoc[];
+      try {
+        list = (await queryClient.ensureQueryData({ queryKey: key, queryFn: contactsFn })) as ContactDoc[];
+      } catch {
+        toast({ title: "Couldn't save", description: "Your contacts didn't load. Try again.", variant: "destructive" });
+        return false;
+      }
+      if (lookup(indexContacts(list), p)) return true;
+      return save(p, !!opts?.quiet);
+    })().finally(() => inFlight.current.delete(p.id));
+    inFlight.current.set(p.id, run);
+    return run;
+  }, [uid, queryClient, contactsFn, save]);
 
   const contacts = useMemo(() => (contactsQuery.data ?? []) as ContactDoc[], [contactsQuery.data]);
   return { isBookmarked, toggle, ensureSaved, contactFor: findContact, contacts };

@@ -447,7 +447,19 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
 
   // ── Draft edits: saved shortly after typing stops ────────────────────────
   const editTimer = useRef<number | undefined>();
-  useEffect(() => () => window.clearTimeout(editTimer.current), []);
+  // The edit still waiting on the timer, so closing the pop-up mid-edit saves it.
+  const pendingEdit = useRef<{ uid: string; contactId: string; subject: string; body: string } | null>(null);
+  const servicesRef = useRef(services);
+  servicesRef.current = services;
+  useEffect(
+    () => () => {
+      window.clearTimeout(editTimer.current);
+      const e = pendingEdit.current;
+      pendingEdit.current = null;
+      if (e) void servicesRef.current.saveDraft(e.uid, e.contactId, { subject: e.subject, body: e.body }).catch(() => {});
+    },
+    [],
+  );
   const editDraft = (patch: Partial<Pick<EmailDraft, "subject" | "body">>) => {
     if (!draft || !uid || !state?.contactId) return;
     const next = { ...draft, ...patch };
@@ -460,7 +472,9 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
     }
     const contactId = state.contactId;
     window.clearTimeout(editTimer.current);
+    pendingEdit.current = { uid, contactId, subject: next.subject, body: next.body };
     editTimer.current = window.setTimeout(() => {
+      pendingEdit.current = null;
       services
         .saveDraft(uid, contactId, { subject: next.subject, body: next.body })
         .then(() => setSaveStatus("saved"))
@@ -472,6 +486,7 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
   const flushSave = async () => {
     if (!draft || !uid || !state?.contactId) throw new Error("no_draft");
     window.clearTimeout(editTimer.current);
+    pendingEdit.current = null;
     if (saveStatus === "saving" || saveStatus === "error") {
       await services.saveDraft(uid, state.contactId, { subject: draft.subject, body: draft.body });
       setSaveStatus("saved");
@@ -644,6 +659,7 @@ export function WalkthroughFlow({ preview = false, services: injected, gmailRetu
     // Flush a pending edit before leaving.
     if (saveStatus === "saving" && draft && uid && state?.contactId) {
       window.clearTimeout(editTimer.current);
+      pendingEdit.current = null;
       void services.saveDraft(uid, state.contactId, { subject: draft.subject, body: draft.body }).catch(() => {});
     }
     leave("later");
