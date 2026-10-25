@@ -318,7 +318,7 @@ export default function OrgDirectoryPage() {
                         person={person}
                         contactState={stateFor(person)}
                         onContact={() => contact(person)}
-                        onInfo={() => setInfoPerson(person)}
+                        onOpen={() => setInfoPerson(person)}
                       />
                     ))}
                   </div>

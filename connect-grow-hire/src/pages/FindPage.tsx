@@ -520,7 +520,7 @@ const FindPage: React.FC = () => {
       contactHref={contactHrefFor(p)}
       emailHref={emailHrefFor(p)}
       onContact={() => contact(p)}
-      onInfo={() => setInfoPerson(p)}
+      onOpen={() => setInfoPerson(p)}
       onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
       bookmarked={bookmarks.isBookmarked(p)}
       onToggleBookmark={() => void bookmarks.toggle(p)}
