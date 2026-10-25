@@ -56,6 +56,14 @@ _BLOCKLIST = re.compile(
     r"\b(retail|installer|installation|technician|shift|"
     r"mental health|roofing|warehouse|cashier|barista|store associate|part[- ]time|"
     r"seasonal|nurse|driver|cultivation|janitor|server|housekeeping|solar|kitchen|dashmart|optician|jewelry|dasher)\b", re.I)
+# Tier 1/2 still holds senior roles; the review is for early-career postings.
+# A "manager" title stays in only next to associate/assistant (Associate Project
+# Manager); "Staff Accountant" is entry level, so staff is not on the list.
+_SENIOR = re.compile(
+    r"\b(senior|sr\.?|director|principal|head of|vp|vice president|chief|"
+    r"lead|phd|postdoc\w*)\b", re.I)
+_MANAGER = re.compile(r"\bmanager\b", re.I)
+_JUNIOR_MANAGER = re.compile(r"\b(associate|assistant)\b", re.I)
 
 
 def function_bucket(job: dict) -> str:
@@ -71,17 +79,22 @@ def function_bucket(job: dict) -> str:
 
 
 def is_target(job: dict) -> bool:
+    title = job.get("title") or ""
+    if _SENIOR.search(title) or (_MANAGER.search(title) and not _JUNIOR_MANAGER.search(title)):
+        return False
     return not _BLOCKLIST.search(f"{job.get('title') or ''} {job.get('company') or ''}")
 
 
 def size_of(job: dict) -> str:
-    """large / startup / unknown. Startup only when headcount is known and small."""
-    from app.services.find_contacts.playbooks import company_size
-    if company_size({"size_hint": "unknown", "company": job.get("company")}, job) == "large":
+    """large / startup / unknown from what the job doc itself says. Not
+    playbooks.company_size: that treats unknown as large, which made every job
+    "large" here (no job doc carries a headcount yet)."""
+    from app.services.find_contacts.playbooks import _canonicalize, _large_employers
+    if _canonicalize(job.get("company")) in _large_employers():
         return "large"
     employees = job.get("linkedin_org_employees")
-    if isinstance(employees, (int, float)) and employees < STARTUP_MAX_EMPLOYEES:
-        return "startup"
+    if isinstance(employees, (int, float)) and not isinstance(employees, bool) and employees > 0:
+        return "startup" if employees < STARTUP_MAX_EMPLOYEES else "large"
     return "unknown"
 
 
@@ -127,9 +140,15 @@ def select_jobs(jobs: list[dict], n: int, has_result=lambda job: False,
     Each returned dict is the job plus 'size' and 'bucket'."""
     rng = random.Random(seed)
     groups: dict[str, list[dict]] = {"large": [], "startup": [], "unknown": []}
+    seen: set[tuple[str, str]] = set()
     for job in jobs:
         if not is_target(job):
             continue
+        # The same posting is often listed per office; one copy is enough.
+        key = ((job.get("company") or "").strip().lower(), (job.get("title") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
         size = size_of(job)
         groups[size].append(dict(job, size=size, bucket=function_bucket(job)))
     want_large = round(n * LARGE_SHARE)
@@ -189,6 +208,7 @@ def _csv_row(job: dict, result: dict, error: str = "") -> list:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("--n", type=int, default=50)
+    parser.add_argument("--out", default=CSV_PATH, help="CSV path for --confirm")
     parser.add_argument("--confirm", action="store_true",
                         help="actually run the pipeline (writes PROD, spends credits)")
     args = parser.parse_args(argv)
@@ -213,8 +233,8 @@ def main(argv=None) -> int:
         return 0
 
     from app.services.find_contacts.service import find_contacts_for_job
-    os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
-    with open(CSV_PATH, "w", newline="", encoding="utf-8") as fh:
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    with open(args.out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(_csv_header())
         for job in chosen:
@@ -229,7 +249,7 @@ def main(argv=None) -> int:
             stored = _result_ref(db, job["id"]).get().to_dict() or {}
             writer.writerow(_csv_row(job, stored, error))
             fh.flush()
-    print(f"Wrote {CSV_PATH}")
+    print(f"Wrote {args.out}")
     return 0
 
 
