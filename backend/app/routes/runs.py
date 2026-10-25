@@ -154,6 +154,84 @@ def cancel_prompt_search():
     return jsonify({"ok": True})
 
 
+# Contact on a Find card whose search came back without an email (OFF-56).
+# The search already charged find_contact (which includes the email), so this
+# second try is free, and it runs once per contact. Same ladder as the search's
+# email pass (Hunter, then one FullEnrich waterfall) but with a longer wait,
+# since the search gives FullEnrich only a few seconds.
+_RETRY_FE_WAIT_SECONDS = 45
+
+
+@runs_bp.route("/prompt-search/find-email", methods=["POST"])
+@require_firebase_auth
+def find_search_contact_email():
+    user_id = request.firebase_user["uid"]
+    contact_id = str((request.get_json(silent=True) or {}).get("contactId") or "").strip()
+    if not contact_id or "/" in contact_id:
+        return jsonify({"error": "contactId is required"}), 400
+    db = get_db()
+    if not db:
+        return jsonify({"error": "Database not available"}), 500
+
+    ref = db.collection("users").document(user_id).collection("contacts").document(contact_id)
+    snap = ref.get()
+    if not snap.exists:
+        return jsonify({"error": "Contact not found"}), 404
+    c = snap.to_dict() or {}
+    if (c.get("email") or "").strip():
+        return jsonify({"email": c["email"].strip()}), 200
+    if c.get("source") != "find_search":
+        return jsonify({"error": "Only people from a search can be looked up here"}), 400
+    # One retry per contact. The claim lives where clients can't write
+    # (firestore.rules has no rule for emailRetries), so it can't be reset.
+    from google.api_core.exceptions import AlreadyExists
+    try:
+        db.collection("users").document(user_id).collection("emailRetries").document(contact_id).create(
+            {"at": datetime.utcnow().isoformat() + "Z"}
+        )
+    except AlreadyExists:
+        return jsonify({"email": None, "retried": True}), 200
+
+    first = (c.get("firstName") or "").strip()
+    last = (c.get("lastName") or "").strip()
+    company = (c.get("company") or "").strip()
+    linkedin = (c.get("linkedinUrl") or "").strip()
+    email, source, verified = "", "", False
+    try:
+        from app.services import email_fast
+        hit = email_fast.hunter_email(first, last, company)
+        if hit and hit.get("email"):
+            email, source = hit["email"], "hunter_finder"
+    except Exception:
+        print("[FindEmail] Hunter errored; trying FullEnrich")
+    if not email:
+        try:
+            from app.services import fullenrich_client
+            eid = fullenrich_client.start_bulk([("0", first, last, company, linkedin)], db=db)
+            if eid:
+                _ready, hits = fullenrich_client.fetch_bulk(eid, wait_seconds=_RETRY_FE_WAIT_SECONDS, db=db)
+                if (hits or {}).get("0", {}).get("email"):
+                    email, source, verified = hits["0"]["email"], "fullenrich_backfill", True
+        except Exception:
+            print("[FindEmail] FullEnrich errored; contact stays email-less")
+
+    print(f"[FindEmail] uid={user_id} contact={contact_id} found={bool(email)} source={source or '-'}")
+    if not email:
+        return jsonify({"email": None}), 200
+    ref.update({"email": email, "emailSource": source, "emailVerified": verified})
+    # Same warehouse re-feed as the search, so the next student gets it free.
+    try:
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        cache_pdl_contacts([{
+            "FirstName": first, "LastName": last, "Company": company, "LinkedIn": linkedin,
+            "Title": c.get("jobTitle") or "", "College": c.get("college") or "",
+            "Email": email, "WorkEmail": email, "EmailSource": source, "EmailVerified": verified,
+        }], shape="app", async_write=True)
+    except Exception:
+        pass
+    return jsonify({"email": email}), 200
+
+
 @runs_bp.route("/prompt-search", methods=["POST"])
 @require_firebase_auth
 def prompt_search():

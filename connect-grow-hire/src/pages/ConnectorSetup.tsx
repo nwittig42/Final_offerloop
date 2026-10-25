@@ -112,7 +112,7 @@ const ConnectorSetup = () => {
         />
         <link rel="canonical" href="https://offerloop.ai/connector" />
         <meta property="og:title" content="Connect Offerloop to Claude — Setup Guide" />
-        <meta property="og:description" content="Add Offerloop as a custom connector in Claude. Results respect your Offerloop tier — Pro gives 8 per search, Elite gives 15." />
+        <meta property="og:description" content="Add Offerloop as a custom connector in Claude. Results respect your Offerloop tier — Pro gives 10 per search, Elite gives 15." />
         <meta property="og:url" content="https://offerloop.ai/connector" />
         <meta property="og:type" content="website" />
       </Helmet>
@@ -539,7 +539,7 @@ const ConnectorSetup = () => {
             See it <Highlight>in action</Highlight>
           </h2>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 17, lineHeight: 1.65, color: C.body, margin: '0 auto', maxWidth: 560 }}>
-            Just ask Claude. Pro tier returns 8 contacts per search, Elite returns 15.
+            Just ask Claude. Pro tier returns 10 contacts per search, Elite returns 15.
           </p>
         </div>
 

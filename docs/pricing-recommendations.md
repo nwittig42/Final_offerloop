@@ -30,7 +30,7 @@ friction. Simplicity sells. That means:
 | List price | $0 | **$9.99/mo** | $34.99/mo |
 | .edu price (50% off) | $0 | **$4.99/mo** | $17.49/mo |
 | Credits/month | 300 | 2,000 | 5,000 |
-| Contacts/search | 3 | 8 | 15 |
+| Contacts/search | 3 | 10 | 15 |
 | Trial | — | 7 days, card on file | (checkout also grants 7 days) |
 
 .edu eligibility (any one satisfies): sign-up email ends in `.edu`, Firestore

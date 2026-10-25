@@ -1537,6 +1537,17 @@ class ApiService {
     });
   }
 
+  // Contact on a searched person saved without an email (OFF-56): one free
+  // retry of the email lookup. email is null on a miss.
+  async findSearchContactEmail(contactId: string): Promise<{ email: string | null; retried?: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ email: string | null; retried?: boolean }>('/prompt-search/find-email', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId }),
+    });
+  }
+
   // Find's Cancel (OFF-56): the search checks this before it charges credits
   // or saves anyone, so a cancelled search costs nothing.
   async cancelPromptSearch(searchId: string): Promise<{ ok: boolean }> {

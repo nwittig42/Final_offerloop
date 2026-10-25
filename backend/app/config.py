@@ -506,8 +506,8 @@ TIER_CONFIGS = {
         'max_auto_sends_per_day': 0,
     },
     'pro': {
-        'max_contacts': 8,   # Maximum contacts returned per search
-        'batch_size': 8,      # Maximum batch operations allowed (per audit spec)
+        'max_contacts': 10,  # Maximum contacts returned per search (8 -> 10, 2026-10-25)
+        'batch_size': 10,     # Maximum batch operations allowed (per audit spec)
         'min_contacts': 1, 
         'fields': ['FirstName', 'LastName', 'LinkedIn', 'Email', 'Title', 'Company', 'City', 'State', 'College',
                   'Phone', 'PersonalEmail', 'WorkEmail', 'SocialProfiles', 'EducationTop', 'VolunteerHistory',
@@ -580,8 +580,8 @@ TIER_CONFIGS = {
     # Season Pass — 4-month one-time pre-paid pass. Treated as a tier for the
     # duration of its active window so feature gates light up identically to Pro.
     'season_pass': {
-        'max_contacts': 8,
-        'batch_size': 8,
+        'max_contacts': 10,
+        'batch_size': 10,
         'min_contacts': 1,
         'fields': TARGET_INDUSTRIES and None,  # populated below
         'uses_pdl': True,

@@ -317,18 +317,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
           >
             Info
           </button>
-          {person.source === "search" && !person.email ? (
-            // The search's email pass came up empty; the contact is saved, so
-            // an address can be added from Contacts.
-            <Link
-              to={contactHref}
-              className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12.5px] font-medium transition-colors hover:bg-[#DCEFE4]"
-              style={{ background: "#E8F3EE", color: "#01754F" }}
-              title="We couldn't find their email yet. Open them in Contacts to add one."
-            >
-              No email yet
-            </Link>
-          ) : contactState === "no_email" ? (
+          {contactState === "no_email" ? (
             <span className="inline-flex h-8 flex-1 items-center justify-center rounded-full text-[12px]" style={{ background: FILL, color: INK_3 }} title="No credits were charged">
               No email found
             </span>
@@ -337,7 +326,7 @@ export function PersonCard({ person, contactState, onContact, onInfo, onDismiss,
               type="button"
               onClick={onContact}
               disabled={isSample}
-              title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : "Drafts an outreach email"}
+              title={isSample ? "Example card" : person.source === "recommended" ? "Finds their email and drafts an outreach (8 credits, refunded if no email is found)" : person.email ? "Drafts an outreach email" : "Finds their email and drafts an outreach (free, already paid for in your search)"}
               className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full bg-[#0071E3] text-[13px] font-medium text-white transition-colors hover:bg-[#0077ED] disabled:cursor-not-allowed disabled:bg-[#F5F5F7] disabled:text-[#AEAEB2]"
             >
               Contact

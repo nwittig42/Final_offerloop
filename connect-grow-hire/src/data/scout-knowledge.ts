@@ -313,7 +313,7 @@ export const CREDIT_SYSTEM = {
       maxContactsPerSearch: 8,
       features: [
         "2,000 monthly credits",
-        "Up to 8 contacts per search",
+        "Up to 10 contacts per search",
         "Resume-matched personalized emails",
         "Priority support"
       ]

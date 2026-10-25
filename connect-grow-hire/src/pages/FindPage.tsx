@@ -402,7 +402,7 @@ const FindPage: React.FC = () => {
   const contact = useCallback(async (person: Person) => {
     if (person.source === "sample") return;
     setTrayPeople((list) => [person, ...list.filter((q) => q.id !== person.id)].slice(0, 4));
-    setContactState(person.id, person.source === "recommended" ? "finding" : "working");
+    setContactState(person.id, person.source === "recommended" || (person.source === "search" && !person.email) ? "finding" : "working");
     try {
       if (person.source === "recommended") {
         // Reveal (8 credits, refunded on a miss), then draft to that exact
@@ -417,15 +417,27 @@ const FindPage: React.FC = () => {
         await apiService.rankerOutreach(person.id, "draft", person.deckId);
         void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
       } else {
-        if (!person.email) {
-          setContactState(person.id, "no_email");
-          toast({ title: "No email found", description: `We don't have an address for ${person.firstName}.` });
-          return;
+        let email = person.email;
+        if (!email) {
+          // Searched people saved without an email get one free retry of
+          // the lookup before drafting (OFF-56).
+          const saved = bookmarks.contactFor(person);
+          if (person.source === "search" && saved?.id) {
+            setContactState(person.id, "finding");
+            email = (await apiService.findSearchContactEmail(saved.id)).email || "";
+            queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+          }
+          if (!email) {
+            setContactState(person.id, "no_email");
+            toast({ title: "No email found", description: `We couldn't find a verified address for ${person.firstName}. No credits were charged.` });
+            return;
+          }
+          setContactState(person.id, "working");
         }
         const res = await apiService.generateAndDraftEmails({
           contacts: [{
             FirstName: person.firstName, LastName: person.lastName, name: person.name,
-            Email: person.email, Company: person.company, Title: person.title,
+            Email: email, Company: person.company, Title: person.title,
           }],
           emailTemplate,
         });
@@ -444,7 +456,7 @@ const FindPage: React.FC = () => {
       const msg = e?.status === 402 ? "You're out of credits for this. Contacting someone costs 8 credits." : e?.message || "Try again.";
       toast({ title: "Couldn't contact them", description: msg, variant: "destructive" });
     }
-  }, [emailTemplate, queryClient]);
+  }, [emailTemplate, queryClient, bookmarks.contactFor]);
 
   const dismiss = (person: Person) => {
     setDismissed((d) => new Set(d).add(person.id));
