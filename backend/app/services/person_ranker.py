@@ -990,6 +990,9 @@ def _to_response_dict(scored_item: dict) -> dict:
             "company":     cand.get("Company") or "",
             "title":       cand.get("Title") or "",
             "college":     cand.get("College") or "",
+            # Allowlist extension (OFF-57): every school they attended, not
+            # just the first. Public profile facts, nothing sensitive.
+            "schools":     list(cand.get("Schools") or []),
             "city":        cand.get("City") or "",
             "state":       cand.get("State") or "",
             # Deliberate allowlist extension (Rylan 2026-08-18): the year they
