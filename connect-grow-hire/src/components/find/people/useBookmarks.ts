@@ -70,27 +70,10 @@ export function useBookmarks() {
   const setCache = (fn: (list: ContactDoc[]) => ContactDoc[]) =>
     queryClient.setQueryData<ContactDoc[]>(key, (old) => fn(old ?? []));
 
-  const toggle = useCallback(async (p: Person) => {
-    if (!uid || p.source === "sample") return;
-    const existing = findContact(p);
-
-    // Un-bookmark: only people never emailed; the rest live in Contacts now.
-    if (existing?.id) {
-      if (!neverEmailed(existing)) {
-        toast({ title: `${p.firstName} is already in your Contacts`, description: "You've emailed them, so manage them from Contacts." });
-        return;
-      }
-      setCache((list) => list.filter((c) => c.id !== existing.id));
-      try {
-        await firebaseApi.deleteContact(uid, existing.id);
-      } catch (e) {
-        queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
-        toast({ title: "Couldn't remove bookmark", description: e instanceof Error ? e.message : "Try again.", variant: "destructive" });
-      }
-      return;
-    }
-
-    // Bookmark: write a Saved contact. No email, no credits.
+  // Shared add path: writes a Saved contact. Resolves false if the write failed.
+  const save = useCallback(async (p: Person, quiet: boolean): Promise<boolean> => {
+    if (!uid) return false;
+    // Write a Saved contact. No email, no credits.
     const now = new Date().toISOString();
     const docData: ContactDoc = {
       firstName: p.firstName,
@@ -118,17 +101,49 @@ export function useBookmarks() {
         const realId = await firebaseApi.createContact(uid, docData);
         setCache((list) => list.map((c) => (c.id === id ? { ...c, id: realId } : c)));
       }
-      toast({
+      if (!quiet) toast({
         title: `Saved ${p.firstName || p.name}`,
         description: "Bookmarks live in Contacts under Saved.",
         action: createElement(ToastAction, { altText: "View saved contacts", onClick: () => navigate("/contacts?filter=saved") }, "View"),
       });
+      return true;
     } catch (e) {
       setCache((list) => list.filter((c) => c.id !== id));
       toast({ title: "Couldn't save", description: e instanceof Error ? e.message : "Try again.", variant: "destructive" });
+      return false;
     }
-  }, [uid, findContact, queryClient, navigate]);
+  }, [uid, queryClient, navigate]);
+
+  const toggle = useCallback(async (p: Person) => {
+    if (!uid || p.source === "sample") return;
+    const existing = findContact(p);
+
+    // Un-bookmark: only people never emailed; the rest live in Contacts now.
+    if (existing?.id) {
+      if (!neverEmailed(existing)) {
+        toast({ title: `${p.firstName} is already in your Contacts`, description: "You've emailed them, so manage them from Contacts." });
+        return;
+      }
+      setCache((list) => list.filter((c) => c.id !== existing.id));
+      try {
+        await firebaseApi.deleteContact(uid, existing.id);
+      } catch (e) {
+        queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+        toast({ title: "Couldn't remove bookmark", description: e instanceof Error ? e.message : "Try again.", variant: "destructive" });
+      }
+      return;
+    }
+
+    await save(p, false);
+  }, [uid, findContact, queryClient, save]);
+
+  // Saves a person if they aren't in Contacts yet; never removes anyone.
+  const ensureSaved = useCallback(async (p: Person, opts?: { quiet?: boolean }): Promise<boolean> => {
+    if (!uid || p.source === "sample") return false;
+    if (findContact(p)) return true;
+    return save(p, !!opts?.quiet);
+  }, [uid, findContact, save]);
 
   const contacts = useMemo(() => (contactsQuery.data ?? []) as ContactDoc[], [contactsQuery.data]);
-  return { isBookmarked, toggle, contactFor: findContact, contacts };
+  return { isBookmarked, toggle, ensureSaved, contactFor: findContact, contacts };
 }
