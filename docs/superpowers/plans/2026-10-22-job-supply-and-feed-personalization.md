@@ -174,8 +174,66 @@ rotation on refresh). Pipeline:
    flag-gated off** (`embedding_ranker` flag + `RANKER_MODE`).
 6. Dedup by title+company, cap 3 per company, hard-filter dismissed jobs.
 
-**Verdict from the audit: about 4.5/10.** Genuinely resume-aware and preference-aware. Not
-behavior-aware.
+**Verdict, corrected after reading the code rather than the design docs: resume-aware only.**
+The preference half of the ranker was wired to paths nothing writes. See C0.
+
+### C0. The ranker was starved of the preferences it was built around — FIXED 0e9f9c65
+
+Do not trust `docs/RECOMMENDER_STATUS.md` or the older audit docs on this. They say Track A
+shipped a Goals onboarding step and a dreamCompanies fix. The code disagrees:
+
+- **`OnboardingGoals.tsx` is orphaned** — grep finds no reference outside the file itself. The
+  live flow is `type Step = "slides" | "source" | "builder" | "inbox"`: no goals step, no
+  academics step, no location step.
+- Onboarding writes `goals: {careerTrack: "", careerTracks: [], targetIndustries: []}`, with a
+  comment saying so: *"Career tracks were removed from onboarding (added later from settings)."*
+- `intent_gates.py:182-185` carries a production audit that **contradicts a design doc in
+  writing**: `goals.careerInterests` is populated for **0%** of users "despite what the audit doc
+  assumed"; `careerInterests` really lives at `location.careerInterests` (45.5%) and
+  `location.interests` (50.8%); dreamCompanies adoption is 2.1%.
+
+`job_ranking.py` read `goals.careerTrack` and `goals.dreamCompanies` exclusively, while
+AccountSettings — the only surface that can still set either — writes them flat at the top level
+and never assigns `updates.goals`. Four consequences, all measured:
+
+1. `infer_field` never resolved an explicit career track; the 40-point field alignment always
+   fell through to the resume's major.
+2. The +15 dream-company bonus could not fire for any user.
+3. The GPT reranker was never told the user's track or dream companies.
+4. `preferredLocation` is a list for multi-city users and `_safe_str` joins lists on `", "`, so
+   `["New York","Chicago"]` became `"new york, chicago"` — never a substring of a real job
+   location, silently losing the +10.
+
+`job_ranker_signals` already read both paths, which is why the separate +25 dream boost worked
+and masked all of it. `users.py:70-85` `JOB_RELEVANT_FIELDS` lists `careerTrack` and
+`dreamCompanies` as **top-level** paths, so the cache-invalidation layer and the ranker
+disagreed with each other.
+
+Measured on the real AccountSettings profile shape: `infer_field` None → "finance",
+`deterministic_score` 40.0 → 65.0. Fixed in 0e9f9c65 with 9 tests (4 fail without it).
+
+**What this means for the plan: the machinery is fine, the inputs were missing.** The cheapest
+personalization work is restoring preference capture, not building a learned ranker. A single
+onboarding step restores ~65 points of signal range that currently cannot fire, against the
+2.1% of users who find the setting on their own.
+
+### Field-path audit (traced in code 2026-10-22, not from docs)
+
+| field | written by | read by | status |
+|---|---|---|---|
+| `careerTrack` | AccountSettings, top-level | ranker read `goals.*` | fixed |
+| `dreamCompanies` | AccountSettings, top-level | ranker read `goals.*` | fixed |
+| `preferredLocation` | AccountSettings, both paths | ranker, list-join bug | fixed |
+| `targetIndustries` | `/profile-confirm` only — **not** AccountSettings | 19 backend files, **0 in ranking** | works, never ranks |
+| `industriesOfInterest` | AccountSettings | frontend union (`firebaseApi.ts:277`) | alias, frontend-only |
+| `preferredJobRole(sOrTitles)` | AccountSettings | `suggestionChips.ts` only | frontend-only |
+| `jobTypesInterestedIn` | AccountSettings | nothing, anywhere | dead write |
+| `personalNote` | AccountSettings | `personalization.py`, `emails.py` | fine |
+| `preferredLocations` | AccountSettings | `student_profile`, `agent`, `jobs.py:282` | fine |
+
+Rule for anyone extending the ranker: **grep the write path before trusting a field.** Every bug
+above was a reader pointing at a path no writer uses, and in each case a design doc asserted
+otherwise.
 
 ### The one real gap: no behavioral feedback loop
 
@@ -192,18 +250,38 @@ today's feed, because nothing recorded that you saw it.
 has happened since. Its plan file `.claude/plans/jaunty-spinning-owl.md` **no longer exists**, so
 Phases 1-5 would need re-deriving. Treat the status doc as history, not a live plan.
 
-### C1. Cheap wins first (days, no new infrastructure)
-- **Make `careerInterests` rank, not just gate.** Today it's drop-only
-  (`intent_gates._gate_by_interest`) — a student who said "data science" gets Finance Analyst
-  roles if skills align, and interest contributes **zero** ranking weight. Add it as a scoring
-  term. Highest value per line of code in this whole phase.
-- **Roll out the embedding ranker.** It's built, cached and flag-gated off. Turn it on for a
-  cohort, compare against the deterministic path, keep the winner.
-- **Surface narrative fields when embeddings are off.** `directionNarrative` and
-  `personalContext` are captured and feed *only* the embedding path, so they're ignored entirely
-  for most users today.
+### C1. Capture the preferences again (days) — now the top priority, per C0
+The scorer already knows what to do with career track, dream companies, location and job type.
+Nothing collects them. Options, cheapest first:
+- Re-wire the orphaned `OnboardingGoals.tsx` into the flow as a skippable step (the component
+  and its submit handler still exist and still flush pending input — only the wiring is gone), or
+- Prompt post-onboarding where intent is highest, e.g. first Job Board visit, reusing the
+  existing `GoalsPromptBanner` pattern which is still rendered on the Find page
+  (`FindPage.tsx:395`).
 
-### C2. Job event logger (the missing Track C for jobs)
+Write to the **top-level** paths that `JOB_RELEVANT_FIELDS` and the fixed ranker now read; do not
+reintroduce `goals.*`. Measure adoption against today's 2.1% baseline.
+
+### C2. Make stated interest rank, not just gate (days)
+`careerInterests` is drop-only (`intent_gates._gate_by_interest`) and contributes **zero**
+ranking weight, so a student who said "data science" gets Finance Analyst roles if skills align.
+`targetIndustries` is worse: 19 backend readers, none of them in `job_ranking.py`. Interests have
+~96% coverage against dreamCompanies' 2.1%, so this is the highest-coverage signal we own and it
+is unused in scoring. Needs a weight decision from Nick — an industry match is probably worth
+somewhere between the location bonus (10) and field alignment (40).
+
+Caveat: that coverage is **legacy data from the retired onboarding flow** and will decay as the
+user base turns over, which is why C1 comes first.
+
+### C3. Other cheap wins
+- **Roll out the embedding ranker.** Built, cached, flag-gated off (`embedding_ranker` flag +
+  `RANKER_MODE`). Turn it on for a cohort, compare against the deterministic path, keep the
+  winner.
+- **Surface narrative fields when embeddings are off.** `directionNarrative` and
+  `personalContext` feed *only* the embedding path, so they're ignored entirely for most users.
+- **Drop the `jobTypesInterestedIn` write** — nothing reads it anywhere. Cosmetic.
+
+### C4. Job event logger (the missing Track C for jobs)
 Log impression, click, save, dismiss, apply and auto-apply-submit per `(uid, job_id)`, reusing
 the `events_service` + `recommendation_events` pattern so the two surfaces stay consistent.
 Carry `request_id`, `session_id`, `rank` and `score` so an outcome can be tied back to the
@@ -212,7 +290,7 @@ impression that produced it — that join is exactly what `23ccad0` added for co
 This is the unlock for everything below it. Until it exists, any "learned ranker" has no
 training data and we'd be tuning weights by vibes.
 
-### C3. Close the loop (after ~2 weeks of C2 data)
+### C5. Close the loop (after ~2 weeks of C4 data)
 - **Repetition suppression / seen-cooldown** — the most visible quality win, and impossible
   without C2.
 - **Implicit negatives** from repeated skip, distinct from explicit dismissal.
@@ -220,20 +298,24 @@ training data and we'd be tuning weights by vibes.
 - **Cohort signal** ("students at your school with your track applied to…"), the first thing
   here that no competitor can copy from our profile fields alone.
 
-### C4. Learned model — only if C3's data justifies it
+### C6. Learned model — only if C5's data justifies it
 Re-derive the old Phases 1-5 (feature store, embedding cache, heuristic baseline, learned model)
 from whatever C2/C3 show. Do not start here. Do not restore the 12-week plan on faith; the
 status doc's own "verify before starting Phase 1" checklist assumed data that was never
 collected.
 
 ### Measure before building
-What fraction of active users have a parsed resume (`resumeParsed.skills`)? Skills are worth up
-to 30 points and the whole embedding path depends on resume text. If the number is low, cold
-start is the real personalization problem and C1/C2 priorities change. Cheap to answer, so
-answer it first.
+Two cheap queries that could reorder C1-C6:
+1. **What fraction of active users have a parsed resume (`resumeParsed.skills`)?** Skills are
+   worth up to 30 points and the whole embedding path depends on resume text. If it's low, cold
+   start is the real problem and C1 matters even more.
+2. **How many users have a non-empty top-level `careerTrack` / `dreamCompanies`?** That is the
+   true baseline for C1, and it tells us how much the 0e9f9c65 fix actually unlocked on existing
+   data. `intent_gates` measured 2.1% in May for dreamCompanies — confirm it against today.
 
-**Exit criteria:** job events flowing; a measured lift against the current ranker on a held-out
-cohort; no job repeating in a feed within N days.
+**Exit criteria:** preference capture adoption well above 2.1%; interests contributing to rank;
+job events flowing; a measured lift against the current ranker on a held-out cohort; no job
+repeating in a feed within N days.
 
 ---
 
@@ -242,7 +324,12 @@ cohort; no job repeating in a feed within N days.
 1. **PDL per-call cost** — gates B1's first live run (Firecrawl is ~$10; PDL unknown).
 2. **Phase B stopping point.** B1+B2 are free and large. B3 reuses an existing subscription. B4
    is real build effort — worth it only if B3's numbers are poor.
-3. **Does personalization wait for Phase B?** C1 is independently worth doing. C2+ should
-   arguably wait, since event data collected on a 2,223-job tier-1 pool teaches us less than
-   data collected after supply roughly doubles.
+3. **Does personalization wait for Phase B?** C1-C3 are independently worth doing and do not
+   depend on supply. C4+ should arguably wait, since event data collected on a 2,223-job tier-1
+   pool teaches us less than data collected after supply roughly doubles.
 4. **eFinancialCareers legal read** — still the single highest-value source found, still held.
+5. **How should C1 capture preferences — an onboarding step or a post-onboarding prompt?** The
+   trade is completion rate against intent. Re-adding a step costs funnel; prompting on first
+   Job Board visit catches the user when they care but reaches fewer of them.
+6. **What is an industry match worth in C2?** Needs a number. Location is 10 and field alignment
+   is 40, so somewhere between those.
