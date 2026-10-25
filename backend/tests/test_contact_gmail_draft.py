@@ -114,3 +114,40 @@ def test_unknown_contact_is_404(setup):
 @pytest.mark.unit
 def test_requires_auth(setup):
     assert setup.client.post(URL).status_code == 401
+
+
+CLAIM = "users/u1/gmailDraftClaims/ranker_c1"
+
+
+@pytest.mark.unit
+def test_fresh_claim_is_409_in_progress_and_gmail_untouched(setup):
+    from datetime import datetime
+    setup.db.store[CLAIM] = {"claimedAt": datetime.utcnow().isoformat()}
+    setup.db.times[CLAIM] = 1
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 409 and resp.get_json() == {"error": "draft_in_progress"}
+    setup.creator.assert_not_called()
+    assert CLAIM in setup.db.store
+
+
+@pytest.mark.unit
+def test_stale_claim_is_reclaimed(setup):
+    from datetime import datetime, timedelta
+    setup.db.store[CLAIM] = {"claimedAt": (datetime.utcnow() - timedelta(minutes=3)).isoformat()}
+    setup.db.times[CLAIM] = 1
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 200 and resp.get_json()["created"] is True
+    setup.creator.assert_called_once()
+    assert CLAIM not in setup.db.store
+
+
+@pytest.mark.unit
+def test_success_and_failure_both_clear_the_claim(setup):
+    assert setup.client.post(URL, headers=HEADERS).status_code == 200
+    assert CLAIM not in setup.db.store
+    setup.db.store[CONTACT].pop("gmailDraftId")
+    setup.creator.side_effect = RuntimeError("gmail down")
+    resp = setup.client.post(URL, headers=HEADERS)
+    assert resp.status_code == 502 and resp.get_json() == {"error": "gmail_draft_failed"}
+    assert CLAIM not in setup.db.store
+    assert "gmailDraftId" not in setup.db.store[CONTACT]
