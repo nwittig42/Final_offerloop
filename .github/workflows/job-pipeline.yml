@@ -25,7 +25,15 @@ on:
           - skip-fantastic
           - fix-salaries
           - crawl-ats-hot
+          # Cold tier is split 4 ways (--shard=N/4) but only shard0 was ever
+          # dispatchable, so three quarters of ~9,500 cold boards had no way
+          # to be crawled at all. That blocked the OFF-53 recovery: clearing
+          # a cold board's kept_job_ids only brings its jobs back when the
+          # board is next crawled. Run all four to cover the cold tier.
           - crawl-ats-cold-shard0
+          - crawl-ats-cold-shard1
+          - crawl-ats-cold-shard2
+          - crawl-ats-cold-shard3
 
 jobs:
   run:
@@ -96,6 +104,9 @@ jobs:
             fix-salaries)            python -m backend.pipeline.main --fix-salaries ;;
             crawl-ats-hot)           python -m backend.pipeline.main --crawl-ats --tier=hot ;;
             crawl-ats-cold-shard0)   python -m backend.pipeline.main --crawl-ats --tier=cold --shard=0/4 ;;
+            crawl-ats-cold-shard1)   python -m backend.pipeline.main --crawl-ats --tier=cold --shard=1/4 ;;
+            crawl-ats-cold-shard2)   python -m backend.pipeline.main --crawl-ats --tier=cold --shard=2/4 ;;
+            crawl-ats-cold-shard3)   python -m backend.pipeline.main --crawl-ats --tier=cold --shard=3/4 ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
 
