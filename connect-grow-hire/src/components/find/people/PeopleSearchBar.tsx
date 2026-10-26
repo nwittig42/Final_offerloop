@@ -39,11 +39,19 @@ const GREEN = "#01754F";
 
 // "Find [8] people" with a drag track. The max is the plan's per-search cap
 // (the backend clamps to it too); the bubble over the thumb shows the count.
+// Light mint at 1 person, deep Offerloop green at the plan's cap.
+function sliderColor(value: number, max: number): string {
+  const t = max > 1 ? (value - 1) / (max - 1) : 1;
+  const from = [0x7f, 0xd8, 0xa6], to = [0x01, 0x75, 0x4f];
+  return `rgb(${from.map((c, i) => Math.round(c + (to[i] - c) * t)).join(",")})`;
+}
+
 function CountSlider({ value, max, onChange, disabled }: { value: number; max: number; onChange: (n: number) => void; disabled?: boolean }) {
+  const color = sliderColor(value, max);
   return (
     <div className="flex min-w-0 items-center gap-3">
       <span className="shrink-0 text-[13px] font-medium text-[#1D1D1F]">
-        Find <span className="inline-block min-w-[1.4em] text-center tabular-nums" style={{ color: GREEN }}>{value}</span> {value === 1 ? "person" : "people"}
+        Find <span className="inline-block min-w-[1.4em] text-center tabular-nums" style={{ color, transition: "color .2s" }}>{value}</span> {value === 1 ? "person" : "people"}
       </span>
       <SliderPrimitive.Root
         value={[value]}
@@ -56,15 +64,15 @@ function CountSlider({ value, max, onChange, disabled }: { value: number; max: n
         className="group relative flex h-6 w-[150px] shrink-0 touch-none select-none items-center sm:w-[190px]"
       >
         <SliderPrimitive.Track className="relative h-[6px] grow overflow-hidden rounded-full bg-[#E8E8ED]">
-          <SliderPrimitive.Range className="absolute h-full rounded-full" style={{ background: `linear-gradient(90deg, #34C77B 0%, ${GREEN} 100%)` }} />
+          <SliderPrimitive.Range className="absolute h-full rounded-full" style={{ background: `linear-gradient(90deg, #7FD8A6 0%, ${color} 100%)` }} />
         </SliderPrimitive.Track>
         <SliderPrimitive.Thumb
           className="relative block h-[22px] w-[22px] cursor-grab rounded-full bg-white outline-none transition-transform active:cursor-grabbing active:scale-110 focus-visible:ring-4 focus-visible:ring-[#01754F]/20"
-          style={{ boxShadow: `0 0 0 2px ${GREEN}, 0 2px 6px rgba(1,117,79,0.3)` }}
+          style={{ boxShadow: `0 0 0 2px ${color}, 0 2px 6px rgba(1,117,79,0.3)`, transition: "box-shadow .2s, transform .15s" }}
         >
           <span
             className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded-full px-2 py-0.5 text-[11.5px] font-semibold tabular-nums text-white opacity-0 transition-opacity group-active:opacity-100 group-focus-within:opacity-100"
-            style={{ background: GREEN }}
+            style={{ background: color }}
           >
             {value}
           </span>
