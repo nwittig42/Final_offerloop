@@ -36,7 +36,7 @@ export function contactsTourView(
     if (dead && !pushing) {
       return {
         target: null,
-        title: "Connect Gmail",
+        title: ctx.pushError === "recipient_suppressed" ? "This address bounced" : "Couldn't add it to Gmail",
         body: ctx.pushError === "recipient_suppressed"
           ? "Gmail won't take a draft to this address. It bounced before."
           : "Something went wrong putting it in your Gmail drafts.",
@@ -47,14 +47,16 @@ export function contactsTourView(
     const retry = !!ctx.gmailError || !!ctx.pushError;
     return {
       target: null,
-      title: "Connect Gmail",
+      title: ctx.connected && !ctx.gmailError ? "Put it in your Gmail" : "Connect Gmail",
       body: pushing
         ? "Putting it in your Gmail drafts…"
         : ctx.gmailError
           ? "Google didn't give us permission to create drafts. Connect again and tick every box."
           : ctx.pushError
             ? "Something went wrong putting it in your Gmail drafts."
-            : "Connect Gmail so this goes out from your own inbox. Google will ask you to tick a few boxes. Tick all of them.",
+            : ctx.connected
+              ? "Your Gmail is already connected. I'll drop this into your drafts so you can send it from your own inbox."
+              : "Connect Gmail so this goes out from your own inbox. Google will ask you to tick a few boxes. Tick all of them.",
       action: { label: retry ? "Try again" : ctx.connected ? "Put it in Gmail" : "Connect Gmail", disabled: pushing },
       secondary: { label: "Not now" },
     };

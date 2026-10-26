@@ -89,4 +89,13 @@ describe("contactsTourView", () => {
     expect(ALL_SET_VIEW.target).toBeNull();
     expect(ALL_SET_VIEW.title).toBe("You're all set");
   });
+  it("gmail headings match the state: already connected, bounced address, push failure", () => {
+    const connected = contactsTourView("gmail", { firstName: "Pat", connected: true });
+    expect(connected?.title).toBe("Put it in your Gmail");
+    expect(connected?.body).toBe("Your Gmail is already connected. I'll drop this into your drafts so you can send it from your own inbox.");
+    expect(connected?.action?.label).toBe("Put it in Gmail");
+    expect(contactsTourView("gmail", { firstName: "Pat", pushError: "recipient_suppressed" })?.title).toBe("This address bounced");
+    expect(contactsTourView("gmail", { firstName: "Pat", pushError: "no_saved_draft" })?.title).toBe("Couldn't add it to Gmail");
+    expect(contactsTourView("gmail", { firstName: "Pat" })?.title).toBe("Connect Gmail");
+  });
 });
