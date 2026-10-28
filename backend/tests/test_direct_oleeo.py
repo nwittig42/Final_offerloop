@@ -39,7 +39,10 @@ def _board(titles, next_href=None):
 
 @pytest.fixture
 def env(monkeypatch):
-    monkeypatch.setattr(oleeo, "_polite_sleep", lambda: None)
+    # The fetcher now honours tal.net's declared `Crawl-delay: 10` instead of
+    # fetcher._polite_sleep's 50-300ms jitter. Zero it here or every mocked
+    # request in this file would really sleep ten seconds.
+    monkeypatch.setattr(oleeo, "TAL_NET_CRAWL_DELAY_S", 0)
     monkeypatch.setattr(oleeo.slug_loader, "get_record", lambda a, s: dict(RECORD))
     sess = MagicMock()
     monkeypatch.setattr(oleeo, "_SESSION", sess)
@@ -59,8 +62,18 @@ def _serve(env, board_pages, vacancy=VACANCY):
 def test_board_links_and_titles(env):
     _serve(env, [BOARD, _board([])])
     jobs = oleeo.fetch("jefferies")
-    # 50 anchors on the real board, 45 survive the candidate-title filter
-    assert len(jobs) == 45
+    # 50 anchors on the real board. 45 survive the candidate-title filter, then
+    # the non-US title pre-filter removes 33 of those (this board is heavily
+    # EMEA/APAC: London, Frankfurt, Hong Kong, Singapore, Paris, Japan,
+    # Brazil), leaving 16.
+    #
+    # This used to assert 45, which only held because _serve mocks ONE vacancy
+    # page for every opp and that mock reports "Region: Americas" — so every
+    # posting looked US no matter where it really was. The count now reflects
+    # the titles, which is what the pre-filter acts on.
+    assert len(jobs) == 16
+    kept = {j["title"] for j in jobs}
+    assert not [t for t in kept if "London" in t or "Hong Kong" in t or "Paris" in t]
     assert jobs[0]["title"] == "2027 Corporate Technology Summer Internship – New York and Jersey City"
     assert jobs[0]["job_id"] == "direct_oleeo_jefferies_1991"
     assert jobs[0]["apply_url"].endswith("/opp/1991-2027-Corporate-Technology-Summer-Internship-New-York-and-Jersey-City/en-GB")
@@ -229,10 +242,18 @@ def test_bofa_campus_programs_board(env, monkeypatch):
     _serve(env, [BOFA_PROGRAMS])  # Jefferies vacancy page (Region: Americas) stands in for each opp
     jobs = oleeo.fetch("bofa-campus")
     titles = {j["title"] for j in jobs}
-    # 46 programs on the board, 43 candidate titles (non-US ones are dropped
-    # later by each real vacancy's Region label, faked here as Americas)
-    assert len(jobs) == 43
+    # 46 programs on the board; the non-US title pre-filter removes 31 of them
+    # (Paris, Toronto, Seoul, Singapore, London, Stockholm, Frankfurt, Brazil,
+    # Tokyo, Jakarta, Shanghai, Kuala Lumpur, Latin America), leaving 14.
+    #
+    # Was 43, for the same reason as test_board_links_and_titles: the single
+    # mocked vacancy page claims "Region: Americas", so the region check kept
+    # every posting regardless of its real location. Pre-filtering on the title
+    # is what makes this fixture behave like the live board, which returned 0
+    # US jobs on 2026-10-22.
+    assert len(jobs) == 14
     assert "Global Investment Banking Summer Associate Program - 2027" in titles
+    assert not [t for t in titles if "Seoul" in t or "Paris" in t or "Toronto" in t]
     assert all(j["job_id"].startswith("direct_oleeo_bofa-campus_") for j in jobs)
 
 

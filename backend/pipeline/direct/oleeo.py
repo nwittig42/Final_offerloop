@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
+import time
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -27,7 +29,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from backend.pipeline import slug_loader
-from backend.pipeline.fetcher import REQUEST_TIMEOUT, USER_AGENT, _polite_sleep
+from backend.pipeline.fetcher import REQUEST_TIMEOUT, USER_AGENT
 from backend.pipeline.direct import (
     SKIPPABLE_STATUSES, FetchError, Snapshot, check_skip_ceiling, is_candidate_title,
     make_job_id)
@@ -36,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 MAX_PAGES = 5
 MIN_DESCRIPTION_CHARS = 100
+# From https://bankcampuscareers.tal.net/robots.txt — `Crawl-delay: 10`. The
+# same file Disallows ClaudeBot, GPTBot, Bytespider, ImageSiftBot and
+# SemrushBot entirely; `*` is allowed on the jobboard path we use, with this
+# delay. Overridable for tests.
+TAL_NET_CRAWL_DELAY_S = float(os.getenv("OLEEO_CRAWL_DELAY_S", "10"))
 _XF_SEGMENT = re.compile(r"/xf-[^/]+(?=/)")
 _VACANCY_RE = re.compile(
     r'<a\s[^>]*?href="([^"]*/opp/(\d+)-[^"]*)"[^>]*>(.*?)</a>', re.S | re.I)
@@ -47,9 +54,19 @@ _LABEL_RE = re.compile(r'class="[^"]*hform_lbl_text[^"]*"[^>]*>(.*?)</span>', re
 # Region label values that mean "US" (allowlist): any other Region value
 # (EMEA, APAC, Latin America, Middle East, ...) is skipped on purpose.
 US_REGIONS = re.compile(r"\b(americas|north america|us|usa|united states)\b", re.I)
-# Fallback when a vacancy has no Region label: clearly non-US places named in the title.
+# Unambiguously non-US places named in a title. Used twice: as a PRE-FETCH
+# skip on the listing title, and as the fallback when a vacancy page carries no
+# Region label.
+#
+# Only unambiguous names belong here, because the pre-fetch skip bypasses the
+# authoritative Region check — and dropping a US job is the expensive, silent
+# error (cf. OFF-54). Deliberately excluded: "Dublin" (Ohio and California),
+# "Mexico" (Mexico, Missouri — and "New Mexico" is a whole US state).
+# "Latin America" / "Brazil" / "Japan" are safe as region/country words.
 NON_US_TITLE_PLACES = re.compile(
-    r"\b(london|tokyo|hong kong|singapore|sydney|paris|frankfurt|mumbai|toronto)\b", re.I)
+    r"\b(london|tokyo|hong\s+kong|singapore|sydney|paris|frankfurt|mumbai|"
+    r"toronto|seoul|shanghai|jakarta|kuala\s+lumpur|stockholm|"
+    r"latin\s+america|brazil|japan|canada)\b", re.I)
 _LOCATION_KEYS = ("location", "region")
 _DEPT_KEYS = ("division", "business area", "business unit", "group", "department")
 
@@ -89,7 +106,13 @@ class _Gone(Exception):
 
 
 def _get_html(url: str, what: str, skippable: bool = False) -> str:
-    _polite_sleep()
+    # tal.net's robots.txt declares `Crawl-delay: 10` and hard-blocks
+    # ClaudeBot/GPTBot/Bytespider outright, so this is a tenant that means it.
+    # fetcher._polite_sleep is 50-300ms jitter, which is two orders of
+    # magnitude faster than asked. Honour the declared delay: these boards are
+    # tens of vacancies, not thousands, so the wall-clock cost is minutes on a
+    # daily crawl and it keeps us off a greylist we would not get back off.
+    time.sleep(TAL_NET_CRAWL_DELAY_S)
     try:
         resp = _SESSION.get(url, timeout=REQUEST_TIMEOUT)
     except Exception as exc:
@@ -186,13 +209,27 @@ def fetch(slug: str) -> list[dict]:
     analyst_entry = bool(rec.get("analyst_entry"))
 
     found: dict[str, tuple[str, str]] = {}  # opp id -> (url, title), first seen wins
+    prefiltered: set[str] = set()  # opp ids skipped as non-US before any vacancy fetch
     page_url: str | None = board_url
     partial = False
     for page_no in range(MAX_PAGES):
         page = _get_html(page_url, f"[{slug}] board page {page_no + 1}")
         for opp, url, title in _vacancies(page, page_url, host):
-            if opp not in found and is_candidate_title(title, analyst_entry):
-                found[opp] = (url, title)
+            if opp in found or not is_candidate_title(title, analyst_entry):
+                continue
+            # Skip titles that name a foreign city before paying for the
+            # vacancy page. At the 10s crawl delay each skipped fetch is 10
+            # seconds, and bofa-campus is currently 37 vacancies of which
+            # every single one is non-US — over six minutes of the daily
+            # crawl spent to return nothing. The Region label on the page
+            # remains the authoritative check for everything else.
+            if NON_US_TITLE_PLACES.search(title):
+                # Record the id, not a counter: these boards list each vacancy
+                # twice (desktop + mobile markup) and a skipped opp never
+                # enters `found`, so a bare counter double-counts every one.
+                prefiltered.add(opp)
+                continue
+            found[opp] = (url, title)
         nxt = _NEXT_RE.search(page)
         page_url = None
         if nxt:
@@ -247,6 +284,16 @@ def fetch(slug: str) -> list[dict]:
             "analyst_entry": analyst_entry,
         })
 
-    logger.info("  Oleeo [%s] -> %d jobs (%d non-US skipped, %d gone)%s",
-                slug, len(jobs), skipped, gone, " [partial]" if partial else "")
+    # 0 jobs is a legitimate steady state here, not a breakage. BofA's US
+    # campus postings are seasonal: the 2027 US summer-analyst deadlines close
+    # around Aug-Sept, so from autumn the board carries international roles
+    # (Paris, Seoul, Tokyo, Brazil) plus US *events* until the next cycle
+    # opens. Checked 2026-10-22: 37 vacancies, every one non-US. Do not
+    # "fix" this by repointing the URL — vacancy/2 is the events board
+    # (information sessions, careers roadshows) and vacancy/3 is empty, so
+    # vacancy/1 is correct. All brand-N values serve the same board.
+    logger.info("  Oleeo [%s] -> %d jobs (%d non-US by title pre-fetch, "
+                "%d non-US by region, %d gone)%s",
+                slug, len(jobs), len(prefiltered), skipped, gone,
+                " [partial]" if partial else "")
     return Snapshot(jobs, partial=partial)
