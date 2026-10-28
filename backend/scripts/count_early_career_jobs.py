@@ -51,11 +51,43 @@ def _print_sources(count, fmt, dead, tier, intern) -> None:
         print(f"  {src:<14}{fmt(s_all):>9}{fmt(s1):>8}{fmt(s2):>8}{fmt(s_live1):>9}{flag}")
 
 
+def _print_sample(col, dead, tier, limit=30) -> None:
+    """Show the newest tier-1 jobs as a student would meet them.
+
+    Counts say how MANY usable jobs exist; they say nothing about whether a
+    student opening the board sees Goldman or sees DoorDash. This is the only
+    view that answers that, so it reads documents rather than aggregating.
+    """
+    from collections import Counter
+    print(f"\n--- newest {limit} live tier-1 jobs (what the feed opens on) ---")
+    q = (col.where(filter=tier(1))
+            .order_by("posted_at", direction="DESCENDING")
+            .limit(limit * 3)
+            .select(["title", "company", "source", "location", "expired"]))
+    rows = []
+    for snap in q.stream():
+        d = snap.to_dict() or {}
+        if d.get("expired") is True:
+            continue
+        rows.append(d)
+        if len(rows) >= limit:
+            break
+    for d in rows:
+        print(f"  {(d.get('company') or '?')[:26]:<26} "
+              f"{(d.get('title') or '?')[:58]:<58} "
+              f"{(d.get('source') or '?')}")
+    if rows:
+        print("\n  companies in this sample:",
+              ", ".join(f"{c}×{n}" for c, n in
+                        Counter((r.get("company") or "?") for r in rows).most_common(12)))
+
+
 def main() -> None:
     # --sources-only prints just the per-source table. The full census runs
     # ~50 aggregation queries and the source table comes last, so a slow run
     # or an interrupted terminal loses exactly the breakdown you wanted.
     sources_only = "--sources-only" in sys.argv
+    sample_only = "--sample" in sys.argv
 
     _bootstrap_app()
     from backend.app.extensions import get_db
@@ -83,6 +115,9 @@ def main() -> None:
     tier = lambda t: FieldFilter("relevance_tier", "==", t)  # noqa: E731
     intern = FieldFilter("employment_type", "==", "INTERNSHIP")
 
+    if sample_only:
+        _print_sample(col, dead, tier)
+        return
     if sources_only:
         _print_sources(count, fmt, dead, tier, intern)
         return
