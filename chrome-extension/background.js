@@ -427,6 +427,7 @@ async function handleCompanyPeople(request, sendResponse) {
       prefetch: request.prefetch !== false,
       focus: (request.focus || '').trim(),
       dig: request.dig,
+      alumniCount: request.alumniCount === true,
     });
     sendResponse(result);
   } catch (error) {
@@ -464,6 +465,10 @@ async function fetchCompanyPeople(company, authToken, isRetry = false, role = ''
     // lists). Unset means the server decides, which for the panel is no.
     if (opts.dig === '1' || opts.dig === '0') params.set('dig', opts.dig);
     if (opts.focus) params.set('focus', opts.focus);
+    // alumni_count: one Coresignal search server-side, so we ask only when
+    // we do not already have the number for this company (OFF-63). Unset
+    // means the server returns alumni_count: null and charges nothing.
+    if (opts.alumniCount === true) params.set('alumni_count', '1');
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/ranker/candidates?${params.toString()}`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${authToken}` },
