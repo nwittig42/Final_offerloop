@@ -242,8 +242,22 @@ def compute_relevance_tier(doc: dict) -> int:
              default via tier filter.
     """
     title = doc.get("title") or ""
-    is_early = bool(_EARLY_CAREER_TITLE.search(title)) or (
-        bool(doc.get("analyst_entry")) and is_candidate_title(title, True)
+    # A senior rank disqualifies the posting unless an unmistakable
+    # early-career marker overrides it ("Intern", "Co-op", "Summer Analyst"…).
+    #
+    # This check existed in is_candidate_title, which only the direct-ATS
+    # fetchers call, so it never applied to Greenhouse/Lever/Ashby/Simplify —
+    # i.e. to the sources holding essentially all of our jobs. The bare word
+    # "associate" is in _EARLY_CAREER_TITLE, so "Associate Director, Business
+    # Development" graded tier 1: "associate" made it early-career,
+    # "business development" made it on-target, and "Director" was never
+    # consulted. Found in a sample of the 30 newest live tier-1 jobs
+    # 2026-10-22, alongside "Associate Business Development Manager".
+    senior_blocked = bool(_SENIOR_TITLE.search(title)) and not _EARLY_CAREER_OVERRIDE.search(title)
+    is_early = (not senior_blocked) and (
+        bool(_EARLY_CAREER_TITLE.search(title)) or (
+            bool(doc.get("analyst_entry")) and is_candidate_title(title, True)
+        )
     )
     in_target = bool(_TARGET_FUNCTION_TITLE.search(title))
 

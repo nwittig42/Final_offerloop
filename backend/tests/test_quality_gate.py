@@ -6,6 +6,8 @@ Firestore dependency.
 """
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from pipeline.quality_gate import evaluate, apply, compute_relevance_tier
 
 
@@ -160,3 +162,54 @@ class TestFinanceTitlesReachTier1:
         for title in ("Software Engineer Intern", "Business Analyst Intern",
                       "Data Scientist Intern", "Product Manager Intern"):
             assert compute_relevance_tier({"title": title}) == 1, f"{title!r} regressed"
+
+
+class TestSeniorRanksAreNotEarlyCareer:
+    """A senior rank must disqualify tier 1 unless an intern/co-op marker overrides.
+
+    `_SENIOR_TITLE` was only consulted by `is_candidate_title`, which just the
+    direct-ATS fetchers call — so it never applied to Greenhouse, Lever, Ashby
+    or Simplify, i.e. to essentially every job we hold. Because the bare word
+    "associate" is in `_EARLY_CAREER_TITLE`, "Associate Director, Business
+    Development" graded tier 1: "associate" made it early-career, "business
+    development" made it on-target, and "Director" was never checked.
+
+    Found live on 2026-10-22 in a sample of the 30 newest tier-1 jobs.
+    """
+
+    DEMOTED = [
+        "Associate Director, Business Development",
+        "Associate Principal, Consulting",
+        "Associate Vice President, Asset Management",
+        "Lead Data Scientist",
+        "Head of Investment Banking",
+        "Staff Software Engineer",
+    ]
+
+    # An unmistakable early-career marker outranks a senior-sounding word.
+    STILL_TIER1 = [
+        "Software Engineer Intern",
+        "Senior Software Engineer Intern",   # intern wins over "Senior"
+        "2027 Investment Banking Summer Analyst",
+        "Summer Associate - Consulting",
+        "Audit Associate - Fall 2027",
+        "Business Analyst Intern",
+    ]
+
+    @pytest.mark.parametrize("title", DEMOTED)
+    def test_senior_rank_is_not_tier1(self, title):
+        assert compute_relevance_tier({"title": title}) != 1, \
+            f"{title!r} is a senior role and must not reach the feed default"
+
+    @pytest.mark.parametrize("title", STILL_TIER1)
+    def test_early_career_override_wins(self, title):
+        assert compute_relevance_tier({"title": title}) == 1, f"{title!r} regressed"
+
+    @pytest.mark.parametrize("title,expected", [
+        ("2027 Summer Analyst Program", 1),
+        ("Global Markets Summer Analyst", 1),
+        ("Senior Analyst - FIG", 3),
+    ])
+    def test_analyst_entry_path_unaffected(self, title, expected):
+        doc = {"title": title, "analyst_entry": True}
+        assert compute_relevance_tier(doc) == expected
