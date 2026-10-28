@@ -38,24 +38,33 @@ from app.utils.recommendation_events import log_recommendation_event
 _PREFETCH_SURFACES = {
     s.strip() for s in os.environ.get("DECK_PREFETCH_SURFACES", "ios_swipe_deck").split(",") if s.strip()
 }
-# The extension never digs Coresignal on its own: a dry company returns
+# No surface digs Coresignal on its own (OFF-63): a dry company returns
 # shelf_empty and the student asks for the dig with ?dig=1. Each dig is
-# capped smaller than the app's and rationed per student per day.
+# rationed per student per day. The extension has always worked this way;
+# the deck surfaces used to auto-dig on any empty rank, which spent a search
+# plus up to DECK_DIG_COLLECTS profile pulls without anyone asking.
 EXTENSION_DIG_COLLECTS = int(os.environ.get("EXTENSION_DIG_COLLECTS", "6"))
 EXTENSION_DIGS_PER_DAY = int(os.environ.get("EXTENSION_DIGS_PER_DAY", "5"))
 DECK_DIG_COLLECTS = int(os.environ.get("DECK_DIG_COLLECTS", "12"))
+DECK_DIGS_PER_DAY = int(os.environ.get("DECK_DIGS_PER_DAY", "5"))
 
 
-def _extension_dig_allowed(db, uid: str) -> bool:
-    """Count today's extension digs for this student; True and increment
-    when under EXTENSION_DIGS_PER_DAY, False when the day's ration is spent.
-    Fails closed on any error (no dig) so a Firestore blip never spends."""
+def _dig_allowed(db, uid: str, is_extension: bool) -> bool:
+    """Count today's digs for this student; True and increment when under the
+    day's ration, False when it is spent. Fails closed on any error (no dig)
+    so a Firestore blip never spends.
+
+    One counter for both surfaces, so a student cannot double their ration by
+    alternating between the panel and the deck. The doc keeps its original
+    `extensionDigs` id so live counters survive this deploy mid-day.
+    """
+    cap = EXTENSION_DIGS_PER_DAY if is_extension else DECK_DIGS_PER_DAY
     try:
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
         ref = db.collection("users").document(uid).collection("quotas").document("extensionDigs")
         snap = ref.get()
         used = int(((snap.to_dict() or {}) if getattr(snap, "exists", False) else {}).get(day, 0))
-        if used >= EXTENSION_DIGS_PER_DAY:
+        if used >= cap:
             return False
         ref.set({day: used + 1, "updatedAt": datetime.now(timezone.utc).isoformat()}, merge=True)
         return True
@@ -190,13 +199,19 @@ def get_ranked_candidates():
     surface = (request.args.get("surface") or "").strip()[:40] or "ios_swipe_deck"
     # ?prefetch=0 skips the FullEnrich prefetch (the extension's glance lists).
     do_prefetch = (request.args.get("prefetch") or "1").strip() != "0"
-    # ?dig=1 asks for the Coresignal dig on a dry company; ?dig=0 forbids it.
-    # The app keeps its automatic dig; the extension must ask (see the
-    # guardrails at the top of this file).
+    # ?dig=1 asks for the Coresignal dig on a dry company. Every surface must
+    # ask now (OFF-63) — an empty rank alone no longer buys a live search and
+    # up to a dozen profile pulls. Clients render the dig as a button off
+    # reason="shelf_empty" + can_dig, as the extension already does.
     dig_arg = (request.args.get("dig") or "").strip()
     is_extension = surface == "extension"
-    want_dig = (dig_arg == "1") or (not is_extension and dig_arg != "0")
+    want_dig = dig_arg == "1"
     dig_collects = EXTENSION_DIG_COLLECTS if is_extension else DECK_DIG_COLLECTS
+    # ?alumni_count=1 asks for "N from your school work here" (OFF-63). It is
+    # one Coresignal search, so it is opt-in: only a client that actually
+    # renders the number should pay for it, and only when it needs a fresh
+    # one. Everything else gets alumni_count=null and shows no figure.
+    want_alumni_count = (request.args.get("alumni_count") or "").strip() == "1"
 
     db = get_db()
     if not db:
@@ -219,7 +234,7 @@ def get_ranked_candidates():
     # pays it and a dry one pays it once.
     if not candidates and not want_dig:
         dig_state = "not_asked"
-    elif not candidates and is_extension and not _extension_dig_allowed(db, uid):
+    elif not candidates and not _dig_allowed(db, uid, is_extension):
         dig_state = "capped"
     elif not candidates:
         dig_state = "ran"
@@ -403,26 +418,28 @@ def get_ranked_candidates():
             logger.exception("ranker: chips failed uid=%s", uid)
             chips = []
         # How many of the student's school work here, per Coresignal's index.
-        # A search, not a collect: free, and it tells the student what the
-        # alumni chip could pull before anyone spends anything. Capped at 50
-        # by page size; the panel shows "50+".
-        try:
-            from app.services import coresignal_client as _csc
-            _p = (_chip_ctx or {}).get("profile") or {}
-            _sch = ((_p.get("academics") or {}).get("university")
-                    or (_p.get("academics") or {}).get("school")
-                    or _p.get("university") or _p.get("school") or "")
-            _sch = str(_sch).strip()
-            if _sch and getattr(_csc, "CORESIGNAL_API_KEY", ""):
-                _ids = _csc.alumni_first_ids(
-                    {"companies": [{"name": company}], "title_variations": [],
-                     "locations": ["United States"]},
-                    _sch, page_size=50,
-                )
-                alumni_count = len(_ids or [])
-        except Exception:
-            logger.exception("ranker: alumni count failed uid=%s", uid)
-            alumni_count = None
+        # A search, not a collect — cheap, but one per deck load is not, and
+        # it used to run on EVERY company deck whether or not the client drew
+        # the number (OFF-63). Now the client asks with ?alumni_count=1 and
+        # caches what it gets. Capped at 50 by page size; the panel shows "50+".
+        if want_alumni_count:
+            try:
+                from app.services import coresignal_client as _csc
+                _p = (_chip_ctx or {}).get("profile") or {}
+                _sch = ((_p.get("academics") or {}).get("university")
+                        or (_p.get("academics") or {}).get("school")
+                        or _p.get("university") or _p.get("school") or "")
+                _sch = str(_sch).strip()
+                if _sch and getattr(_csc, "CORESIGNAL_API_KEY", ""):
+                    _ids = _csc.alumni_first_ids(
+                        {"companies": [{"name": company}], "title_variations": [],
+                         "locations": ["United States"]},
+                        _sch, page_size=50,
+                    )
+                    alumni_count = len(_ids or [])
+            except Exception:
+                logger.exception("ranker: alumni count failed uid=%s", uid)
+                alumni_count = None
 
     if not candidates:
         # shelf_empty: nothing on file and no dig was run; the panel may ask
