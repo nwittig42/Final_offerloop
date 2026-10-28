@@ -3195,6 +3195,18 @@ async function loadCompanyPeople(company, prefix = 'company', opts = {}) {
   }
   const role = prefix === 'company' ? (companyFilter.role || '') : '';
   const focus = prefix === 'company' ? (companyFilter.focus || '') : '';
+  // Only the Company tab draws the alumni figure (the chip label and the
+  // alumni empty state), and only when we have not already bought it for
+  // this company. Glance lists never ask.
+  const companyKey = company.slug || company.name;
+  const wantAlumniCount = prefix === 'company' && !alumniCountCache.has(companyKey);
+  if (prefix === 'company') {
+    // Null until the answer lands, so a new company never briefly wears the
+    // previous company's alumni count on its chip.
+    companyFilter.alumniCount = alumniCountCache.has(companyKey)
+      ? alumniCountCache.get(companyKey)
+      : null;
+  }
   // Glance lists never pull new people; the Company tab only does when the
   // student presses the button (opts.dig === '1').
   const dig = prefix === 'profileCompany' ? '0' : (opts.dig === '1' ? '1' : '');
@@ -3242,6 +3254,7 @@ async function loadCompanyPeople(company, prefix = 'company', opts = {}) {
       limit: prefix === 'profileCompany' ? 5 : 10,
       prefetch: prefix !== 'profileCompany',
       dig,
+      alumniCount: wantAlumniCount,
       authToken: currentState.authToken,
     });
     stopStages();
@@ -3265,7 +3278,14 @@ async function loadCompanyPeople(company, prefix = 'company', opts = {}) {
     }
     if (prefix === 'company') {
       // LinkedIn's "N from your school work here", as Coresignal counts it.
-      companyFilter.alumniCount = (typeof response.alumni_count === 'number') ? response.alumni_count : null;
+      // Only the request that asked carries a number; cache whatever came
+      // back (including null) so this company never asks a second time, and
+      // never let a request that did not ask clobber what we already have.
+      if (wantAlumniCount) {
+        const n = (typeof response.alumni_count === 'number') ? response.alumni_count : null;
+        alumniCountCache.set(companyKey, n);
+        companyFilter.alumniCount = n;
+      }
       renderCompanyChips(company);
     }
     if (state.rows.length === 0) {
@@ -3425,6 +3445,12 @@ function renderCompanyRows(rows, prefix = 'company') {
 // predicted hunts. chips: what the server suggested for this student
 // (year, school, saved roles); a plain default until the first response.
 const companyFilter = { role: '', focus: '', company: '', chips: null };
+
+// "N from your school work here" costs a Coresignal search server-side, so
+// we buy it once per company per popup session and reuse it across chip
+// switches, digs and tab hops (OFF-63 — it used to be bought on every single
+// company deck load). Keyed by the same slug/name companyFilter.company uses.
+const alumniCountCache = new Map();
 
 const DEFAULT_CHIPS = [
   { label: 'Alumni', focus: 'alumni' },

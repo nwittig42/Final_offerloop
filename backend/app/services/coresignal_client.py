@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
-from app.services.metering import meter_call
+from app.services.metering import log_provider_spend, meter_call
 
 logger = logging.getLogger("coresignal_client")
 
@@ -55,9 +55,10 @@ COLLECT_ENDPOINT = f"{CORESIGNAL_BASE_URL}/employee_multi_source/collect"
 
 _session = requests.Session()
 
-# Cap search-side IDs we ever ask for. Each ID is 1 Search credit but the
-# Pro plan has 20K Search credits/mo, so generous here is fine. Lazy collect
-# below ensures we only spend Collect credits up to what we return.
+# Cap search-side IDs we ever ask for. A search is 1 Search credit per CALL
+# regardless of page size, and the Pro plan has 20K Search credits/mo, so a
+# generous page size is free — it is the number of CALLS that costs. Lazy
+# collect below ensures we only spend Collect credits up to what we return.
 DEFAULT_SEARCH_PAGE_SIZE = 50
 SEARCH_TIMEOUT_SEC = 25
 COLLECT_TIMEOUT_SEC = 20
@@ -105,8 +106,9 @@ def search_contacts_from_prompt(
         return [], 0, [], {"provider": "coresignal", "raw_count": 0}
 
     # Alumni-first (2026-08-24): the same search constrained to the
-    # student's own school, and those people lead the deck. Searches are
-    # free; the warmth scorer then writes a real "fellow Trojan" opener.
+    # student's own school, and those people lead the deck. A second Search
+    # credit on top of the one above (metered as its own `search` row), and
+    # the warmth scorer then writes a real "fellow Trojan" opener.
     if alumni_school:
         alumni = alumni_first_ids(parsed_prompt, alumni_school, page_size=max_contacts * 2)
         if alumni:
@@ -410,9 +412,12 @@ def alumni_first_ids(parsed, school: str, page_size: int = 30):
     """IDs for people matching the search AND sharing the student's school.
 
     The warm-intro query the capability matrix proved (1,000 USC alumni
-    currently at Deloitte): free to run, and the deck leads with people the
-    warmth scorer can write a real opening line about. Returns [] on any
-    failure; the caller treats alumni as a bonus, never a dependency.
+    currently at Deloitte): the deck leads with people the warmth scorer can
+    write a real opening line about. Returns [] on any failure; the caller
+    treats alumni as a bonus, never a dependency.
+
+    Costs one Search credit per call. Cheap next to a Collect, but NOT free —
+    callers that run this per page load (OFF-63) are the expensive kind.
     """
     school = (school or "").strip()
     if not school:
@@ -454,14 +459,23 @@ def _search_ids(query: Dict[str, Any], page_size: int = DEFAULT_SEARCH_PAGE_SIZE
         )
         return []
     try:
-        ids = resp.json()
+        parsed = resp.json()
     except ValueError:
         logger.warning("Coresignal search returned non-JSON body")
-        return []
-    if not isinstance(ids, list):
-        logger.warning("Coresignal search returned unexpected shape: %r", type(ids))
-        return []
-    return [i for i in ids[:page_size] if isinstance(i, int)]
+        parsed = None
+    ids: List[int] = []
+    if isinstance(parsed, list):
+        ids = [i for i in parsed[:page_size] if isinstance(i, int)]
+    elif parsed is not None:
+        logger.warning("Coresignal search returned unexpected shape: %r", type(parsed))
+    # One Search credit, billed by Coresignal the moment the search answers
+    # 200 — including a 200 whose body we could not parse. This is the only
+    # place that sees that, and every search funnels through here
+    # (search_contacts_from_prompt, alumni_first_ids, enrich_linkedin_profile,
+    # linkedin_backfill), so searches can no longer leave the building
+    # unmetered. Background write; never raises.
+    log_provider_spend("coresignal", "search", 1, returned=len(ids))
+    return ids
 
 
 def _collect_profile(profile_id: int) -> Optional[Dict[str, Any]]:

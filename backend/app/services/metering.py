@@ -57,7 +57,14 @@ logger = logging.getLogger("metering")
 
 PROVIDER_RATES: Dict[str, Dict[str, float]] = {
     "pdl":         {"person_search": 0.20, "person_enrich": 0.20},
-    "coresignal":  {"member_search": 0.04, "member_collect": 0.08},
+    # Coresignal bills a Search credit per ES-DSL search call and a Collect
+    # credit per profile fetched. `search` rows are logged inside
+    # coresignal_client._search_ids — the one chokepoint every search goes
+    # through, and the only place that can see the HTTP 200 that bills.
+    # `member_search` rows therefore carry Collect credits ONLY (see
+    # _credits_for) and price at the Collect rate (see _cost_for); there is
+    # deliberately no `member_search` entry here to bill against.
+    "coresignal":  {"search": 0.04, "member_collect": 0.08},
     "hunter":      {"domain_search": 0.004, "email_finder": 0.003, "email_verify": 0.002},
     "apify":       {"linkedin_posts": 0.005, "sales_nav": 0.005},
     "neverbounce": {"single_check": 0.005},
@@ -326,17 +333,14 @@ def meter_call(provider: str, endpoint: str):
 def _cost_for(provider: str, endpoint: str, credits: int) -> float:
     """
     USD cost for `credits` units of `endpoint`. Most endpoints have a flat
-    per-credit rate. Coresignal member_search is special: credits=1+N where
-    1 is a Search credit ($0.04) and N are Collect credits ($0.08 each).
+    per-credit rate. Coresignal member_search is special: its credits are all
+    Collect credits ($0.08 each), because the Search credit is logged
+    separately as a `coresignal/search` row from inside _search_ids.
     """
     if credits <= 0:
         return 0.0
     if provider == "coresignal" and endpoint == "member_search":
-        # First credit is the Search call, rest are Collects.
-        search_rate = PROVIDER_RATES["coresignal"]["member_search"]
-        collect_rate = PROVIDER_RATES["coresignal"]["member_collect"]
-        collect_credits = max(0, credits - 1)
-        return round(search_rate + collect_credits * collect_rate, 6)
+        return round(credits * PROVIDER_RATES["coresignal"]["member_collect"], 6)
     rate = PROVIDER_RATES.get(provider, {}).get(endpoint, 0.0)
     return round(credits * rate, 6)
 
@@ -388,9 +392,11 @@ def _credits_for(provider: str, endpoint: str, result: Any, kwargs: Dict[str, An
     Heuristics:
       - PDL Search: bills per result returned (1 credit per record).
       - PDL Enrich: 1 credit on hit (response present), 0 on miss.
-      - Coresignal member_search (our public surface): 1 Search credit +
-        N Collect credits, where N = meta.collected_count from the result.
-      - Coresignal member_collect: 1 credit per call.
+      - Coresignal member_search (our public surface): N Collect credits,
+        where N = meta.collected_count. Search credits are NOT counted here;
+        _search_ids logs them itself as `coresignal/search` rows.
+      - Coresignal member_collect: 1 credit per call (its internal
+        search-by-URL bills separately, same as above).
       - Hunter / Apify: 1 credit per call (refined in later phases).
     """
     try:
@@ -402,12 +408,17 @@ def _credits_for(provider: str, endpoint: str, result: Any, kwargs: Dict[str, An
         if provider == "pdl" and endpoint == "person_enrich":
             return 1 if result else 0
         if provider == "coresignal" and endpoint == "member_search":
+            # Collect credits only. search_contacts_from_prompt fires one
+            # search of its own plus (when alumni_school is set) a second one
+            # inside alumni_first_ids, so a "1 + collects" count here was both
+            # double-counting against the `search` row and still undercounting
+            # the alumni search. _search_ids owns every Search credit now.
             # search_contacts_from_prompt returns
             # (contacts, retry_level, saved, meta)
             if isinstance(result, tuple) and len(result) >= 4:
                 meta = result[3] or {}
-                return 1 + int(meta.get("collected_count", 0) or 0)
-            return 1
+                return int(meta.get("collected_count", 0) or 0)
+            return 0
         if provider == "coresignal" and endpoint == "member_collect":
             return 1 if result else 0
         # Default: 1 credit per call. Good enough until refined.
