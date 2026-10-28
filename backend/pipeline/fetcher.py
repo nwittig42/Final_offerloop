@@ -939,8 +939,27 @@ def fetch_simplify() -> list[dict]:
         if job:
             all_valid.append(job)
 
-    # Phase 1: Take up to 2,000 from the full list (equivalent to 20 pages × 100)
-    main_batch = all_valid[:2000]
+    # Phase 1: take EVERY active listing.
+    #
+    # This used to be `all_valid[:2000]` — "equivalent to 20 pages × 100", a
+    # cap shaped like a paginated API we don't actually use. The whole
+    # listings.json is already downloaded in one request above and
+    # _simplify_item_to_job has already dropped everything not active+visible,
+    # so the cap was throwing away validated jobs for free. Simplify published
+    # 4,964 active listings on 2026-10-22 against 3,496 of ours in Firestore:
+    # ~1,468 discarded from the highest-quality source we have (97.5% of its
+    # jobs grade early-career, against 6-10% for Greenhouse/Lever/Ashby).
+    #
+    # The ceiling is a runaway guard, not a budget: if Simplify ever publishes
+    # an order of magnitude more we want a warning, not a silent truncation —
+    # which is exactly how the 2,000 cap hid this.
+    _SIMPLIFY_MAX = 25_000
+    if len(all_valid) > _SIMPLIFY_MAX:
+        logger.warning(
+            "  Simplify: %d active listings exceeds the %d ceiling; truncating. "
+            "Raise _SIMPLIFY_MAX — this is a guard, not a budget.",
+            len(all_valid), _SIMPLIFY_MAX)
+    main_batch = all_valid[:_SIMPLIFY_MAX]
     logger.info("  Simplify [main] → %d jobs (of %d active)", len(main_batch), len(all_valid))
 
     seen: set[str] = {j["job_id"] for j in main_batch}
