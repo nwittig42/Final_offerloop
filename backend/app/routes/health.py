@@ -1,12 +1,23 @@
 """
 Health check routes
 """
+import os
+
 from flask import Blueprint, jsonify
 from app.services.gmail_client import get_gmail_service
 import firebase_admin
 from app.extensions import get_db
 
 health_bp = Blueprint('health', __name__)
+
+# Render sets these on every build. Read once at import: they are fixed for
+# the life of the process, and a health check should not re-read the
+# environment on every probe.
+# Strip BEFORE the fallback: an env var set to "" or whitespace must read as
+# "unknown", not as an empty commit. An empty string looks like a deploy
+# mystery; "unknown" correctly says "not running on Render".
+RUNNING_COMMIT = (os.environ.get("RENDER_GIT_COMMIT") or "").strip() or "unknown"
+RUNNING_BRANCH = (os.environ.get("RENDER_GIT_BRANCH") or "").strip() or "unknown"
 
 
 @health_bp.route('/ping')
@@ -59,5 +70,23 @@ def health():
 
 @health_bp.get("/healthz")
 def healthz():
-    """Kubernetes health check endpoint"""
-    return jsonify({"status": "ok"}), 200
+    """Liveness check, plus the commit actually serving traffic.
+
+    `commit` answers the one question a health check normally cannot: is the
+    deploy I just pushed the one that is live? Without it, old and new code
+    are indistinguishable from outside, and confirming a deploy means opening
+    the Render dashboard or authenticating against its API — OFF-63 shipped
+    unverified for ten minutes for exactly this reason. Now it is one curl:
+
+        curl -sL https://offerloop.ai/healthz
+
+    Reads Render's own RENDER_GIT_COMMIT, so it reports the commit Render
+    built rather than anything the app could get wrong about itself. Off
+    Render (local, CI, tests) both fields read "unknown" — absence is honest,
+    not an error, and never affects `status`.
+    """
+    return jsonify({
+        "status": "ok",
+        "commit": RUNNING_COMMIT,
+        "branch": RUNNING_BRANCH,
+    }), 200
