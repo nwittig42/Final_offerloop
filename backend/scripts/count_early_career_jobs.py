@@ -28,7 +28,35 @@ SOURCES = ("greenhouse", "lever", "ashby", "simplify", "fantasticjobs",
            "workday", "oracle", "oleeo", "goldman", "manual")
 
 
+def _print_sources(count, fmt, dead, tier, intern) -> None:
+    """Per-source supply. Answers "are we actually getting Workday jobs?"
+
+    The target platforms (workday/oracle/oleeo/goldman/manual) read 0 until
+    the OFF-48 branch lands and its daily crawl runs — they are built but have
+    never written a job. fantasticjobs also reads 0: the paid 7d sweep is
+    skipped by default in main.py.
+    """
+    print("\n--- where supply comes from (all docs, by source) ---")
+    print(f"  {'source':<14}{'total':>9}{'t1':>8}{'t2':>8}{'live t1':>9}")
+    rows = []
+    for src in SOURCES:
+        f = FieldFilter("source", "==", src)
+        t1 = count(f, tier(1))
+        t1_dead = count(f, tier(1), dead)
+        live_t1 = (t1 - t1_dead) if (t1 is not None and t1_dead is not None) else None
+        rows.append((src, count(f), t1, count(f, tier(2)), live_t1))
+    for src, s_all, s1, s2, s_live1 in sorted(
+            rows, key=lambda r: -((r[2] or 0) + (r[3] or 0))):
+        flag = "   <- not running yet" if (s_all or 0) == 0 else ""
+        print(f"  {src:<14}{fmt(s_all):>9}{fmt(s1):>8}{fmt(s2):>8}{fmt(s_live1):>9}{flag}")
+
+
 def main() -> None:
+    # --sources-only prints just the per-source table. The full census runs
+    # ~50 aggregation queries and the source table comes last, so a slow run
+    # or an interrupted terminal loses exactly the breakdown you wanted.
+    sources_only = "--sources-only" in sys.argv
+
     _bootstrap_app()
     from backend.app.extensions import get_db
 
@@ -54,6 +82,10 @@ def main() -> None:
     dead = FieldFilter("expired", "==", True)
     tier = lambda t: FieldFilter("relevance_tier", "==", t)  # noqa: E731
     intern = FieldFilter("employment_type", "==", "INTERNSHIP")
+
+    if sources_only:
+        _print_sources(count, fmt, dead, tier, intern)
+        return
 
     total = count()
     n_dead = count(dead)
@@ -97,16 +129,7 @@ def main() -> None:
         live_t = (all_t - dead_t) if (all_t is not None and dead_t is not None) else None
         print(f"    {term:<12} all={fmt(all_t):>8}  live={fmt(live_t):>8}")
 
-    print("\n--- where supply comes from (all docs, by source) ---")
-    print(f"  {'source':<14}{'total':>9}{'t1':>8}{'t2':>8}{'interns':>9}")
-    rows = []
-    for src in SOURCES:
-        f = FieldFilter("source", "==", src)
-        rows.append((src, count(f), count(f, tier(1)), count(f, tier(2)),
-                     count(f, intern)))
-    for src, s_all, s1, s2, s_int in sorted(
-            rows, key=lambda r: -((r[2] or 0) + (r[3] or 0))):
-        print(f"  {src:<14}{fmt(s_all):>9}{fmt(s1):>8}{fmt(s2):>8}{fmt(s_int):>9}")
+    _print_sources(count, fmt, dead, tier, intern)
 
     # Field shape — the only place we read document bodies. Proves whether
     # `expired`, `relevance_tier` and `employment_type` are actually present,
