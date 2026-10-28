@@ -2,9 +2,18 @@ name: Job Pipeline
 
 on:
   schedule:
+    # Minute budget (checked 2026-10-28): the org's GitHub Team plan includes
+    # 3,000 Actions min/month and we were running at ~100% of it, ~$0.65/day.
+    # On 28 Oct the quota hit 3,000/3,000 with 4 days left in the cycle and
+    # Actions refused to start ANY job — the full pipeline, enrichment and the
+    # nightly cleanup all stopped. The two hourly crons below were 48 of the
+    # ~66 runs a day, and their own notes say steady-state work is near-zero,
+    # so most of those runs paid to boot a container and find nothing to do.
+    # Halving them frees roughly 40 min/day, which covers the new daily
+    # target crawl and leaves headroom instead of running at the ceiling.
     - cron: '0 */2 * * *'     # full pipeline every 2 hours
-    - cron: '15 * * * *'      # Firecrawl enrichment once an hour (fits GitHub free tier; ~1800 min/month)
-    - cron: '45 * * * *'      # PDL title enrichment, offset 30min from Firecrawl (~1-2 min/run with MAX_PER_RUN=100)
+    - cron: '15 */2 * * *'    # Firecrawl enrichment every 2h (was hourly; see minute budget above)
+    - cron: '45 */3 * * *'    # PDL title enrichment every 3h (was hourly; MAX_PER_RUN=100 caps each run anyway)
     - cron: '30 */6 * * *'    # Perplexity deadline extraction every 6h (~50 jobs/run, ~$1/day at $0.005/call)
     - cron: '20 6 * * *'      # target-employer boards (workday/oracle/oleeo hot tier) once daily at 06:20 UTC (~20 min)
     - cron: '0 3 * * *'       # cleanup once daily at 03:00 UTC
@@ -83,9 +92,14 @@ jobs:
             MODE="${{ github.event.inputs.mode }}"
           elif [ "${{ github.event.schedule }}" = "0 3 * * *" ]; then
             MODE="cleanup"
-          elif [ "${{ github.event.schedule }}" = "15 * * * *" ]; then
+          # These strings MUST match the cron entries above character for
+          # character. A mismatch falls through to the `else` and runs MODE=full,
+          # so a schedule meant to do cheap enrichment would instead run the
+          # whole pipeline — more minutes, not fewer, which is the opposite of
+          # why the frequencies were reduced.
+          elif [ "${{ github.event.schedule }}" = "15 */2 * * *" ]; then
             MODE="enrich-only"
-          elif [ "${{ github.event.schedule }}" = "45 * * * *" ]; then
+          elif [ "${{ github.event.schedule }}" = "45 */3 * * *" ]; then
             MODE="title-enrich-only"
           elif [ "${{ github.event.schedule }}" = "30 */6 * * *" ]; then
             MODE="extract-deadlines"
