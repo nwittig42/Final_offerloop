@@ -14,12 +14,15 @@ Import rules (avoid cycles):
 from __future__ import annotations
 
 import importlib
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable, TypeVar
 from urllib.parse import urlparse
 
 from backend.pipeline.quality_gate import BOARD_DIFF_SOURCES, is_candidate_title
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "FetchError",
@@ -33,6 +36,7 @@ __all__ = [
     "Snapshot",
     "is_partial",
     "normalize_apply_url",
+    "crawled_apply_urls",
     "DETAIL_WORKERS",
     "SKIPPABLE_STATUSES",
     "map_in_order",
@@ -155,3 +159,42 @@ def normalize_apply_url(url: str) -> str:
         parts = [p for p in parts if not _OLEEO_XF_RE.match(p)]
     scheme = (parsed.scheme or "https").lower()
     return f"{scheme}://{host}/" + "/".join(parts) if parts else f"{scheme}://{host}"
+
+
+def crawled_apply_urls() -> frozenset[str]:
+    """Normalized apply URLs of every job the target crawl already holds.
+
+    Replaces the old `crawled_hosts()`. Host-level de-dup dropped any Simplify
+    listing whose URL merely *lived on* a crawled tenant, including plenty the
+    direct crawl never produces: postings past a search cap, Goldman roles
+    outside the CAMPUS filter, titles none of the six search terms match, and
+    other career sites on the same tenant. Comparing the posting itself only
+    skips an actual duplicate.
+
+    Projection read: `select(["apply_url"])` over the target sources, so this
+    is a few thousand single-field docs rather than full job bodies.
+
+    Fails OPEN — an empty set on any error means no de-dup, i.e. a duplicate
+    listing rather than a lost one. That is the right way round: a duplicate is
+    visible and annoying, a missing job is invisible.
+    """
+    try:
+        from backend.app.extensions import get_db
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        db = get_db()
+        if db is None:
+            return frozenset()
+        urls = set()
+        q = (db.collection("jobs")
+               .where(filter=FieldFilter("source", "in", list(TARGET_PLATFORMS)))
+               .select(["apply_url"]))
+        for snap in q.stream():
+            norm = normalize_apply_url((snap.to_dict() or {}).get("apply_url") or "")
+            if norm:
+                urls.add(norm)
+        return frozenset(urls)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("crawled_apply_urls failed (%s); Simplify de-dup disabled "
+                       "for this run", exc)
+        return frozenset()

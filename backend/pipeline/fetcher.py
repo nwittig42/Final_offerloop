@@ -949,22 +949,23 @@ def fetch_simplify() -> list[dict]:
         logger.warning("Simplify: fetch failed: %s", e)
         return []
 
-    # Listings on a hot-tier target board (Workday/Oracle/Oleeo) come in via
-    # the direct crawl instead; skip them here so each job appears once.
+    # A posting the direct target crawl already holds should appear once, from
+    # the direct crawl (richer: department/team, real description, deadline).
+    #
+    # Matched PER POSTING on the normalized apply URL, not by host. Host-level
+    # de-dup dropped every Simplify listing that merely lived on a crawled
+    # tenant, including many the direct crawl never produces — postings past a
+    # search cap, Goldman roles outside the CAMPUS filter, titles none of the
+    # six search terms match, and other career sites on the same tenant.
+    # Comparing the posting itself only skips a real duplicate.
     from backend.pipeline import direct
 
-    try:
-        skip_hosts = direct.crawled_hosts()
-    except Exception as e:
-        logger.warning("Simplify: could not load crawled hosts, no de-dup: %s", e)
-        skip_hosts = frozenset()
+    crawled = direct.crawled_apply_urls()  # fails open to an empty set
 
-    # Convert all active/visible items
     all_valid: list[dict] = []
     skipped_direct = 0
     for item in raw:
-        host = (urlparse(item.get("url") or "").hostname or "").lower()
-        if host and host in skip_hosts:
+        if crawled and direct.normalize_apply_url(item.get("url") or "") in crawled:
             skipped_direct += 1
             continue
         job = _simplify_item_to_job(item)
@@ -972,7 +973,10 @@ def fetch_simplify() -> list[dict]:
             all_valid.append(job)
 
     if skipped_direct:
-        logger.info("  Simplify: skipped %d listings on directly crawled boards", skipped_direct)
+        logger.info("  Simplify: skipped %d listings the direct crawl already holds",
+                    skipped_direct)
+    elif not crawled:
+        logger.info("  Simplify: no target-crawl jobs on record; de-dup inactive")
 
     # Phase 1: Take up to 2,000 from the full list (equivalent to 20 pages × 100)
     main_batch = all_valid[:2000]
