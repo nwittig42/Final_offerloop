@@ -571,10 +571,11 @@ def firm_employee_doc_from_app_contact(contact: dict) -> Optional[dict]:
     # wrote work_email onto the shared doc; the website Find, the MCP server
     # and the extension found addresses and dropped them here, so every
     # surface re-paid FullEnrich for the same person. The reseller agreement
-    # allows serving a cached verified address to later students for 90 days,
-    # and the nightly purge removes anything older. Only VERIFIED addresses
-    # are shared (never guesses), and the keys are added only when present so
-    # the merge=True upsert never blanks a fresher value already on the doc.
+    # allows serving a cached verified address to later students for 90 days.
+    # Expired addresses are filtered at READ time (reader.py:_warehouse_email);
+    # they are not deleted from storage. Only VERIFIED addresses are shared
+    # (never guesses), and the keys are added only when present so the
+    # merge=True upsert never blanks a fresher value already on the doc.
     verified_email = _verified_work_email(contact)
     if verified_email:
         doc["work_email"] = verified_email

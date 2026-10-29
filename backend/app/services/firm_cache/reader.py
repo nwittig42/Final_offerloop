@@ -147,8 +147,9 @@ def _snap_to_dict(snap) -> dict:
 # ── App-shape contact conversion ─────────────────────────────────────────
 
 
-# Shared verified work emails live on the doc for this long (the app's reveal
-# step and the nightly purge use the same number). Same env knob as ranker.py.
+# Shared verified work emails live on the doc for this long. Enforced only
+# at read time — expired fields are not deleted from storage. Same env knob
+# as ranker.py.
 _EMAIL_TTL_DAYS = int(os.environ.get("WAREHOUSE_EMAIL_TTL_DAYS", "90"))
 
 
