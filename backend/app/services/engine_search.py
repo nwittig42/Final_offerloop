@@ -19,6 +19,8 @@ paid cold rates on every call or pointed at the retired PDL key.
 Contract: same 4-tuple as pdl_client/coresignal_client
 search_contacts_from_prompt, so it is a drop-in at every call site:
     (contacts, retry_level_used, already_saved_contacts, metadata)
+Each vendor's `meta["provider"]` is passed through so downstream telemetry
+can attribute spend without caring which rung ran.
 
 Rules this module enforces so callers don't have to:
   1. firm_employees is read BEFORE any vendor call. A full cache hit costs
@@ -27,13 +29,39 @@ Rules this module enforces so callers don't have to:
      can't re-buy people we already have.
   3. Coresignal collects (fallback path only) are mirrored to the
      meta/coresignalTestBudget tank and the provider spend log.
+  4. `is_configured()` reports whether ANY vendor rung can run, so caller
+     gates don't bind to one vendor's env var.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 SearchResult = Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]], Optional[Dict[str, Any]]]
+
+
+def is_configured() -> bool:
+    """True if engine_search_contacts has at least one vendor rung wired up.
+
+    Returns False only when neither FullEnrich nor Coresignal has an API
+    key present. Callers that require vendor discovery (recruiter finder,
+    hiring-manager finder) should gate on this instead of checking a
+    specific vendor's key — binding to one vendor's env var is what left
+    those surfaces broken when the primary vendor was swapped.
+
+    Does NOT verify budget headroom; a FullEnrich-out-of-budget state
+    still passes because the engine falls back to Coresignal.
+    """
+    if (os.getenv("FULLENRICH_API_KEY") or "").strip():
+        return True
+    try:
+        from app.services import coresignal_client
+        if getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _mirror_coresignal_spend(collected: int) -> None:

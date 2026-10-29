@@ -157,11 +157,12 @@ def _run_engine_tier_search(company: str, titles: List[str], location: Optional[
                             size: int, allow_vendor: bool = True) -> List[Dict]:
     """Engine discovery for one tier of hiring-manager titles.
 
-    2026-08-31: routed through engine_search_contacts, so the warehouse is
-    read before Coresignal spends anything (the audit found this surface
-    paid cold rates on every call). Returns canonical-schema contacts, the
-    same shape the ranking, Perplexity, and Hunter stages already consume.
-    Empty list on miss or error.
+    Routes through engine_search_contacts so the warehouse is read before
+    any vendor spends. The actual vendor (FullEnrich, Coresignal, or
+    firm_cache) is decided inside the engine; this function brands each
+    returned contact's `_source` with whichever provider the engine
+    reports, so downstream telemetry reflects the truth instead of a
+    hard-coded Coresignal tag. Empty list on miss or error.
     """
     try:
         from app.services.engine_search import engine_search_contacts
@@ -174,10 +175,15 @@ def _run_engine_tier_search(company: str, titles: List[str], location: Optional[
             parsed, max(1, size), allow_vendor=allow_vendor,
             source="hiring_manager",
         )
+        provider = ((_meta or {}).get("provider") or "engine_search").strip() or "engine_search"
+        tier_tag = f"{provider}_tier"
         out = []
         for c in contacts or []:
             c["IsCurrentlyAtTarget"] = True
-            c.setdefault("_source", "coresignal_tier")
+            # Prefer the engine's own provider tag if the normalizer set
+            # one; fall back to the tier tag so empty source fields never
+            # ship.
+            c.setdefault("_source", tier_tag)
             out.append(c)
         return out
     except Exception as e:
@@ -1182,8 +1188,8 @@ def find_recruiters(
         }
     """
     try:
-        from app.services import coresignal_client as _cs
-        _engine_ready = bool(getattr(_cs, "CORESIGNAL_API_KEY", ""))
+        from app.services.engine_search import is_configured as _engine_configured
+        _engine_ready = _engine_configured()
     except Exception:
         _engine_ready = False
     if not _engine_ready:
@@ -1218,10 +1224,12 @@ def find_recruiters(
         recruiter_titles = get_recruiter_titles_for_job_type(job_type)
 
     try:
-        # Warehouse-then-Coresignal (2026-08-31). The buffer over max_results
-        # survives from the PDL era: the post-fetch filter drops ex-employees,
-        # so a small over-fetch protects against a contaminated batch
-        # returning zero current employees.
+        # Delegated to engine_search_contacts (warehouse → FullEnrich →
+        # Coresignal fallback; see app/services/engine_search.py). The
+        # buffer over max_results survives from the PDL era: the
+        # post-fetch filter drops ex-employees, so a small over-fetch
+        # protects against a contaminated batch returning zero current
+        # employees.
         recruiter_fetch_limit = max(max_results + 3, 6)
         from app.services.engine_search import engine_search_contacts
         _parsed = {
@@ -1419,9 +1427,9 @@ def search_by_titles(
     max_results: int = 10
 ) -> List[Dict]:
     """
-    Search for people at a company with specific job titles, warehouse
-    first then Coresignal (2026-08-31: the PDL query builder is gone with
-    the retired key).
+    Search for people at a company with specific job titles. Delegates to
+    engine_search_contacts (warehouse → FullEnrich → Coresignal fallback;
+    PDL is retired).
     """
     try:
         from app.services.engine_search import engine_search_contacts
@@ -1914,10 +1922,12 @@ def find_hiring_manager(
             "search_tier_used": 2  # Highest tier that contributed results
         }
     """
-    # Engine-only (ported from mobile, 2026-08-31): Coresignal is the
-    # discovery provider. PDL is retired.
-    from . import coresignal_client as _cs
-    if not getattr(_cs, "CORESIGNAL_API_KEY", ""):
+    # Vendor-agnostic gate: engine_search_contacts picks the actual rung
+    # (FullEnrich primary, Coresignal fallback, firm_cache free). PDL is
+    # retired. Binding this check to a specific vendor's env var is what
+    # left this surface broken when the primary vendor swapped.
+    from .engine_search import is_configured as _engine_configured
+    if not _engine_configured():
         return {
             "hiringManagers": [],
             "emails": [],
@@ -1925,7 +1935,7 @@ def find_hiring_manager(
             "company_cleaned": company_name,
             "total_found": 0,
             "credits_charged": 0,
-            "error": "Coresignal API key not configured"
+            "error": "Search engine not configured"
         }
 
     # Clean company name with alias expansion
@@ -2036,9 +2046,8 @@ def find_hiring_manager(
         print(f"[HiringManagerFinder] Searching Tier {tier} with titles: {tier_titles[:3]}...")
         
         try:
-            # Engine discovery (ported from mobile, 2026-08-31): Coresignal
-            # is the only rung. The retired PDL search could never fire
-            # again (dead key), it only added a doomed round-trip per tier.
+            # Engine discovery via engine_search_contacts (warehouse →
+            # FullEnrich → Coresignal fallback). PDL is retired.
             raw_managers = _run_engine_tier_search(
                 cleaned_company, tier_titles, location, per_tier_size,
                 allow_vendor=allow_vendor_spend,
@@ -2349,7 +2358,13 @@ def find_hiring_manager(
             "candidates_title_corrected": perplexity_title_corrections if 'perplexity_title_corrections' in locals() else 0,
             "firecrawl_seed_used": firecrawl_seed_used,
             "firecrawl_seed_name": seed_hiring_manager_name if firecrawl_seed_used else None,
-            "discovery_provider": "coresignal",
+            # Derived from the engine's own provider tag on each contact,
+            # not hardcoded. A mixed-vendor response (warehouse hits +
+            # FullEnrich fills) reports both honestly.
+            "discovery_provider": ",".join(sorted({
+                (c.get("_source") or "unknown").split("_tier", 1)[0]
+                for c in all_contacts_found
+            })) or "none",
         },
     }
 
