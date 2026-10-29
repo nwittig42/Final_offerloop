@@ -8,12 +8,11 @@ import traceback
 import threading
 from datetime import datetime
 from typing import Dict, Tuple, Optional
-# get_contact_identity is a pure dedup-key helper, no vendor call. PDL's
-# search_contacts_from_prompt used to be imported here too; the PDL rung was
-# removed from this ladder on 2026-08-31 and the import was left dangling.
+# get_contact_identity is a pure dedup-key helper, no vendor call. The
+# vendor calls (Coresignal, FullEnrich) now live inside engine_search,
+# which this route delegates to; no vendor-client import needed here.
 from app.services.pdl_client import get_contact_identity
 from app.services.prompt_parser import parse_search_prompt_structured
-from app.services import coresignal_client
 from flask import Blueprint, request, jsonify
 
 from app.extensions import require_firebase_auth, get_db
@@ -240,118 +239,36 @@ def prompt_search():
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
             }), 400
 
-        # Provider ladder: firm_employees warehouse (free) -> Coresignal ->
-        # Hunter bridge. PDL is NOT in this path; its rung was removed on
-        # 2026-08-31 when the subscription was retired (see the note at the
-        # Coresignal call below). The comment that used to sit here claimed
-        # "PDL is primary" and survived that change by ~2 months, which is
-        # long enough to mislead a reader into thinking this route still
-        # spends PDL credits. Verified against the provider_calls ledger
-        # 2026-10-22: zero pdl/person_search rows in 30 days, 152
-        # coresignal/member_search.
-        #
-        # This ladder duplicates app/services/engine_search.engine_search_contacts,
-        # which every other people-search surface routes through and which
-        # returns the same 4-tuple. Consolidating is worthwhile but is a
-        # behaviour-affecting refactor of the busiest route, so it is tracked
-        # separately rather than done in passing.
-        # ---- JIT firm-employee cache lookup (Phase 3) ---------------------
-        # Check firm_employees BEFORE the vendor. Gated by ENABLE_FIRM_CACHE_LOOKUP
-        # env flag (independent of the write flag). Returns cache hits in
-        # App-shape with Email="" — the existing email-quality machinery
-        # downstream flags them so nothing breaks. If cache fills the whole
-        # tier limit the vendor is skipped entirely (0 credits). If partial,
-        # Coresignal is called for the remainder and results are deduped.
-        cache_hits: list[dict] = []
-        cache_hit_metadata: dict | None = None
+        # Provider ladder: delegated to app/services/engine_search.py, which
+        # is the single implementation every other people-search surface
+        # routes through (chrome extension endpoints, hiring-manager finder,
+        # find-similar, scout). engine_search_contacts handles:
+        #   1. firm_employees warehouse lookup (free)
+        #   2. FullEnrich /people/search for the remainder (primary vendor
+        #      as of 2026-10-28, ~half the per-search cost of Coresignal)
+        #   3. Coresignal fallback when FullEnrich returns zero or is
+        #      disabled (missing key, exhausted budget, outage)
+        #   4. Warehouse write-back of vendor results
+        #   5. log_demand + log_search_mix metrics
+        # The Hunter domain-search bridge below is kept here as a
+        # route-specific last resort for company-targeted prompts; the other
+        # surfaces don't need it.
         try:
-            from app.services.firm_cache import search_firm_cache
-            from app.services.firm_cache.reader import _flag_enabled as _lookup_enabled
-            if _lookup_enabled():
-                cache_hits, _, _, cache_hit_metadata = search_firm_cache(
-                    parsed, max_contacts, exclude_keys=seen_contact_set
-                )
-                if cache_hits:
-                    print(f"[FirmCache] LOOKUP hit — {len(cache_hits)}/{max_contacts} served from firm_employees")
-        except Exception as e:
-            print(f"[FirmCache] lookup failed (non-fatal, falling through to the vendor): {e}")
-            cache_hits = []
-            cache_hit_metadata = None
-
-        try:
-            if len(cache_hits) >= max_contacts:
-                # Full cache hit — skip the vendor entirely (0 credits).
-                contacts = cache_hits[:max_contacts]
-                retry_level_used = 0
-                already_saved_contacts = []
-                adjacency_metadata = cache_hit_metadata or {}
-                adjacency_metadata.setdefault("provider", "firm_cache")
-                print(f"[FirmCache] LOOKUP full-hit — skipped the vendor, saved ~${max_contacts * 0.08:.2f} in credits")
-            else:
-                # Partial or empty cache — call the vendor for the remainder.
-                # Cache hits join the exclusion set so it can't re-sell them.
-                vendor_target = max_contacts - len(cache_hits)
-                vendor_exclude = set(seen_contact_set or set())
-                for ch in cache_hits:
-                    fn = (ch.get("FirstName") or "").strip().lower()
-                    ln = (ch.get("LastName") or "").strip().lower()
-                    co = (ch.get("Company") or "").strip().lower()
-                    if fn and ln and co:
-                        vendor_exclude.add((fn, ln, co))
-                # Provider ladder unified with the mobile engine
-                # (2026-08-27): warehouse hits stay first (free), then
-                # Coresignal PRIMARY for the remainder (photo-rich, current,
-                # budget-metered), PDL as the reliability fallback, the
-                # Hunter bridge last.
-                remainder = []
-                remainder_meta: dict = {}
-                try:
-                    if getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
-                        remainder, retry_level_used, already_saved_contacts, remainder_meta = coresignal_client.search_contacts_from_prompt(
-                            parsed, vendor_target, exclude_keys=vendor_exclude, user_profile=user_data
-                        )
-                        remainder_meta = remainder_meta or {}
-                        remainder_meta.setdefault("provider", "coresignal")
-                        _cs_collected = int(remainder_meta.get("collected_count") or 0)
-                        if _cs_collected:
-                            try:
-                                from google.cloud import firestore as _fs
-                                from app.extensions import get_db as _get_db
-                                _db = _get_db()
-                                if _db is not None:
-                                    _db.collection("meta").document("coresignalTestBudget").set(
-                                        {"spent_estimate": _fs.Increment(20.0 * _cs_collected),
-                                         "collect_count": _fs.Increment(_cs_collected)}, merge=True)
-                                from app.services.metering import log_provider_spend
-                                log_provider_spend("coresignal", "member_collect", _cs_collected, returned=_cs_collected)
-                            except Exception:
-                                print("[ContactSearch] coresignal spend mirror failed")
-                except Exception as cs_err:
-                    print(f"[ContactSearch] Coresignal primary failed ({cs_err!r})")
-                    remainder = []
-                # The PDL rung is gone (2026-08-31, ported from mobile): the
-                # subscription is retired and its key 401s on every call, so
-                # a fallback to it could never rescue a search. Coresignal
-                # falls straight to the Hunter bridge below.
-                contacts = cache_hits + (remainder or [])
-                adjacency_metadata = remainder_meta
-                if cache_hits:
-                    adjacency_metadata["firm_cache_hits"] = len(cache_hits)
-                    adjacency_metadata["provider_fills"] = len(remainder or [])
-        except Exception as ladder_err:
-            print(f"[ContactSearch] provider ladder failed ({ladder_err!r})")
-            contacts, retry_level_used, already_saved_contacts, adjacency_metadata = [], 0, [], {}
-        try:
-            from app.services.warehouse_metrics import log_demand, log_search_mix
-            log_demand(parsed, "prompt_search")
-            log_search_mix(
-                "prompt_search", max_contacts, len(cache_hits or []),
-                max(0, len(contacts or []) - len(cache_hits or [])),
+            from app.services.engine_search import engine_search_contacts
+            contacts, retry_level_used, already_saved_contacts, adjacency_metadata = engine_search_contacts(
+                parsed, max_contacts,
+                exclude_keys=seen_contact_set,
+                user_profile=user_data,
+                source="prompt_search",
             )
-        except Exception:
-            pass
-        # Last rung: the Hunter bridge covers company-targeted searches via
-        # Domain Search when both providers came back empty.
+            adjacency_metadata = adjacency_metadata or {}
+        except Exception as engine_err:
+            print(f"[ContactSearch] engine_search failed ({engine_err!r})")
+            contacts, retry_level_used, already_saved_contacts, adjacency_metadata = [], 0, [], {}
+
+        # Last rung: Hunter domain-search bridge for company-targeted
+        # prompts when both vendors came back empty. Route-specific — the
+        # other surfaces don't call this.
         if not contacts and (parsed.get("companies") or []):
             try:
                 from app.services.hunter_person_search import search_people_via_hunter
@@ -360,15 +277,15 @@ def prompt_search():
                 )
                 adjacency_metadata.update(hunter_meta or {})
                 adjacency_metadata["fallback_used"] = "hunter"
+                # Hunter results aren't warehoused by engine_search (it only
+                # saw an empty remainder), so feed them in here.
+                try:
+                    from app.services.firm_cache.writer import cache_pdl_contacts
+                    cache_pdl_contacts(contacts, shape="app", async_write=True)
+                except Exception:
+                    print("[ContactSearch] Hunter warehouse feed failed")
             except Exception as hunter_err:
                 print(f"[ContactSearch] Hunter bridge failed ({hunter_err!r})")
-        # Warehouse feed: every collected profile becomes a permanent asset
-        # (flag-gated by ENABLE_FIRM_CACHE_WRITE, async).
-        try:
-            from app.services.firm_cache.writer import cache_pdl_contacts
-            cache_pdl_contacts(contacts, shape="app", async_write=True)
-        except Exception:
-            print("[ContactSearch] warehouse feed failed")
         search_broadened = retry_level_used >= 1
 
         # Surface which dimensions were dropped at the rung that succeeded so the

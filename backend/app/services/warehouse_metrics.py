@@ -79,14 +79,27 @@ def log_demand(parsed: Optional[Dict[str, Any]], source: str) -> None:
             db = get_db()
             if db is None:
                 return
+            # Firms + schools now key by the firm_cache canonical slugs
+            # (underscores, corporate-form suffix stripping, school alias
+            # table) so the demand map and firm_employees docs share a
+            # vocabulary. Previously keyed by _safe_key (hyphens), which
+            # produced "bain-company" in demand vs "bain" in
+            # firm_employees — the warehouse_warm._demand_ranked_firms
+            # consumer could never match multi-word firms. by_source and
+            # title_levels still use _safe_key: those are surface labels
+            # and bucket names, not firm_cache lookups.
+            from app.services.firm_cache.schema import (
+                derive_title_level,
+                slugify_company,
+                slugify_school,
+            )
             updates: Dict[str, Any] = {}
             for c in (parsed.get("companies") or [])[:5]:
                 name = c.get("name") if isinstance(c, dict) else c
-                key = _safe_key(str(name or ""))
+                key = slugify_company(str(name or ""))
                 if key:
                     updates[f"firms.{key}"] = _fs.Increment(1)
             try:
-                from app.services.firm_cache.schema import derive_title_level
                 levels = {derive_title_level(str(t))
                           for t in (parsed.get("title_variations") or [])[:8] if t}
                 for lv in levels:
@@ -96,7 +109,7 @@ def log_demand(parsed: Optional[Dict[str, Any]], source: str) -> None:
                 pass
             for s in (parsed.get("schools") or [])[:3]:
                 name = s.get("name") if isinstance(s, dict) else s
-                key = _safe_key(str(name or ""))
+                key = slugify_school(str(name or ""))
                 if key:
                     updates[f"schools.{key}"] = _fs.Increment(1)
             if not updates:
