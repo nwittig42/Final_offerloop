@@ -225,6 +225,68 @@ def enrich_linkedin_profile_engine(linkedin_url: str, db=None) -> Optional[Dict[
     return data
 
 
+def enrich_linkedin_profile_via_apify(linkedin_url: str, db=None) -> Optional[Dict[str, Any]]:
+    """LinkedIn-URL enrichment via Apify (HarvestAPI's linkedin-profile-scraper).
+
+    Same return shape as `enrich_linkedin_profile_engine` so callers that
+    only read thin fields (name/title/company/city/state/one school/photo)
+    can swap one for the other with no downstream changes. Deeper fields
+    (experienceArray, educationArray, skills, summary) are populated when
+    HarvestAPI returns them, so callers that read the rich shape still
+    get useful data — but the rich coverage is less consistent than
+    Coresignal's, so prefer `enrich_linkedin_profile_engine` where a
+    coffee-chat-grade brief is required.
+
+    Apify is the project's designated single LinkedIn vendor (see CLAUDE.md),
+    which is why we use it here instead of adding Coresignal to this path.
+    """
+    if not linkedin_url:
+        return None
+    slug = _slug(linkedin_url)
+    if not slug:
+        return None
+    with _cache_lock:
+        if slug in _cache:
+            return _cache[slug]
+
+    try:
+        from app.services.apify_client import enrich_user_linkedin_profile_via_apify
+        from app.services.pdl_client import build_coffee_chat_data_from_apify
+        envelope = enrich_user_linkedin_profile_via_apify(linkedin_url)
+        if not (envelope or {}).get("ok") or not envelope.get("data"):
+            return None
+        data = build_coffee_chat_data_from_apify(envelope["data"])
+        # The converter leaves linkedinUrl empty when the actor didn't
+        # echo one back; the URL we were asked to enrich IS the truth.
+        if not data.get("linkedinUrl"):
+            data["linkedinUrl"] = linkedin_url
+
+        # Feed the warehouse: next lookup of this URL is free.
+        try:
+            from app.services.firm_cache.writer import cache_pdl_contacts
+            cache_pdl_contacts([{
+                "FirstName": data.get("firstName", ""),
+                "LastName": data.get("lastName", ""),
+                "LinkedIn": linkedin_url,
+                "Title": data.get("jobTitle", ""),
+                "Company": data.get("company", ""),
+                "City": data.get("city", ""),
+                "State": data.get("state", ""),
+                "College": (data.get("educationArray") or [{}])[0].get("school", "") if data.get("educationArray") else "",
+                "PhotoUrl": data.get("photoUrl", ""),
+                "Email": "",
+            }], shape="app", async_write=True)
+        except Exception:
+            pass
+
+        with _cache_lock:
+            _cache[slug] = data
+        return data
+    except Exception:
+        logging.getLogger(__name__).exception("apify linkedin enrich failed for %s", slug)
+        return None
+
+
 def warehouse_only_profile(
     linkedin_url: str, db, *, max_age_days: int = WAREHOUSE_PROFILE_TTL_DAYS
 ) -> Optional[Dict[str, Any]]:

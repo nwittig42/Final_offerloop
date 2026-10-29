@@ -357,27 +357,22 @@ def import_from_linkedin():
             return jsonify({'status': 'error', 'message': 'Invalid LinkedIn URL format'}), 400
         print(f"[LinkedInImport] ✅ Normalized URL: {linkedin_url}")
         
-        # Step 2: Enrich via the engine (2026-08-31): warehouse for people
-        # we already met, Coresignal collect by LinkedIn shorthand for the
-        # rest. Replaces the PDL /person/enrich call, whose retired key
-        # 401ed and broke this endpoint for the Chrome extension entirely.
-        #
-        # Warehouse-first (2026-09-21): this route only reads name/title/
-        # company/city/state/one school/photo out of engine_data (see
-        # pdl_contact below) — all of it already on the thin shelf record.
-        # Before this, every import paid for a fresh Coresignal collect even
-        # when another student had already found the same person; the shelf
-        # was only ever consulted after Coresignal failed. Checking the
-        # shelf first (90-day freshness window) means a repeat find is free.
-        # Meeting prep needs the full Coresignal shape, so it still calls
-        # enrich_linkedin_profile_engine directly and is unaffected.
-        print(f"[LinkedInImport] Step 2: Enriching via engine...")
-        from app.services.linkedin_enrich import enrich_linkedin_profile_engine, warehouse_only_profile
+        # Step 2: Enrich via Apify (2026-10-28). Warehouse for people a
+        # previous student met; Apify (HarvestAPI's linkedin-profile-scraper)
+        # for the rest. Apify is the project's designated single LinkedIn
+        # vendor (CLAUDE.md). This path previously used Coresignal collect
+        # by LinkedIn shorthand; that worked but added a vendor dependency
+        # for data this route only needs the thin slice of (name/title/
+        # company/city/state/one school/photo — see pdl_contact below).
+        # Meeting prep still uses the richer Coresignal collect for its
+        # own needs (enrich_linkedin_profile_engine), unaffected by this.
+        print(f"[LinkedInImport] Step 2: Enriching via Apify (warehouse-first)...")
+        from app.services.linkedin_enrich import enrich_linkedin_profile_via_apify, warehouse_only_profile
         engine_data = warehouse_only_profile(linkedin_url, db=get_db())
         if engine_data:
             print(f"[LinkedInImport] ✅ Served from warehouse, no vendor call")
         else:
-            engine_data = enrich_linkedin_profile_engine(linkedin_url, db=get_db())
+            engine_data = enrich_linkedin_profile_via_apify(linkedin_url, db=get_db())
         if not engine_data or not (engine_data.get('firstName') or engine_data.get('lastName')):
             print(f"[LinkedInImport] ❌ ERROR: engine returned no data")
             return jsonify({
