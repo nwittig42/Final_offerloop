@@ -256,8 +256,9 @@ def check_and_alert(force: bool = False) -> Dict[str, Any]:
     # Vendor tank gauges (2026-08-25). The dollar windows above read
     # provider_calls; these read the ENFORCEMENT docs the clients actually
     # stop on, so "80% of the tank is gone" reaches an inbox even when a
-    # metering row was missed. Coresignal's tank is the one-time grant
-    # (never resets); FullEnrich's is the monthly subscription allowance.
+    # metering row was missed. The Coresignal tank was removed 2026-10-29
+    # when the vendor was canceled; the gauge list is now FullEnrich-only
+    # until PDL retires.
     if db is not None:
         # PDL's title-enrichment pool. Budget is the CIRCUIT BREAKER (45k of
         # the 50k pool), not the pool itself, because the breaker is where
@@ -277,9 +278,6 @@ def check_and_alert(force: bool = False) -> Dict[str, Any]:
             ("fullenrich_tank", ("meta", "fullenrichBudget"),
              float(os.getenv("FULLENRICH_BUDGET") or 450),
              now.strftime("%Y-%m"), "FullEnrich monthly credits", "spent_estimate"),
-            ("coresignal_tank", ("meta", "coresignalTestBudget"),
-             float(os.getenv("CORESIGNAL_TEST_BUDGET") or 1500),
-             "grant", "Coresignal grant credits", "spent_estimate"),
             ("pdl_title_tank", ("pdl_usage", "title_enrich"),
              _pdl_budget, "pool", "PDL title-enrichment pool", "credits_used"),
         ]

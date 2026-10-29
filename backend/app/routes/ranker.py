@@ -239,9 +239,9 @@ def get_ranked_candidates():
     elif not candidates:
         dig_state = "ran"
         try:
-            from app.services import coresignal_client
             from app.services.firm_cache.writer import cache_pdl_contacts
             from app.services.person_ranker import _load_user_context
+            from app.services import fullenrich_search
             _ctx = _load_user_context(uid, db) or {}
             # A company deck digs that company and nothing else.
             _firms = [slugify_company(company)] if company else (_ctx.get("dream_company_slugs") or [])
@@ -257,36 +257,33 @@ def get_ranked_candidates():
                     break
             if _dig_firm is None and _firms:
                 _dig_firm = _firms[0]
-            if _dig_firm and getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
+            # Dig via FullEnrich (2026-10-29, replacing Coresignal). The old
+            # alumni-first lead-in isn't portable — Coresignal's search credit
+            # was separate from its per-collect cost, so school filtering was
+            # effectively free. FullEnrich bills per row, so the dig just
+            # fetches the firm and the ranker leans on firm_employees query
+            # ordering (schools array-contains the user's slug) to pull alumni
+            # to the top later.
+            if _dig_firm and fullenrich_search.discovery_enabled(db):
                 _dig_name = company if company else _dig_firm.replace("-", " ")
-                # Alumni lead the dig (2026-09-08). The school filter is free
-                # at search time; only the collects cost, so the six people we
-                # pull are the six a student most wants to meet. LinkedIn shows
-                # "24 from your school were hired here" while our shelf had none
-                # of them; this is how the shelf catches up.
-                _prof = _ctx.get("profile") or {}
-                _school_name = ((_prof.get("academics") or {}).get("university")
-                                or (_prof.get("academics") or {}).get("school")
-                                or _prof.get("university") or _prof.get("school") or "")
-                _school_name = str(_school_name).strip() or None
-                _dug, _rl, _sv, _meta = coresignal_client.search_contacts_from_prompt(
+                _dug, _rl, _sv, _meta = fullenrich_search.search_contacts_from_prompt(
                     {"companies": [{"name": _dig_name}],
                      "title_variations": [role] if role else [],
                      "locations": ["United States"]},
                     dig_collects,
-                    alumni_school=_school_name,
+                    db=db,
                 )
                 # Keep only people whose employer actually IS the firm. A
                 # one-word firm name like Stripe token-matches "Kleen Stripe"
                 # and "PERMA-STRIPE OF FLORIDA" in the search index; caching
                 # those as Stripe would poison the warehouse for everyone.
-                # Slug against slug (2026-09-07): the text match dropped every
-                # Warner Bros. employee because "warner bros entertainment"
-                # never equals "Warner Bros. Entertainment". Slugs strip the
-                # punctuation and corporate suffixes on both sides; startswith
-                # keeps "Warner Bros. Entertainment Group" and drops
-                # "Warner Bros. Discovery" style siblings only when the
-                # student is on the exact subsidiary.
+                # Slug against slug: the text match dropped every Warner Bros.
+                # employee because "warner bros entertainment" never equals
+                # "Warner Bros. Entertainment". Slugs strip the punctuation
+                # and corporate suffixes on both sides; startswith keeps
+                # "Warner Bros. Entertainment Group" and drops "Warner Bros.
+                # Discovery" style siblings only when the student is on the
+                # exact subsidiary.
                 _want = slugify_company(_dig_name)
                 _dug = [
                     c for c in (_dug or [])
@@ -294,22 +291,11 @@ def get_ranked_candidates():
                 ]
                 if _dug:
                     cache_pdl_contacts(_dug, shape="app", async_write=False)
-                    _collected = int(((_meta or {}).get("collected_count")) or 0)
-                    if _collected:
-                        try:
-                            from google.cloud import firestore as _fs
-                            db.collection("meta").document("coresignalTestBudget").set(
-                                {"spent_estimate": _fs.Increment(20.0 * _collected),
-                                 "collect_count": _fs.Increment(_collected)}, merge=True)
-                            from app.services.metering import log_provider_spend
-                            log_provider_spend("coresignal", "member_collect", _collected, returned=_collected)
-                        except Exception:
-                            pass
                     candidates = rank_people_for_user(
                         uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
                         company=company, role=role, focus=focus,
                     )
-                    logger.info("ranker dig: %s -> %d collected, %d ranked",
+                    logger.info("ranker dig (fullenrich): %s -> %d returned, %d ranked",
                                 _dig_firm, len(_dug), len(candidates))
         except Exception:
             logger.exception("ranker dig failed uid=%s", uid)
@@ -423,20 +409,29 @@ def get_ranked_candidates():
         # the number (OFF-63). Now the client asks with ?alumni_count=1 and
         # caches what it gets. Capped at 50 by page size; the panel shows "50+".
         if want_alumni_count:
+            # Alumni count via FullEnrich search (2026-10-29, replacing
+            # Coresignal). FullEnrich's /people/search returns metadata.total
+            # for the match set; we read that count without pulling the rows
+            # (fullenrich_search.search_contacts_from_prompt bills per
+            # returned row, so we pass max=1 to minimize cost — the total
+            # is in the response metadata regardless of limit).
             try:
-                from app.services import coresignal_client as _csc
+                from app.services import fullenrich_search
                 _p = (_chip_ctx or {}).get("profile") or {}
                 _sch = ((_p.get("academics") or {}).get("university")
                         or (_p.get("academics") or {}).get("school")
                         or _p.get("university") or _p.get("school") or "")
                 _sch = str(_sch).strip()
-                if _sch and getattr(_csc, "CORESIGNAL_API_KEY", ""):
-                    _ids = _csc.alumni_first_ids(
+                if _sch and fullenrich_search.discovery_enabled(db):
+                    _contacts, _rl, _sv, _meta = fullenrich_search.search_contacts_from_prompt(
                         {"companies": [{"name": company}], "title_variations": [],
-                         "locations": ["United States"]},
-                        _sch, page_size=50,
+                         "locations": ["United States"], "schools": [_sch]},
+                        1,  # min rows — we only want the total
+                        db=db,
                     )
-                    alumni_count = len(_ids or [])
+                    raw_total = (_meta or {}).get("raw_count")
+                    if isinstance(raw_total, int) and raw_total >= 0:
+                        alumni_count = min(raw_total, 50)  # cap panel display
             except Exception:
                 logger.exception("ranker: alumni count failed uid=%s", uid)
                 alumni_count = None
@@ -693,23 +688,12 @@ def reveal_candidate_email(candidate_id):
     last  = (fs.get("last_name")  or "").strip()
     company_display = (fs.get("company_display") or "").strip()
 
-    # FullEnrich-sourced people arrive with no LinkedIn URL or photo. Backfill
-    # them onto this shared doc (Coresignal, not user credits), so every
-    # later reader of the doc gets the profile link too.
-    if not (fs.get("linkedin_url") or "").strip():
-        from app.services.linkedin_backfill import find_linkedin_for_contact
-        found = find_linkedin_for_contact(db, {
-            "FirstName": first, "LastName": last, "Company": company_display,
-            "LinkedIn": "",
-        })
-        if found:
-            patch = {"linkedin_url": found["linkedin_url"]}
-            if not (fs.get("photo_url") or "").strip() and found.get("photo_url"):
-                patch["photo_url"] = found["photo_url"]
-            try:
-                db.collection(FIRM_EMPLOYEES_COLLECTION).document(candidate_id).update(patch)
-            except Exception:
-                logger.exception("linkedin backfill doc update failed candidate=%s", candidate_id)
+    # LinkedIn / photo backfill removed 2026-10-29 with Coresignal cancellation.
+    # The backfill was a find-by-name-and-company lookup; FullEnrich and Apify
+    # don't offer that query shape (Apify needs a URL as input). FullEnrich
+    # discovery contacts without a LinkedIn URL now stay URL-less; the card
+    # falls back to initials. Acceptable until a Perplexity-based URL lookup
+    # is wired in (not scoped here).
 
     # ── 3. Deduct atomically BEFORE any paid work.
     from app.services.auth import deduct_credits_atomic
