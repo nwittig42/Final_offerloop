@@ -1,36 +1,31 @@
 """engine_search — the one door every people-search surface walks through.
 
-Warehouse first, FullEnrich search for the remainder, Coresignal only as
-a cold-start fallback. Rebuilt 2026-10-28 after the vendor audit: Coresignal
-was ~2x the per-search cost of FullEnrich and the two signals we uniquely
-paid Coresignal for (profile_score, is_decision_maker) weren't read anywhere
-in the app. FullEnrich's /people/search covers discovery at $0.0145/row,
-and `fullenrich_search.py` is already a PDL-compatible 4-tuple wrapper, so
-flipping the primary is a one-file change here that cascades to every
-surface that routes through this module. Coresignal stays wired as a
-fallback for the rare case FullEnrich returns zero on a well-formed prompt
-(e.g. an outage) and for the single-URL enrichment path that FullEnrich
-doesn't cover; dropping it entirely is a follow-up PR.
+Warehouse first, FullEnrich search for the remainder. Coresignal was
+canceled 2026-10-29; the fallback rung that used to sit after FullEnrich
+is gone, so a FullEnrich-returns-zero response now surfaces as an honest
+empty result (same contract as "no matches").
+
+Shipped 2026-10-28 as PR #232 when FullEnrich replaced Coresignal as the
+primary vendor: FullEnrich's /people/search covers discovery at
+$0.0145/row (vs Coresignal's $0.08/collect), and `fullenrich_search.py`
+is already a PDL-compatible 4-tuple wrapper, so flipping the primary
+cascaded to every surface routed through this module.
 
 Original rationale (still true): /api/prompt-search was the only surface
 reading firm_employees before paying a vendor; every other surface either
 paid cold rates on every call or pointed at the retired PDL key.
 
-Contract: same 4-tuple as pdl_client/coresignal_client
-search_contacts_from_prompt, so it is a drop-in at every call site:
+Contract: same 4-tuple shape as pdl_client.search_contacts_from_prompt,
+so it is a drop-in at every call site:
     (contacts, retry_level_used, already_saved_contacts, metadata)
-Each vendor's `meta["provider"]` is passed through so downstream telemetry
-can attribute spend without caring which rung ran.
 
 Rules this module enforces so callers don't have to:
   1. firm_employees is read BEFORE any vendor call. A full cache hit costs
      zero credits and skips the vendor entirely.
   2. Cache hits are added to the vendor exclude set so the remainder call
      can't re-buy people we already have.
-  3. Coresignal collects (fallback path only) are mirrored to the
-     meta/coresignalTestBudget tank and the provider spend log.
-  4. `is_configured()` reports whether ANY vendor rung can run, so caller
-     gates don't bind to one vendor's env var.
+  3. `is_configured()` reports whether the vendor rung can run, so caller
+     gates don't bind to a specific env var.
 """
 
 from __future__ import annotations
@@ -42,43 +37,18 @@ SearchResult = Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]], Optional[D
 
 
 def is_configured() -> bool:
-    """True if engine_search_contacts has at least one vendor rung wired up.
+    """True if engine_search_contacts has a vendor rung wired up.
 
-    Returns False only when neither FullEnrich nor Coresignal has an API
-    key present. Callers that require vendor discovery (recruiter finder,
-    hiring-manager finder) should gate on this instead of checking a
-    specific vendor's key — binding to one vendor's env var is what left
-    those surfaces broken when the primary vendor was swapped.
+    Returns False only when FullEnrich's API key is absent. Callers that
+    require vendor discovery (recruiter finder, hiring-manager finder)
+    should gate on this instead of checking a specific vendor's env var
+    themselves.
 
-    Does NOT verify budget headroom; a FullEnrich-out-of-budget state
-    still passes because the engine falls back to Coresignal.
+    Does NOT verify budget headroom — a FullEnrich-out-of-budget state is
+    still "configured", just temporarily exhausted. The engine returns an
+    empty result in that case, same as any other no-match.
     """
-    if (os.getenv("FULLENRICH_API_KEY") or "").strip():
-        return True
-    try:
-        from app.services import coresignal_client
-        if getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def _mirror_coresignal_spend(collected: int) -> None:
-    if not collected:
-        return
-    try:
-        from google.cloud import firestore as _fs
-        from app.extensions import get_db as _get_db
-        _db = _get_db()
-        if _db is not None:
-            _db.collection("meta").document("coresignalTestBudget").set(
-                {"spent_estimate": _fs.Increment(20.0 * collected),
-                 "collect_count": _fs.Increment(collected)}, merge=True)
-        from app.services.metering import log_provider_spend
-        log_provider_spend("coresignal", "member_collect", collected, returned=collected)
-    except Exception:
-        print("[EngineSearch] coresignal spend mirror failed")
+    return bool((os.getenv("FULLENRICH_API_KEY") or "").strip())
 
 
 def engine_search_contacts(
@@ -89,7 +59,7 @@ def engine_search_contacts(
     allow_vendor: bool = True,
     source: str = "engine",
 ) -> SearchResult:
-    """Warehouse → FullEnrich → Coresignal search. Never raises; empty on miss.
+    """Warehouse → FullEnrich search. Never raises; empty on miss.
 
     allow_vendor=False serves warehouse hits only and never spends a
     credit; the public no-login widgets run in this mode. `source` labels
@@ -103,7 +73,7 @@ def engine_search_contacts(
     except Exception:
         pass
 
-    # Rung 1: the warehouse. Free, and every prior collect lives here.
+    # Rung 1: the warehouse. Free, and every prior vendor fill lives here.
     cache_hits: List[Dict[str, Any]] = []
     cache_meta: Optional[Dict[str, Any]] = None
     try:
@@ -132,10 +102,9 @@ def engine_search_contacts(
         return cache_hits[:max_contacts], 0, [], meta
 
     # Rung 2: FullEnrich search for the remainder, cache hits excluded.
-    # Primary vendor as of 2026-10-28 — ~half the per-search cost of Coresignal
-    # and `fullenrich_search.search_contacts_from_prompt` returns the same
-    # 4-tuple. Gated by FULLENRICH_SEARCH_DISCOVERY=1 plus a healthy monthly
-    # budget (fullenrich_client.enabled). A disabled rung falls to Rung 3.
+    # Gated by FULLENRICH_SEARCH_DISCOVERY=1 plus healthy monthly budget
+    # (fullenrich_client.enabled). A disabled rung returns [] honestly —
+    # no fallback vendor, no silent 401.
     remainder: List[Dict[str, Any]] = []
     retry_level = 0
     saved: List[Dict[str, Any]] = []
@@ -181,29 +150,6 @@ def engine_search_contacts(
     except Exception as fe_err:
         print(f"[EngineSearch] fullenrich rung failed ({fe_err!r})")
         remainder, meta = [], {}
-
-    # Rung 3: Coresignal fallback — only if FullEnrich returned nothing.
-    # Covers the FullEnrich-is-disabled, budget-exhausted, or outage cases.
-    # Dropping this rung entirely is tracked as a follow-up once FullEnrich
-    # discovery has a clean week of hit-rate data.
-    if not remainder:
-        try:
-            from app.services import coresignal_client
-            if getattr(coresignal_client, "CORESIGNAL_API_KEY", ""):
-                cs_contacts, cs_retry, cs_saved, cs_meta = coresignal_client.search_contacts_from_prompt(
-                    parsed, max_contacts - len(cache_hits),
-                    exclude_keys=vendor_exclude, user_profile=user_profile,
-                )
-                remainder = cs_contacts or []
-                retry_level = cs_retry
-                saved = cs_saved or []
-                meta = cs_meta or {}
-                meta.setdefault("provider", "coresignal")
-                meta["fallback_from"] = "fullenrich_search"
-                _mirror_coresignal_spend(int(meta.get("collected_count") or 0))
-        except Exception as cs_err:
-            print(f"[EngineSearch] coresignal fallback failed ({cs_err!r})")
-            remainder, meta = remainder or [], meta or {}
 
     # Every vendor fill becomes a warehouse asset for the next surface.
     if remainder:

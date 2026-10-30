@@ -1,14 +1,22 @@
 """Engine enrichment for one LinkedIn URL: the front door of meeting prep.
 
-Replaces pdl_client.enrich_linkedin_profile (2026-08-30). That function hit
-PDL /person/enrich, and with the retired key 401ing, EVERY coffee-chat prep
-died at step 1 with "check the URL and try again", refund included. Coresignal
-collects the same profile by its LinkedIn shorthand for 20 grant credits, with
-the shared warehouse as a free fallback for people the engine has already met.
+Backed by Apify (HarvestAPI's `linkedin-profile-scraper` actor) as of
+2026-10-29, when Coresignal was canceled. Previously used Coresignal's
+collect endpoint to pull a profile by its LinkedIn shorthand; the migration
+was already partly done (PR #235 added `enrich_linkedin_profile_via_apify`
+for the Chrome extension's thin-shape import path), and this file now
+completes it for the rich-shape meeting-prep path too.
 
-Output contract matches pdl_client.build_coffee_chat_data exactly, because the
-whole prep pipeline (SERP research, hometown guess, AI sections, PDF) reads
-that shape.
+Output contract still matches pdl_client.build_coffee_chat_data exactly,
+because the whole prep pipeline (SERP research, hometown guess, AI sections,
+PDF) reads that shape. The Apify item is normalized through
+pdl_client.build_coffee_chat_data_from_apify, which already produces the
+right dict for the prep pipeline (it was built as a PDL fallback and the
+shape is identical).
+
+Warehouse fallback stays in place: when the shelf has a thin record for
+this LinkedIn URL, we serve that instead of calling Apify. Repeat lookups
+of a known person are free.
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ _cache_lock = threading.Lock()
 
 # How long a shelf record answers for a person before a caller that only
 # needs the thin shape (name/title/company/location/school/photo) should
-# treat it as stale and pay for a fresh collect instead.
+# treat it as stale and pay for a fresh vendor call instead.
 WAREHOUSE_PROFILE_TTL_DAYS = 90
 
 
@@ -35,119 +43,6 @@ def _slug(linkedin_url: str) -> str:
     # Bare shorthand ("the-rylan-bohnett") is accepted as-is.
     v = (linkedin_url or "").strip().strip("/").lower()
     return "" if ("/" in v or " " in v or not v) else v
-
-
-def _mirror_collect_spend(db) -> None:
-    try:
-        from google.cloud import firestore as _fs
-        if db is not None:
-            db.collection("meta").document("coresignalTestBudget").set(
-                {"spent_estimate": _fs.Increment(20.0), "collect_count": _fs.Increment(1)},
-                merge=True,
-            )
-        from app.services.metering import log_provider_spend
-        log_provider_spend("coresignal", "member_collect", 1, returned=1)
-    except Exception:
-        pass
-
-
-def _from_coresignal(prof: Dict[str, Any], linkedin_url: str) -> Dict[str, Any]:
-    """Coresignal multi-source profile -> the coffee-chat contract."""
-    first = (prof.get("first_name") or "").strip()
-    last = (prof.get("last_name") or "").strip()
-    if not (first or last):
-        parts = (prof.get("full_name") or prof.get("name") or "").strip().split()
-        first = parts[0] if parts else ""
-        last = " ".join(parts[1:]) if len(parts) > 1 else ""
-
-    experience_array = []
-    for exp in prof.get("experience") or []:
-        if not isinstance(exp, dict):
-            continue
-        experience_array.append({
-            "title":      (exp.get("position_title") or exp.get("title") or "").strip(),
-            "company":    (exp.get("company_name") or "").strip(),
-            "start_date": exp.get("date_from") or exp.get("start_date") or "",
-            "end_date":   exp.get("date_to") or exp.get("end_date") or "",
-            "summary":    (exp.get("description") or exp.get("summary") or "")[:600],
-        })
-
-    education_array = []
-    for edu in prof.get("education") or []:
-        if not isinstance(edu, dict):
-            continue
-        education_array.append({
-            "school":     (edu.get("institution_name") or "").strip(),
-            "degree":     (edu.get("degree") or "").strip(),
-            "major":      (edu.get("field_of_study") or edu.get("major") or "").strip(),
-            "start_date": edu.get("date_from") or "",
-            "end_date":   edu.get("date_to") or "",
-            "gpa":        edu.get("gpa"),
-        })
-
-    skills = [s.get("name") if isinstance(s, dict) else str(s)
-              for s in (prof.get("skills") or []) if s]
-    skills = [s for s in skills if s]
-
-    certifications = []
-    for cert in prof.get("certifications") or []:
-        if isinstance(cert, dict) and cert.get("name"):
-            certifications.append({
-                "name": cert.get("name", ""),
-                "start_date": cert.get("date_from") or "",
-                "end_date": cert.get("date_to") or "",
-            })
-
-    cur = experience_array[0] if experience_array else {}
-    industry = (prof.get("industry")
-                or ((prof.get("experience") or [{}])[0] or {}).get("company_industry")
-                or "")
-
-    city = (prof.get("location_city") or "").strip()
-    state = (prof.get("location_state") or "").strip()
-    country = (prof.get("location_country") or "").strip()
-    location_display = (prof.get("location_full") or "").strip() or ", ".join(
-        filter(None, [city, state, country])
-    )
-
-    return {
-        "firstName": first,
-        "lastName": last,
-        "fullName": f"{first} {last}".strip(),
-        "email": "",
-        "linkedinUrl": linkedin_url,
-        "githubUrl": "",
-        "twitterUrl": "",
-        "jobTitle": cur.get("title", "") or (prof.get("headline") or "").strip(),
-        "company": cur.get("company", ""),
-        "industry": industry,
-        "jobCompanySize": "",
-        "jobCompanyFounded": "",
-        "jobCompanyLinkedinUrl": "",
-        "city": city,
-        "state": state,
-        "country": country,
-        "location": location_display,
-        "experienceArray": experience_array,
-        "educationArray": education_array,
-        "skills": skills,
-        "interests": [i for i in (prof.get("interests") or []) if i],
-        "certifications": certifications,
-        "languages": [l.get("name") if isinstance(l, dict) else str(l)
-                      for l in (prof.get("languages") or []) if l],
-        "summary": (prof.get("summary") or prof.get("description") or "").strip(),
-        "yearsExperience": prof.get("total_experience_duration_years"),
-        "linkedinConnections": prof.get("connections_count"),
-        "photoUrl": (prof.get("picture_url") or "").strip(),
-        "workExperience": [
-            f"{experience_array[0]['title']} at {experience_array[0]['company']}"
-            if experience_array else ""
-        ],
-        "education": (
-            f"{education_array[0]['degree']} at {education_array[0]['school']}"
-            if education_array else ""
-        ),
-    }
 
 
 def _from_warehouse(fs: Dict[str, Any], linkedin_url: str) -> Dict[str, Any]:
@@ -178,8 +73,40 @@ def _from_warehouse(fs: Dict[str, Any], linkedin_url: str) -> Dict[str, Any]:
     }
 
 
+def _feed_warehouse(data: Dict[str, Any], linkedin_url: str) -> None:
+    """Thin App-shape write-back so the next lookup of this URL is free."""
+    try:
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        cache_pdl_contacts([{
+            "FirstName": data.get("firstName", ""),
+            "LastName": data.get("lastName", ""),
+            "LinkedIn": linkedin_url,
+            "Title": data.get("jobTitle", ""),
+            "Company": data.get("company", ""),
+            "City": data.get("city", ""),
+            "State": data.get("state", ""),
+            "College": (data.get("educationArray") or [{}])[0].get("school", "") if data.get("educationArray") else "",
+            "PhotoUrl": data.get("photoUrl", ""),
+            "Email": "",
+        }], shape="app", async_write=True)
+    except Exception:
+        pass
+
+
 def enrich_linkedin_profile_engine(linkedin_url: str, db=None) -> Optional[Dict[str, Any]]:
-    """Coresignal collect by shorthand, warehouse fallback, None on a true miss."""
+    """Warehouse-then-Apify LinkedIn enrichment. None on a true miss.
+
+    Order:
+      1. In-process memo cache (per-slug, process lifetime)
+      2. firm_employees warehouse (free, name/title/company/school/photo)
+      3. Apify HarvestAPI linkedin-profile-scraper (rich: adds experience,
+         education, skills, summary, certifications)
+
+    Warehouse hits don't carry the deeper fields (experienceArray, skills,
+    etc.) — meeting prep uses whatever is there and leans on SERP research
+    for the rest. A caller that strictly needs the deeper fields can pass a
+    fresh URL that misses the warehouse to force an Apify call.
+    """
     slug = _slug(linkedin_url)
     if not slug:
         return None
@@ -188,36 +115,31 @@ def enrich_linkedin_profile_engine(linkedin_url: str, db=None) -> Optional[Dict[
             return _cache[slug]
 
     data: Optional[Dict[str, Any]] = None
-    try:
-        from app.services.coresignal_client import _collect_profile, CORESIGNAL_API_KEY
-        if CORESIGNAL_API_KEY:
-            prof = _collect_profile(slug)  # the endpoint accepts the shorthand
-            if prof:
-                data = _from_coresignal(prof, linkedin_url)
-                _mirror_collect_spend(db)
-                # Feed the warehouse so the next surface meets them free.
-                try:
-                    from app.services.firm_cache.writer import cache_pdl_contacts
-                    cache_pdl_contacts([{
-                        "FirstName": data["firstName"], "LastName": data["lastName"],
-                        "LinkedIn": linkedin_url, "Title": data["jobTitle"],
-                        "Company": data["company"], "City": data["city"],
-                        "State": data["state"], "College": (data["educationArray"][0]["school"]
-                                                            if data["educationArray"] else ""),
-                        "PhotoUrl": data["photoUrl"], "Email": "",
-                    }], shape="app", async_write=True)
-                except Exception:
-                    pass
-    except Exception:
-        logging.getLogger(__name__).exception("engine linkedin enrich failed for %s", slug)
 
-    if data is None and db is not None:
+    # Warehouse first — cache_hit is free vendor spend.
+    if db is not None:
         try:
             snap = db.collection("firm_employees").document(slug).get()
             if getattr(snap, "exists", False):
                 data = _from_warehouse(snap.to_dict() or {}, linkedin_url)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("linkedin_enrich warehouse read failed for %s", slug)
+
+    # Apify fallback — rich profile data for coffee chat prep.
+    if data is None:
+        try:
+            from app.services.apify_client import enrich_user_linkedin_profile_via_apify
+            from app.services.pdl_client import build_coffee_chat_data_from_apify
+            envelope = enrich_user_linkedin_profile_via_apify(linkedin_url)
+            if (envelope or {}).get("ok") and envelope.get("data"):
+                data = build_coffee_chat_data_from_apify(envelope["data"])
+                # The converter leaves linkedinUrl empty when the actor
+                # didn't echo one back; the URL we were asked about IS truth.
+                if not data.get("linkedinUrl"):
+                    data["linkedinUrl"] = linkedin_url
+                _feed_warehouse(data, linkedin_url)
+        except Exception:
+            logging.getLogger(__name__).exception("apify linkedin enrich failed for %s", slug)
 
     if data is not None:
         with _cache_lock:
@@ -225,66 +147,12 @@ def enrich_linkedin_profile_engine(linkedin_url: str, db=None) -> Optional[Dict[
     return data
 
 
-def enrich_linkedin_profile_via_apify(linkedin_url: str, db=None) -> Optional[Dict[str, Any]]:
-    """LinkedIn-URL enrichment via Apify (HarvestAPI's linkedin-profile-scraper).
-
-    Same return shape as `enrich_linkedin_profile_engine` so callers that
-    only read thin fields (name/title/company/city/state/one school/photo)
-    can swap one for the other with no downstream changes. Deeper fields
-    (experienceArray, educationArray, skills, summary) are populated when
-    HarvestAPI returns them, so callers that read the rich shape still
-    get useful data — but the rich coverage is less consistent than
-    Coresignal's, so prefer `enrich_linkedin_profile_engine` where a
-    coffee-chat-grade brief is required.
-
-    Apify is the project's designated single LinkedIn vendor (see CLAUDE.md),
-    which is why we use it here instead of adding Coresignal to this path.
-    """
-    if not linkedin_url:
-        return None
-    slug = _slug(linkedin_url)
-    if not slug:
-        return None
-    with _cache_lock:
-        if slug in _cache:
-            return _cache[slug]
-
-    try:
-        from app.services.apify_client import enrich_user_linkedin_profile_via_apify
-        from app.services.pdl_client import build_coffee_chat_data_from_apify
-        envelope = enrich_user_linkedin_profile_via_apify(linkedin_url)
-        if not (envelope or {}).get("ok") or not envelope.get("data"):
-            return None
-        data = build_coffee_chat_data_from_apify(envelope["data"])
-        # The converter leaves linkedinUrl empty when the actor didn't
-        # echo one back; the URL we were asked to enrich IS the truth.
-        if not data.get("linkedinUrl"):
-            data["linkedinUrl"] = linkedin_url
-
-        # Feed the warehouse: next lookup of this URL is free.
-        try:
-            from app.services.firm_cache.writer import cache_pdl_contacts
-            cache_pdl_contacts([{
-                "FirstName": data.get("firstName", ""),
-                "LastName": data.get("lastName", ""),
-                "LinkedIn": linkedin_url,
-                "Title": data.get("jobTitle", ""),
-                "Company": data.get("company", ""),
-                "City": data.get("city", ""),
-                "State": data.get("state", ""),
-                "College": (data.get("educationArray") or [{}])[0].get("school", "") if data.get("educationArray") else "",
-                "PhotoUrl": data.get("photoUrl", ""),
-                "Email": "",
-            }], shape="app", async_write=True)
-        except Exception:
-            pass
-
-        with _cache_lock:
-            _cache[slug] = data
-        return data
-    except Exception:
-        logging.getLogger(__name__).exception("apify linkedin enrich failed for %s", slug)
-        return None
+# Kept as an alias (and legacy import target) for callers that specifically
+# want to signal "I need the Apify path." Pre-cancellation code used this
+# name explicitly in linkedin_import.py (PR #235); now both functions do
+# the same thing. Removing the alias is a trivial follow-up once no
+# importer references it.
+enrich_linkedin_profile_via_apify = enrich_linkedin_profile_engine
 
 
 def warehouse_only_profile(
@@ -292,14 +160,11 @@ def warehouse_only_profile(
 ) -> Optional[Dict[str, Any]]:
     """The thin shelf record for one LinkedIn URL. No vendor call, $0.
 
-    enrich_linkedin_profile_engine() above always pays for a fresh Coresignal
-    collect first, even for someone another student already found — right
-    for meeting prep, which needs the full Coresignal shape (experience,
-    education detail, skills, summary) for the AI brief. Callers that only
-    read the thin shape (name, title, company, city/state, one school,
-    photo — the extension's import flow is the big one) should try this
-    FIRST and fall back to the engine only on a miss or a stale record, so a
-    repeat lookup of someone already on the shelf costs nothing.
+    enrich_linkedin_profile_engine() above always tries the warehouse first
+    and falls through to Apify on miss. Surfaces that STRICTLY want "free or
+    nothing" (the Chrome extension's bulk-import flow, where paying per-URL
+    isn't acceptable) should call this helper and skip to the next action
+    on miss.
     """
     slug = _slug(linkedin_url)
     if not slug or db is None:

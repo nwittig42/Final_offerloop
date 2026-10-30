@@ -62,13 +62,10 @@ PROVIDER_RATES: Dict[str, Dict[str, float]] = {
     # spend appeared in provider_calls or reached the spend alerter.
     "pdl":         {"person_search": 0.20, "person_enrich": 0.20,
                     "title_enrich": 0.20},
-    # Coresignal bills a Search credit per ES-DSL search call and a Collect
-    # credit per profile fetched. `search` rows are logged inside
-    # coresignal_client._search_ids — the one chokepoint every search goes
-    # through, and the only place that can see the HTTP 200 that bills.
-    # `member_search` rows therefore carry Collect credits ONLY (see
-    # _credits_for) and price at the Collect rate (see _cost_for); there is
-    # deliberately no `member_search` entry here to bill against.
+    # Coresignal rate card retained for historical provider_calls rows only.
+    # The vendor was canceled 2026-10-29; coresignal_client.py was deleted
+    # at the same time. New rows cannot be written under this provider, but
+    # old rows still render in reports / cost dashboards at the correct rate.
     "coresignal":  {"search": 0.04, "member_collect": 0.08},
     "hunter":      {"domain_search": 0.004, "email_finder": 0.003, "email_verify": 0.002},
     "apify":       {"linkedin_posts": 0.005, "sales_nav": 0.005},
