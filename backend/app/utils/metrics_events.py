@@ -27,6 +27,7 @@ VALID_EVENT_TYPES = {
     "suggestion_shown",
     "suggestion_clicked",
     "suggestion_dismissed",
+    "first_email_sent",
 }
 
 

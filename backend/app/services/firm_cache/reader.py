@@ -210,6 +210,7 @@ def firm_employee_doc_to_app_contact(doc: dict) -> dict:
         "City":               doc.get("city") or "",
         "State":              doc.get("state") or "",
         "College":            schools_display[0] if schools_display else "",
+        "Schools":            list(schools_display),
         "Phone":              "",
         "PersonalEmail":      "",
         "WorkEmail":          wh_email,

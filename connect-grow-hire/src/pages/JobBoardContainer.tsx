@@ -2,7 +2,7 @@
 // choice and renders the matching board. Both boards keep their own app shell;
 // only one mounts at a time. The view is read from the URL (?view=) first so
 // it's shareable and back-button friendly, then falls back to the user's last
-// choice in localStorage (default: list — the normal personalized board).
+// choice in localStorage (default: gallery — the browse-everything cards).
 import React, { Suspense } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -16,9 +16,9 @@ const STORAGE_KEY = "jobBoardView";
 
 function readStoredView(): JobBoardView {
   try {
-    return localStorage.getItem(STORAGE_KEY) === "gallery" ? "gallery" : "list";
+    return localStorage.getItem(STORAGE_KEY) === "list" ? "list" : "gallery";
   } catch {
-    return "list";
+    return "gallery";
   }
 }
 

@@ -12,6 +12,12 @@ from datetime import datetime, timedelta, timezone
 from google.cloud.firestore_v1 import transactional
 
 from app.extensions import get_db
+from app.models.pipeline_stages import (
+    AWAITING_REPLY_STAGES,
+    EMAIL_OPENED,
+    WAITING_ON_REPLY,
+    stage_after_send_confirmed,
+)
 from app.services.gmail_client import (
     _load_user_gmail_creds,
     _gmail_service,
@@ -23,7 +29,8 @@ logger = logging.getLogger(__name__)
 
 # Canonical pipeline stages
 ALLOWED_PIPELINE_STAGES = frozenset({
-    "new", "draft_created", "draft_deleted", "email_sent", "waiting_on_reply", "replied",
+    "new", "draft_created", "draft_deleted", "email_sent", "waiting_on_reply",
+    "email_opened", "replied",
     "meeting_scheduled", "connected", "no_response", "bounced", "closed",
 })
 
@@ -50,8 +57,8 @@ STUCK_DRAFT_HOURS = 24
 # Pipeline stages where the draft has been sent, so the "Open in Gmail" button
 # must not point at a #draft/{id} URL (those 404 once the draft is gone).
 # Prefer the thread URL instead.
-POST_SEND_STAGES = frozenset({
-    "email_sent", "waiting_on_reply", "replied",
+POST_SEND_STAGES = AWAITING_REPLY_STAGES | frozenset({
+    "replied",
     "meeting_scheduled", "connected", "no_response",
     "bounced", "closed",
 })
@@ -178,6 +185,10 @@ def _contact_to_dict(contact_id, data):
         "draftCreatedAt": data.get("draftCreatedAt"),
         "replyReceivedAt": data.get("replyReceivedAt"),
         "lastActivityAt": data.get("lastActivityAt") or data.get("draftCreatedAt") or data.get("createdAt") or "",
+        # Open tracking (written by email_tracking.record_open)
+        "emailOpenedAt": data.get("emailOpenedAt"),
+        "emailLastOpenedAt": data.get("emailLastOpenedAt"),
+        "emailOpenCount": data.get("emailOpenCount", 0),
         # Follow-up
         "followUpCount": data.get("followUpCount", 0),
         "nextFollowUpAt": data.get("nextFollowUpAt"),
@@ -472,7 +483,7 @@ def get_outbox_stats(uid):
 
             if is_needs_attention:
                 needs_attention += 1
-            elif stage in ("email_sent", "waiting_on_reply"):
+            elif stage in AWAITING_REPLY_STAGES:
                 waiting += 1
             else:
                 # Remaining active contacts (e.g. "new", "replied" without unread, "draft_created" < 3 days)
@@ -481,7 +492,7 @@ def get_outbox_stats(uid):
         # Reply rate
         if stage in REPLIED_STAGES:
             replied_count += 1
-        if stage in ("email_sent", "waiting_on_reply", "replied", "meeting_scheduled", "connected", "no_response"):
+        if stage in AWAITING_REPLY_STAGES or stage in ("replied", "meeting_scheduled", "connected", "no_response"):
             eligible_for_reply_rate += 1
 
         # This-week metrics
@@ -532,6 +543,13 @@ def update_contact_stage(uid, contact_id, new_stage):
     """Update pipelineStage and related timestamps."""
     if new_stage not in ALLOWED_PIPELINE_STAGES:
         raise ValueError(f"Invalid stage: {new_stage}. Must be one of: {', '.join(sorted(ALLOWED_PIPELINE_STAGES))}")
+    # email_opened is a valid stored value but only the tracking pixel sets it
+    # (services/email_tracking.record_open). A user can move an opened contact
+    # to another stage, never into email_opened.
+    if new_stage == EMAIL_OPENED:
+        raise ValueError(
+            f"Invalid stage: {new_stage}. It is set automatically when the recipient opens the email."
+        )
 
     ref, data = _get_contact(uid, contact_id)
     prev_stage = data.get("pipelineStage") or ""
@@ -551,11 +569,12 @@ def update_contact_stage(uid, contact_id, new_stage):
 
     ref.update(updates)
     data.update(updates)
+    _log_connection_outcomes(uid, contact_id, data, updates)
 
     # Cooldown: record outreach on first transition into a send stage.
     # Gated on prev_stage so we don't double-count when the Gmail webhook
     # (which calls record_outreach directly) has already moved the stage.
-    if new_stage in ("email_sent", "waiting_on_reply") and prev_stage not in POST_SEND_STAGES:
+    if new_stage in AWAITING_REPLY_STAGES and prev_stage not in POST_SEND_STAGES:
         contact_email = data.get("draftToEmail") or data.get("email")
         if contact_email:
             try:
@@ -565,6 +584,42 @@ def update_contact_stage(uid, contact_id, new_stage):
                 logger.warning(f"[outbox] cooldown record failed for contact={contact_id}: {cd_err}")
 
     return _contact_to_dict(contact_id, data)
+
+
+def _log_connection_outcomes(uid, contact_id, data, updates):
+    """Recommendation events for the outcome the ranker optimizes: a
+    meeting booked or a connection made. Fires once per contact per
+    outcome (only when this update stamped the timestamp for the first
+    time), with a deterministic doc id so a retry cannot double-count.
+
+    Deck contacts are stored as ranker_{candidate_id}; the event carries
+    the bare candidate id so it joins the deck's deck_served and swipe rows.
+    """
+    try:
+        from app.utils.recommendation_events import log_recommendation_event
+        deck_contact = str(contact_id).startswith("ranker_")
+        candidate_id = str(contact_id)[len("ranker_"):] if deck_contact else str(contact_id)
+        common = dict(
+            contact_id=candidate_id,
+            contact_email=data.get("email") or data.get("draftToEmail") or "",
+            surface=data.get("source") or ("ios_swipe_deck" if deck_contact else ""),
+            attribution_source="ranker_deck" if deck_contact else "",
+            extra={
+                "contact_doc_id": contact_id,
+                "company": data.get("company") or "",
+                "title": data.get("jobTitle") or data.get("title") or "",
+                "linkedin": data.get("linkedinUrl") or data.get("LinkedIn") or "",
+                "pipeline_stage": data.get("pipelineStage") or "",
+            },
+        )
+        if updates.get("meetingScheduledAt"):
+            log_recommendation_event("meeting_scheduled", uid,
+                                     doc_id=f"meeting_{uid}_{contact_id}", **common)
+        if updates.get("connectedAt"):
+            log_recommendation_event("connection_made", uid,
+                                     doc_id=f"connected_{uid}_{contact_id}", **common)
+    except Exception as exc:
+        logger.warning(f"[outbox] connection outcome log failed for contact={contact_id}: {exc}")
 
 
 def clear_unread_reply(uid, contact_id):
@@ -639,6 +694,7 @@ def mark_contact_won(uid, contact_id, resolution_details=None):
         updates["meetingScheduledAt"] = now
     ref.update(updates)
     data.update(updates)
+    _log_connection_outcomes(uid, contact_id, data, updates)
     return _contact_to_dict(contact_id, data)
 
 
@@ -673,6 +729,7 @@ def mark_contact_resolution(uid, contact_id, resolution, details=None):
 
     ref.update(updates)
     data.update(updates)
+    _log_connection_outcomes(uid, contact_id, data, updates)
     return _contact_to_dict(contact_id, data)
 
 
@@ -723,6 +780,26 @@ def _capture_sentry(e):
         pass
 
 
+def _stage_when_draft_gone(data):
+    """Stage to write when sync finds the contact's draft gone (i.e. sent).
+
+    The draft check runs on every sync for as long as gmailDraftId is set, so
+    it must not churn a stage that already says "sent":
+      - waiting_on_reply / email_opened stay put. Re-deriving from
+        emailOpenedAt would undo the reset to waiting_on_reply that a
+        follow-up send makes, and the old literal demoted email_opened.
+      - draft / email_sent stages are a first send confirmation: an earlier
+        open goes straight to email_opened.
+      - anything else keeps the previous behavior (waiting_on_reply).
+    """
+    current = data.get("pipelineStage") or ""
+    if current in (WAITING_ON_REPLY, EMAIL_OPENED):
+        return current
+    if current in ("", "new", "draft_created", "draft_deleted", "email_sent"):
+        return stage_after_send_confirmed(data)
+    return WAITING_ON_REPLY
+
+
 def _check_draft_status(gmail_service, data):
     """
     Check if a Gmail draft still exists.
@@ -759,7 +836,7 @@ def _check_draft_status(gmail_service, data):
         # Draft is gone - was either sent or deleted
         updates = {"draftStillExists": False}
         if data.get("gmailThreadId"):
-            updates["pipelineStage"] = "waiting_on_reply"
+            updates["pipelineStage"] = _stage_when_draft_gone(data)
             if not data.get("emailSentAt"):
                 updates["emailSentAt"] = _now_iso()
         else:
@@ -781,7 +858,7 @@ def _check_draft_status(gmail_service, data):
                         thread_id = msg.get("threadId")
                         if thread_id:
                             updates["gmailThreadId"] = thread_id
-                            updates["pipelineStage"] = "waiting_on_reply"
+                            updates["pipelineStage"] = _stage_when_draft_gone(data)
                             if not data.get("emailSentAt"):
                                 updates["emailSentAt"] = _now_iso()
                             found_sent = True
@@ -963,6 +1040,7 @@ def send_reply_for_contact(uid, contact_id, body):
     State changes on success:
         - pipelineStage:
             - "replied"   -> "waiting_on_reply"   (we just answered them)
+            - "email_opened" -> "waiting_on_reply" (new email, not opened yet)
             - "draft_created" / "new" -> "email_sent"
             - otherwise unchanged (already mid-thread or terminal)
           Done-stage contacts are left alone — sending another note shouldn't
@@ -1004,10 +1082,17 @@ def send_reply_for_contact(uid, contact_id, body):
         _capture_sentry(e)
         raise ValueError("gmail_disconnected")
 
-    msg = MIMEText(text)
+    from app.services import email_tracking
+    tracking_token = email_tracking.start(uid)
+    msg = email_tracking.tracked_text_mime(text, tracking_token)
     msg["to"] = to_email
     if subject:
-        msg["subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+        # "Re:" only when this continues an existing Gmail thread. A first
+        # email (no thread yet) goes out with the subject as written.
+        if thread_id and not subject.lower().startswith("re:"):
+            msg["subject"] = f"Re: {subject}"
+        else:
+            msg["subject"] = subject
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     message_body = {"raw": raw}
     if thread_id:
@@ -1022,6 +1107,10 @@ def send_reply_for_contact(uid, contact_id, body):
 
     sent_message_id = sent.get("id") or ""
     sent_thread_id = sent.get("threadId") or thread_id or ""
+    email_tracking.register(
+        tracking_token, uid, "reply", recipient_email=to_email, contact_id=contact_id,
+        message_id=sent_message_id, thread_id=sent_thread_id, sent=True,
+    )
     now = _now_iso()
 
     updates = {
@@ -1035,6 +1124,17 @@ def send_reply_for_contact(uid, contact_id, body):
         updates["gmailMessageId"] = sent_message_id
     if sent_thread_id and not thread_id:
         updates["gmailThreadId"] = sent_thread_id
+    # First email: the Gmail draft made for it is now stale. Delete it below
+    # so it can't be sent a second time from Gmail.
+    is_first_send = not thread_id and not data.get("emailSent")
+    stale_draft_id = (data.get("gmailDraftId") or "").strip() if is_first_send else ""
+    if is_first_send:
+        updates["emailSent"] = True
+        updates["draftStillExists"] = False
+    if stale_draft_id:
+        from firebase_admin import firestore as _fs
+        updates["gmailDraftId"] = _fs.DELETE_FIELD
+        updates["gmailDraftUrl"] = _fs.DELETE_FIELD
     # A follow-up is a send to a contact who hadn't replied yet. Counts up so
     # the existing "Nth follow-up" UI in ConversationPanel.tsx stays accurate.
     is_followup_send = not had_unread_reply and current_stage not in ("replied",)
@@ -1046,15 +1146,27 @@ def send_reply_for_contact(uid, contact_id, body):
     # alone — the user marked them resolved and sending another note shouldn't
     # silently un-resolve them.
     if current_stage not in DONE_STAGES:
-        if current_stage == "replied":
+        if current_stage in ("replied", EMAIL_OPENED):
+            # replied: we just answered them. email_opened: a follow-up is a
+            # new email they haven't opened yet. emailOpenedAt keeps the first
+            # open ever.
             updates["pipelineStage"] = "waiting_on_reply"
-        elif current_stage in ("new", "draft_created", "draft_deleted", ""):
+        elif current_stage in ("new", "generated", "draft_created", "draft_deleted", ""):
             updates["pipelineStage"] = "email_sent"
         # Otherwise leave the stage where it is (email_sent / waiting_on_reply
         # stays — we're just sending another follow-up in the same state).
 
     ref.update(updates)
-    data.update(updates)
+    data.update({k: v for k, v in updates.items() if k not in ("gmailDraftId", "gmailDraftUrl")})
+
+    if stale_draft_id:
+        data.pop("gmailDraftId", None)
+        data.pop("gmailDraftUrl", None)
+        try:
+            service.users().drafts().delete(userId="me", id=stale_draft_id).execute()
+        except Exception as e:
+            # Already sent or deleted by the user in Gmail: nothing to clean up.
+            logger.info("[outbox] send_reply: stale draft cleanup skipped contact=%s: %s", contact_id, e)
 
     # Cooldown: log this send against the recipient so other product paths
     # don't over-contact the same person. Mirrors the same hook used by

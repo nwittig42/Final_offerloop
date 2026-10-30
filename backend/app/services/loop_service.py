@@ -31,6 +31,7 @@ from urllib.parse import quote_plus
 
 from app.config import TIER_CONFIGS
 from app.extensions import get_db
+from app.models.pipeline_stages import AWAITING_REPLY_STAGES
 from app.services.agent_service import (
     DEFAULT_AGENT_CONFIG,
     _generate_short_code,
@@ -451,6 +452,8 @@ def create_loop(uid: str, tier: str, payload: dict) -> dict:
     db.collection("users").document(uid) \
       .collection("loops").document(loop_id).set(doc)
 
+    # A Loop names firms and roles the People deck ranks toward.
+    _refresh_people_deck(uid, db)
     return {"id": loop_id, **doc}
 
 
@@ -550,6 +553,8 @@ def update_loop(
 
     if filtered:
         ref.update(filtered)
+        if {"briefParsed", "briefText", "status"} & set(filtered):
+            _refresh_people_deck(uid, db)
     return get_loop(uid, loop_id)
 
 
@@ -565,7 +570,18 @@ def delete_loop(uid: str, loop_id: str) -> bool:
     if not ref.get().exists:
         return False
     ref.delete()
+    _refresh_people_deck(uid, db)
     return True
+
+
+def _refresh_people_deck(uid: str, db) -> None:
+    """Rebuild the student's saved People deck in the background. Never
+    raises: a Loop save must not fail over a deck refresh."""
+    try:
+        from app.services.people_deck_cache import mark_stale
+        mark_stale(uid, db, reason="loop")
+    except Exception:
+        logger.debug("people deck refresh failed uid=%s", uid)
 
 
 # ── Lifecycle ───────────────────────────────────────────────────────────────
@@ -991,12 +1007,12 @@ def _backfill_thread_ids_for_contacts(uid: str, contact_map: dict) -> None:
         if not (cdata.get("email") or "").strip():
             continue
         # Only chase a thread when the email looks like it actually sent.
-        # emailSentAt is the strongest signal; pipelineStage="email_sent"
-        # and inOutbox=True also indicate a send. Without either we don't
+        # emailSentAt is the strongest signal; a sent/awaiting-reply
+        # pipelineStage and inOutbox=True also indicate a send. Without either we don't
         # waste a Gmail call on a contact that never went out.
         if not (
             cdata.get("emailSentAt")
-            or cdata.get("pipelineStage") == "email_sent"
+            or cdata.get("pipelineStage") in AWAITING_REPLY_STAGES
             or cdata.get("inOutbox")
         ):
             continue

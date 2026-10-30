@@ -1,10 +1,9 @@
 // Shared agent hooks — consumed by DashboardPage, AgentSnapshot, sidebar badge, etc.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { useLocation } from "react-router-dom";
 import { doc, collection, query, orderBy, limit as fbLimit, onSnapshot } from "firebase/firestore";
 import { db as firestoreDb } from "@/lib/firebase";
 import {
@@ -322,48 +321,6 @@ export function useAgentActivityLive() {
   }, [user?.uid]);
 
   return actions;
-}
-
-// ── Global toast notifications (D4 — fires on any page when cycle completes) ─
-
-export function useAgentGlobalNotifier() {
-  const { user } = useFirebaseAuth();
-  const { toast } = useToast();
-  const lastCycleRef = useRef<string | null>(null);
-  const location = useLocation();
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    const isElite = (user as { tier?: string })?.tier === "elite";
-    if (!isElite) return;
-
-    const configRef = doc(firestoreDb, "users", user.uid, "settings", "agent_config");
-    const unsub = onSnapshot(
-      configRef,
-      (snap) => {
-        if (!snap.exists()) return;
-        const data = snap.data();
-        if (data?.status !== "active") return;
-
-        const lastCycle = data?.lastCycleAt;
-        if (!lastCycle || !lastCycleRef.current) {
-          lastCycleRef.current = lastCycle;
-          return;
-        }
-        if (lastCycle !== lastCycleRef.current) {
-          lastCycleRef.current = lastCycle;
-          // Suppress if already on /agent (they see the live feed)
-          if (location.pathname === "/agent") return;
-          toast({
-            title: "Agent cycle complete",
-            description: "Found contacts and drafted emails. View in Agent.",
-          });
-        }
-      },
-      (err) => console.warn("Agent notifier:", err)
-    );
-    return () => unsub();
-  }, [user?.uid, toast, location.pathname]);
 }
 
 // ── Stepped progress (D5 — Firestore listener on cycle doc) ──────────────────

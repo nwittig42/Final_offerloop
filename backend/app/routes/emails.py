@@ -639,9 +639,11 @@ def generate_and_draft():
         msg["to"] = to_addr
         msg["subject"] = r["subject"]
 
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(uid)
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText(body, "plain", "utf-8"))
-        alt.attach(MIMEText(html_body, "html", "utf-8"))
+        alt.attach(MIMEText(email_tracking.add_pixel(html_body, tracking_token), "html", "utf-8"))
         msg.attach(alt)
 
         # --- Attach resume if available (uses pre-downloaded bytes) ---
@@ -679,6 +681,12 @@ def generate_and_draft():
             print(f"📤 [{i}] Draft created: {draft}")
             draft_id = draft.get("id")
             draft_ids.append(draft_id)
+            email_tracking.register(
+                tracking_token, uid, "outreach", recipient_email=to_addr,
+                draft_id=draft_id,
+                message_id=draft.get("message", {}).get("id"),
+                thread_id=draft.get("message", {}).get("threadId"),
+            )
             
             # Extract message ID and threadId from draft (Gmail creates a thread when draft is created)
             message_id = draft.get("message", {}).get("id")

@@ -10,19 +10,6 @@
 // ============================================================================
 
 export const PAGES = {
-  home: {
-    route: "/home",
-    name: "Home / Dashboard",
-    description: "Your central hub for tracking networking progress, managing emails, and planning your recruiting timeline.",
-    tabs: ["Dashboard", "Inbox", "Calendar"],
-    features: [
-      "Activity statistics and progress tracking",
-      "Email thread management in Inbox",
-      "Personalized recruiting calendar and timeline"
-    ],
-    keywords: ["home", "dashboard", "main", "start", "overview", "stats", "activity"]
-  },
-
   contactSearch: {
     route: "/find",
     name: "Contact Search",
@@ -38,35 +25,6 @@ export const PAGES = {
     ],
     creditCost: "10 credits per contact",
     keywords: ["contact", "search", "find", "people", "professionals", "network", "networking", "email", "outreach", "connect"]
-  },
-
-  recruiterSpreadsheet: {
-    route: "/find?tab=hiring-managers",
-    name: "Find Hiring Managers",
-    description: "Paste a job posting URL and we'll find the recruiters and hiring managers for that role.",
-    tabs: ["Find Hiring Managers"],
-    features: [
-      "Paste job posting URL",
-      "Find recruiters and hiring managers",
-      "Export or save results"
-    ],
-    keywords: ["recruiter", "hiring manager", "job posting", "find recruiters", "HR"]
-  },
-
-  firmSearch: {
-    route: "/find?tab=companies",
-    name: "Firm Search",
-    description: "Discover companies and firms matching your criteria. Search by industry, location, and size to find potential employers. Describe the type of companies you're looking for in plain English.",
-    tabs: ["Firm Search", "Saved Firms", "Search History"],
-    features: [
-      "Natural language search for companies",
-      "Filter by industry, location, and company size",
-      "Save firms to your list",
-      "View search history",
-      "Scout assistant for refined searches"
-    ],
-    creditCost: "10 credits per firm",
-    keywords: ["firm", "company", "companies", "business", "employer", "find companies", "search firms"]
   },
 
   jobBoard: {
@@ -86,21 +44,20 @@ export const PAGES = {
     keywords: ["job", "jobs", "listings", "board", "openings", "positions", "career", "resume", "cover letter", "recruiter"]
   },
 
-  coffeeChatPrep: {
-    route: "/coffee-chat-prep",
-    name: "Coffee Chat Prep",
-    description: "Generate comprehensive preparation materials for networking conversations. Includes talking points, questions to ask, and research on the person and their company.",
-    tabs: ["Generate Prep", "Prep Library"],
+  contacts: {
+    route: "/contacts",
+    name: "Contacts",
+    description: "Everyone you've saved, in one place. Pick a contact to see their details, your email conversation and its pipeline stage, draft or send a reply, and run a meeting prep before you talk. Switch to Spreadsheet view to see everyone in a table.",
     features: [
-      "Paste LinkedIn URL to generate prep",
-      "Company news and recent developments",
-      "Suggested questions to ask",
-      "Similarity analysis based on your background",
-      "PDF download of prep materials",
-      "Saved preps in library"
+      "Search, sort, and group contacts by company",
+      "See the email conversation and pipeline stage for each person",
+      "Generate and send replies through Gmail",
+      "Run a meeting prep from a contact's card (needs their LinkedIn URL)",
+      "Past preps list with PDF downloads",
+      "Add, edit, share, and export contacts to CSV"
     ],
-    creditCost: "30 credits per prep",
-    keywords: ["coffee chat", "prep", "preparation", "networking", "informational", "interview", "questions", "talking points"]
+    creditCost: "30 credits per meeting prep",
+    keywords: ["contacts", "my network", "inbox", "outbox", "replies", "emails", "drafts", "coffee chat", "meeting prep", "prep", "follow up", "pipeline"]
   },
 
   pricing: {
@@ -128,31 +85,6 @@ export const PAGES = {
       "Sign out"
     ],
     keywords: ["settings", "account", "profile", "resume", "gmail", "connect", "preferences", "upload"]
-  },
-
-  coffeeChatLibrary: {
-    route: "/coffee-chat-library",
-    name: "Coffee Chat Library",
-    description: "Access all your past coffee chat preparation materials.",
-    features: [
-      "View past preps",
-      "Download PDFs",
-      "Delete old preps"
-    ],
-    keywords: ["coffee chat", "library", "history", "past preps", "saved"]
-  },
-
-  outbox: {
-    route: "/home?tab=outbox",
-    name: "Inbox",
-    description: "Manage your email threads and track responses. View drafts, sent emails, and replies. Use the calendar and networking tabs to stay organized.",
-    features: [
-      "View all email threads",
-      "Track reply status",
-      "Regenerate suggested replies",
-      "Open emails in Gmail"
-    ],
-    keywords: ["inbox", "outbox", "emails", "drafts", "sent", "replies", "threads", "messages"]
   }
 } as const;
 
@@ -381,7 +313,7 @@ export const CREDIT_SYSTEM = {
       maxContactsPerSearch: 8,
       features: [
         "2,000 monthly credits",
-        "Up to 8 contacts per search",
+        "Up to 10 contacts per search",
         "Resume-matched personalized emails",
         "Priority support"
       ]
@@ -494,28 +426,22 @@ export const TROUBLESHOOTING = {
 export const ROUTE_MAPPING = {
   // Direct page routes
   pages: {
-    "/home": ["home", "dashboard", "main", "start"],
     "/find": ["contact search", "find contacts", "search contacts", "network", "networking", "outreach", "email"],
-    "/find?tab=companies": ["firm search", "company search", "find companies", "find firms", "search firms", "employers"],
     "/job-board": ["job board", "jobs", "job listings", "openings", "positions", "resume", "cover letter", "recruiter"],
-    "/coffee-chat-prep": ["coffee chat", "coffee prep", "networking prep", "informational", "prep materials"],
     "/pricing": ["pricing", "plans", "upgrade", "subscription", "pro", "elite", "credits", "billing", "payment"],
     "/account-settings": ["settings", "account", "profile", "gmail", "resume upload", "preferences"],
-    "/my-network": ["my network", "contacts", "contact directory", "contact library", "saved contacts", "my contacts", "people", "companies"],
-    "/coffee-chat-library": ["coffee chat library", "past preps", "prep history"],
-    "/home?tab=outbox": ["outbox", "emails", "drafts", "sent", "replies", "messages"]
+    "/contacts": ["contacts", "my network", "contact directory", "saved contacts", "my contacts", "people", "outbox", "inbox", "emails", "drafts", "sent", "replies", "messages", "coffee chat", "coffee prep", "meeting prep", "past preps"]
   },
 
   // Intent to route mapping
   intents: {
     findContacts: "/find",
-    searchCompanies: "/find?tab=companies",
     browseJobs: "/job-board",
-    prepareCoffeeChat: "/coffee-chat-prep",
+    prepareCoffeeChat: "/contacts",
     viewPricing: "/pricing",
     manageAccount: "/account-settings",
-    viewSavedContacts: "/my-network",
-    viewEmails: "/home?tab=outbox",
+    viewSavedContacts: "/contacts",
+    viewEmails: "/contacts",
     connectGmail: "/account-settings",
     uploadResume: "/account-settings",
     checkCredits: "/pricing"
@@ -538,33 +464,14 @@ export const SUGGESTED_QUESTIONS = [
  * Context-aware suggestion chips by route. Fallback to SUGGESTED_QUESTIONS
  * for unmapped pages.
  *
- * Keys are pathnames, except the Find tabs, which are keyed by
- * "pathname?tab=<tab>". The panel looks up the tab-qualified key first, then
- * the bare pathname (see ScoutSidePanel), so the tab entries actually match.
+ * Keys are pathnames. The panel looks up a tab-qualified key
+ * ("pathname?tab=<tab>") first, then the bare pathname (see ScoutSidePanel).
  */
 export const SCOUT_CHIPS_BY_PAGE: Record<string, readonly string[]> = {
-  "/dashboard": [
-    "What should I do first?",
-    "Find me 5 people to reach out to",
-    "Build me a networking plan for this month",
-    "What's waiting on me right now?",
-  ],
   "/find": [
     "Help me narrow my search",
     "Find alumni from my school at my target firms",
     "I'm not getting good results",
-    "How do credits work with searches?",
-  ],
-  "/find?tab=companies": [
-    "Find firms in my industry that are hiring",
-    "Help me build a target company list",
-    "Help me narrow these results",
-    "What's the deal with credits?",
-  ],
-  "/find?tab=hiring-managers": [
-    "Find the hiring manager for a job posting",
-    "Who should I email at my target company?",
-    "Recruiter or hiring manager: who do I contact?",
     "How do credits work with searches?",
   ],
   "/job-board": [
@@ -579,7 +486,7 @@ export const SCOUT_CHIPS_BY_PAGE: Record<string, readonly string[]> = {
     "Why is an application stuck in the browser step?",
     "How does auto-apply work?",
   ],
-  "/outbox": [
+  "/contacts": [
     "Who hasn't replied yet?",
     "Help me write a follow-up",
     "How do I reply to this thread?",
@@ -591,53 +498,11 @@ export const SCOUT_CHIPS_BY_PAGE: Record<string, readonly string[]> = {
     "How many credits does a Loop use?",
     "Should I approve auto-sending?",
   ],
-  "/coffee-chat-prep": [
-    "What questions should I ask?",
-    "Help me research this person",
-    "How do I follow up after?",
-    "What goes into a prep document?",
-  ],
-  "/coffee-chat-library": [
-    "Prep me for another meeting",
-    "How do I reuse a past prep?",
-    "What questions should I ask in a coffee chat?",
-    "How many preps do I get on my plan?",
-  ],
-  "/resume": [
-    "How do I improve my resume score?",
-    "What does the score measure?",
-    "How is my resume used across Offerloop?",
-    "Tailor my resume advice to my target role",
-  ],
-  "/cover-letter": [
-    "Write a cover letter for a job posting",
-    "What makes a strong cover letter?",
-    "Why does it need my resume first?",
-    "How many credits per letter?",
-  ],
   "/upload-list": [
     "How should I format my CSV?",
     "What happens after I upload a list?",
     "Can I import LinkedIn URLs?",
     "Where do imported contacts go?",
-  ],
-  "/my-network": [
-    "Who should I follow up with?",
-    "Find more people like my saved contacts",
-    "Help me email someone in my network",
-    "How do pipeline stages work?",
-  ],
-  "/my-network/people": [
-    "Who should I follow up with?",
-    "Find more people like my saved contacts",
-    "Help me email someone in my network",
-    "How do pipeline stages work?",
-  ],
-  "/my-network/companies": [
-    "Find people at my saved companies",
-    "Add more companies like these",
-    "Which of these firms hire from my school?",
-    "Help me prioritize this list",
   ],
   "/integrations": [
     "Why should I connect Gmail?",

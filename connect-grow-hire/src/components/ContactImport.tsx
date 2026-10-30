@@ -736,7 +736,7 @@ const ContactImport: React.FC<ContactImportProps> = ({ onImportComplete, onSwitc
       onImportComplete?.();
       // Imported contacts live on My Network → People (the inner
       // contact-library tab was removed in the IA cleanup).
-      navigate('/my-network?tab=people');
+      navigate('/contacts');
     };
 
     return (

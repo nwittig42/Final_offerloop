@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import { AppSidebar } from '@/components/AppSidebar';
 import { AppHeader } from '@/components/AppHeader';
+import { ConnectAiAssistantsCard } from '@/components/ConnectAiAssistantsCard';
 import { MainContentWrapper } from '@/components/MainContentWrapper';
 import { companies as COMPANIES_TAXONOMY } from '@/data/companies';
 import { industries as INDUSTRIES_TAXONOMY } from '@/data/industries';
@@ -2997,6 +2998,8 @@ const ProfilePreview: React.FC = () => {
                     />
 
                     <Header />
+
+                    <ConnectAiAssistantsCard style={{ marginBottom: 14 }} />
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                       <CollapsibleSource

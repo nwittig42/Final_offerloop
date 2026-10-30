@@ -8,7 +8,7 @@ import requests
 from datetime import datetime
 from flask import Blueprint, request, jsonify, Response
 
-from ..extensions import require_firebase_auth
+from ..extensions import require_firebase_auth, require_tier
 from ..extensions import get_db
 from app.utils.exceptions import OfferloopException, ValidationError
 from app.config import PDL_BASE_URL, PEOPLE_DATA_LABS_API_KEY
@@ -119,6 +119,7 @@ def _is_valid_contact(contact: dict) -> bool:
 
 
 @contact_import_bp.route('/import/preview', methods=['POST'])
+@require_tier(['elite'])
 @require_firebase_auth
 def preview_import():
     """
@@ -269,6 +270,7 @@ def preview_import():
 
 
 @contact_import_bp.route('/import', methods=['POST'])
+@require_tier(['elite'])
 @require_firebase_auth
 def import_contacts():
     """

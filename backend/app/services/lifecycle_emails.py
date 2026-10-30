@@ -1124,7 +1124,7 @@ def process_welcome_drips() -> dict:
                 body_paragraphs=[
                     f"Hey, {SIGNATURE_NAME} here.",
                     "You're two weeks in. Honest read on whether Pro is worth it:",
-                    "If you're running 5+ searches a week, want 8 contacts per search instead of 3, or you want the hiring-manager search unlocked, Pro is $9.99/mo and pays for itself with one landed coffee chat.",
+                    "If you're running 5+ searches a week, want 10 contacts per search instead of 3, or you want the hiring-manager search unlocked, Pro is $9.99/mo and pays for itself with one landed coffee chat.",
                     "If you're doing 1-2 searches, stay on Free. You don't need it yet.",
                     "The trial is 7 days free and you can cancel anytime. If you want to try it or you're unsure whether it fits your situation, reply and I'll help you decide.",
                 ],
@@ -1342,7 +1342,7 @@ def process_free_ceilings() -> dict:
             body_paragraphs=[
                 f"Hey, {SIGNATURE_NAME} here.",
                 f"You've used {used} of your {max_credits} credits this month, which means you've been getting real value from Offerloop. Free tier resets on the 1st of next month, so you have a decision to make.",
-                "If you want to keep going before then, Pro is $9.99/mo and gets you 2,000 credits (about 6x what you had this month) plus 8 contacts per search instead of 3. The trial is 7 days free.",
+                "If you want to keep going before then, Pro is $9.99/mo and gets you 2,000 credits (about 6x what you had this month) plus 10 contacts per search instead of 3. The trial is 7 days free.",
                 "If you'd rather just wait for the reset, that's a legitimate move too. Just wanted to flag where you are.",
             ],
             cta_label="See Pro",

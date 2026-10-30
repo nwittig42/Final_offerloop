@@ -159,6 +159,42 @@ export interface Contact {
   EmailSource?: string;
   EmailVerified?: boolean;
   EmailConfidenceScore?: number; // 0-100 from the providing source
+  // Set on contacts from an org alumni directory (OFF-42).
+  OrgId?: string;
+  OrgBadge?: string; // e.g. "USC TKE Alumni"
+  OrgGradYear?: number | null; // the directory's real "Class of" year, else null
+}
+
+// An org alumni directory a student can join (OFF-42).
+export interface Org {
+  id: string;
+  name: string;
+  shortName: string;
+  school: string;
+  type: string;
+  memberCount: number;
+  aliases: string[];
+  // The org's own color ("" = app default), for its space in the app.
+  accentColor: string;
+}
+
+// One alum in an org's browsable directory (members only). Email when we
+// have one; never a phone.
+export interface DirectoryMember {
+  personKey: string;
+  firstName: string;
+  lastName: string;
+  title: string;
+  company: string;
+  headline: string;
+  year: number | null; // join or class year, for ordering only
+  gradYear: number | null; // real "Class of" year, never estimated
+  badge: string;
+  linkedinUrl: string;
+  photoUrl: string;
+  school: string;
+  email: string;
+  hasEmail: boolean;
 }
 
 // Recruiter interface (extends Contact but specific to recruiters)
@@ -262,6 +298,47 @@ export interface FindHiringManagerResponse {
   error?: string;
 }
 
+// Find contacts (job board): up to one person per outreach slot for a saved job.
+export type ContactSlot = 'leader' | 'process' | 'recruiter';
+
+export interface ContactSlotPerson {
+  slot: ContactSlot;
+  label: string;
+  name: string;
+  title: string;
+  company: string;
+  city: string;
+  linkedin: string;
+  photo: string;
+  alumni: boolean;
+  found_by: string;
+  person_key: string;
+  college: string;
+  first_name: string;
+  last_name: string;
+}
+
+export type FindContactsResponse =
+  | {
+      status: 'ready';
+      company: string;
+      team: string;
+      team_source: string;
+      people: ContactSlotPerson[];
+      creditsCharged: number;
+      credits: number;
+    }
+  | { status: 'searching' }
+  | { status: 'insufficient_credits'; error: string; creditsRequired?: number; creditsAvailable?: number }
+  | { status: 'not_found' }
+  | { status: 'error'; error: string };
+
+export type RevealContactEmailResponse =
+  | { status: 'found'; email: string; emailStatus: string }
+  | { status: 'not_found' }
+  | { status: 'locked' }
+  | { status: 'error'; error: string };
+
 // Base response type
 export interface SearchResponse {
   contacts: Contact[];
@@ -342,6 +419,7 @@ export type PipelineStage =
   | "draft_deleted"
   | "email_sent"
   | "waiting_on_reply"
+  | "email_opened"
   | "replied"
   | "meeting_scheduled"
   | "connected"
@@ -376,6 +454,10 @@ export interface OutboxThread {
   emailSentAt?: string | null;
   draftCreatedAt?: string | null;
   replyReceivedAt?: string | null;
+  // Open tracking: stamped by the backend when the recipient loads the email.
+  emailOpenedAt?: string | null;
+  emailLastOpenedAt?: string | null;
+  emailOpenCount?: number;
   lastActivityAt: string;
   followUpCount: number;
   nextFollowUpAt?: string | null;
@@ -403,6 +485,16 @@ export interface OutboxThread {
   suggestedReply?: string;
   replyType?: string;
   duplicateOf?: string;
+}
+
+// Ranker deck. Person fields are loosely shaped on the wire; see
+// components/find/people/peopleModel.ts for the mapping.
+export interface RankerDeckResponse {
+  candidates: Array<Record<string, any>>;
+  count: number;
+  deck_id?: string;
+  generatedAt?: string;
+  reason?: "sparse_profile" | "no_candidates" | string;
 }
 
 export interface OutboxStats {
@@ -1417,9 +1509,13 @@ class ApiService {
    * Prompt-based contact search (new endpoint). Same response shape as free-run plus parsed_query.
    * Works for all tiers; batchSize is capped by tier on backend.
    */
-  async runPromptSearch(data: { prompt: string; batchSize: number; emailTemplate?: EmailTemplate | null; mode?: OutreachMode; filters?: import("@/types/findFilters").PeopleFilters }): Promise<SearchResult> {
+  async runPromptSearch(data: { prompt: string; batchSize: number; emailTemplate?: EmailTemplate | null; mode?: OutreachMode; filters?: import("@/types/findFilters").PeopleFilters; searchId?: string; signal?: AbortSignal }): Promise<SearchResult> {
     const headers = await this.getAuthHeaders();
     const payload: Record<string, unknown> = { prompt: data.prompt.trim(), batchSize: data.batchSize };
+    if (data.searchId) {
+      // Lets cancelPromptSearch stop this run before it charges or saves.
+      payload.searchId = data.searchId;
+    }
     if (data.emailTemplate && hasEmailTemplateValues(data.emailTemplate)) {
       payload.emailTemplate = data.emailTemplate;
     }
@@ -1437,7 +1533,70 @@ class ApiService {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: data.signal,
     });
+  }
+
+  // Contact on a searched person saved without an email (OFF-56): one free
+  // retry of the email lookup. email is null on a miss.
+  async findSearchContactEmail(contactId: string): Promise<{ email: string | null; retried?: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ email: string | null; retried?: boolean }>('/prompt-search/find-email', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactId }),
+    });
+  }
+
+  // Find's Cancel (OFF-56): the search checks this before it charges credits
+  // or saves anyone, so a cancelled search costs nothing.
+  async cancelPromptSearch(searchId: string): Promise<{ ok: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean }>('/prompt-search/cancel', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ searchId }),
+    });
+  }
+
+  // Org alumni directories (OFF-42). Joining takes the org's password; the
+  // backend owns membership (clients can't write orgMemberships).
+  async getOrgs(): Promise<{ orgs: Org[]; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ orgs: Org[]; memberships: string[] }>('/orgs', { method: 'GET', headers });
+  }
+
+  // Needs the org's join password. A failure throws with the backend code
+  // as the message: wrong_password, too_many_attempts or join_closed.
+  // dryRun (the onboarding preview) only checks the password.
+  async joinOrg(orgId: string, password: string, dryRun = false): Promise<{ ok: boolean; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/join`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(dryRun ? { password, dry_run: true } : { password }),
+    });
+  }
+
+  async leaveOrg(orgId: string): Promise<{ ok: boolean; memberships: string[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest<{ ok: boolean; memberships: string[] }>(`/orgs/${encodeURIComponent(orgId)}/leave`, { method: 'POST', headers });
+  }
+
+  // The whole directory (members only): every living alum.
+  async getOrgMembers(orgId: string): Promise<{ org: Org; members: DirectoryMember[] }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(`/orgs/${encodeURIComponent(orgId)}/members`, { method: 'GET', headers });
+  }
+
+  /** Put an email Contact just found onto the alum's directory card (OFF-51).
+   * The server takes the address from the saved contact, not from us. */
+  async saveOrgFoundEmail(orgId: string, personKey: string, contactId: string): Promise<{ ok: boolean; email: string }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(
+      `/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(personKey)}/found-email`,
+      { method: 'POST', headers, body: JSON.stringify({ contact_id: contactId }) },
+    );
   }
 
   /**
@@ -1517,6 +1676,32 @@ class ApiService {
       headers,
       body: JSON.stringify(body),
     });
+  }
+
+  /**
+   * Find someone from their LinkedIn URL and save them to Contacts, the same
+   * call the Chrome extension makes (OFF-51). No draft here: the email comes
+   * back now (shelf or Hunter) or `email_pending` means FullEnrich is still
+   * running, and getContactEmailStatus finishes it. Costs reveal_email
+   * credits; a pending miss is refunded.
+   */
+  async importLinkedInContact(linkedinUrl: string): Promise<{
+    status: string; contact_id: string; email_found: boolean; email_pending: boolean;
+    contact: { email: string | null; firstName: string; lastName: string; company: string; jobTitle: string };
+    credits_remaining?: number; message?: string;
+  }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest('/contacts/import-linkedin', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ linkedin_url: linkedinUrl, create_draft: false, email_mode: 'fast' }),
+    });
+  }
+
+  /** Poll a pending email lookup started by importLinkedInContact. */
+  async getContactEmailStatus(contactId: string): Promise<{ status: "found" | "miss" | "pending"; email: string | null; refunded: boolean }> {
+    const headers = await this.getAuthHeaders();
+    return this.makeRequest(`/contacts/${encodeURIComponent(contactId)}/email-status`, { method: 'GET', headers });
   }
 
   /** Download a .eml draft file (fallback delivery for users without Gmail). */
@@ -2055,6 +2240,134 @@ async markOutboxThreadRead(contactId: string): Promise<{ thread: OutboxThread } 
   );
 }
 
+// ── Ranker: recommended people (same deck the mobile People feed uses) ──
+
+/** Ranked people to reach out to, sourced from the user's school and dream
+ *  companies (or one company, with `company`). `exclude` = candidate ids already shown, so "load more" extends
+ *  the list instead of replaying it. Echo deck_id on feedback/outreach. */
+async getRankerCandidates(params?: {
+  limit?: number; exclude?: string[]; company?: string;
+  /** Event label (default "web_find"). */
+  surface?: string;
+  /** false: never start the FullEnrich email prefetch or a Coresignal dig for this deck. */
+  allowPaidLookups?: boolean;
+}): Promise<RankerDeckResponse> {
+  const headers = await this.getAuthHeaders();
+  const qs = new URLSearchParams({ surface: params?.surface || "web_find" });
+  if (params?.allowPaidLookups === false) {
+    qs.set("prefetch", "0");
+    qs.set("dig", "0");
+  }
+  if (params?.limit) qs.set("limit", String(params.limit));
+  // company= scopes the deck to one firm; when nobody is on file there the
+  // backend goes and finds people at it (the "dig") before answering.
+  if (params?.company) qs.set("company", params.company);
+  if (params?.exclude?.length) qs.set("exclude", params.exclude.slice(0, 500).join(","));
+  const q = qs.toString();
+  return this.makeRequest<RankerDeckResponse>(`/ranker/candidates${q ? `?${q}` : ""}`, { method: 'GET', headers });
+}
+
+/** Record interest in a candidate. "left" hides them from future decks. */
+async sendRankerFeedback(body: { candidateId: string; signal: "right" | "left" | "skip"; deckId: string; rank: number }): Promise<void> {
+  const headers = await this.getAuthHeaders();
+  await this.makeRequest('/ranker/feedback', {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidate_id: body.candidateId, signal: body.signal, deck_id: body.deckId, rank: body.rank }),
+  });
+}
+
+/** Find a candidate's verified email (8 credits, refunded on a miss). */
+async revealRankerEmail(
+  candidateId: string,
+  deckId?: string,
+  surface = "web_find",
+  /** useFirstOutreach: spend the one-time free first outreach instead of credits (409 if it can't be used). */
+  opts?: { useFirstOutreach?: boolean },
+): Promise<{ email: string | null; verified: boolean; cached: boolean; charged: boolean; free?: boolean; reason?: string }> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/reveal-email`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deck_id: deckId, surface, ...(opts?.useFirstOutreach ? { use_first_outreach: true } : {}) }),
+  });
+}
+
+/** Whether this account can still use its one-time free first outreach. */
+async getFirstOutreachStatus(): Promise<{ eligible: boolean; status: string }> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest('/ranker/first-outreach', { method: 'GET', headers });
+}
+
+/**
+ * Send a contact's first email: exactly the saved draft the user confirmed
+ * (confirmedHash comes from a dryRun of the same endpoint), at most once.
+ * dryRun returns the recipient, blocking problems and style warnings.
+ */
+async sendFirstEmail(contactId: string, body: {
+  dryRun?: boolean; confirmedHash?: string; surface?: string; confirmNotSent?: boolean;
+}): Promise<{
+  sent?: boolean; alreadySent?: boolean; contactId?: string;
+  recipient?: string; subject?: string; hash?: string; blocking?: string[]; warnings?: string[];
+}> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest(`/contacts/${encodeURIComponent(contactId)}/send-first-email`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(body.dryRun ? { dry_run: true } : {}),
+      ...(body.confirmedHash ? { confirmed_hash: body.confirmedHash } : {}),
+      ...(body.surface ? { surface: body.surface } : {}),
+      ...(body.confirmNotSent ? { confirm_not_sent: true } : {}),
+    }),
+  });
+}
+
+/**
+ * Copy a contact's saved in-app draft into the user's Gmail drafts. Free;
+ * a contact that already has a Gmail draft comes back with created: false.
+ */
+async pushContactGmailDraft(contactId: string): Promise<
+  | { ok: true; gmailDraftUrl: string; created: boolean }
+  | { ok: false; reason: "gmail_not_connected" | "gmail_scope_missing" | "no_saved_draft" | "draft_in_progress" | "recipient_suppressed" | "error" }
+> {
+  const headers = await this.getAuthHeaders();
+  try {
+    const res = await this.makeRequest<{ gmailDraftUrl?: string; created?: boolean }>(
+      `/contacts/${encodeURIComponent(contactId)}/gmail-draft`,
+      { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' } },
+    );
+    return { ok: true, gmailDraftUrl: res.gmailDraftUrl || '', created: res.created === true };
+  } catch (err) {
+    const code = err instanceof Error ? err.message : '';
+    if (code === 'gmail_not_connected' || code === 'gmail_scope_missing' || code === 'no_saved_draft' || code === 'draft_in_progress' || code === 'recipient_suppressed') {
+      return { ok: false, reason: code };
+    }
+    return { ok: false, reason: 'error' };
+  }
+}
+
+/** Write to a candidate after a reveal. No extra charge; saves them to Contacts. */
+async rankerOutreach(
+  candidateId: string,
+  action: "draft" | "send",
+  deckId?: string,
+  /** createGmailDraft: false keeps the draft in the app only (the walkthrough). */
+  opts?: { createGmailDraft?: boolean; surface?: string },
+): Promise<{ drafted: boolean; sent: boolean }> {
+  const headers = await this.getAuthHeaders();
+  return this.makeRequest(`/ranker/candidates/${encodeURIComponent(candidateId)}/outreach`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action,
+      deck_id: deckId,
+      ...(opts?.createGmailDraft === false ? { create_gmail_draft: false } : {}),
+      ...(opts?.surface ? { surface: opts.surface } : {}),
+    }),
+  });
+}
+
 /** Mark a contact as won (meeting booked) */
 async markOutboxThreadWon(contactId: string, resolutionDetails?: string): Promise<{ thread: OutboxThread } | { error: string }> {
   const headers = await this.getAuthHeaders();
@@ -2521,6 +2834,50 @@ async setOutboxThreadResolution(contactId: string, resolution: Resolution, detai
     );
   }
 
+  // Find contacts for a saved job. Non-200 statuses come back as typed results
+  // (202 searching, 402 credits, 404 gone) instead of throwing, so the modal
+  // can poll and show each state.
+  async findContacts(jobId: string): Promise<FindContactsResponse> {
+    const headers = await this.getAuthHeaders();
+    const res = await fetch(`${API_BASE_URL}/job-board/find-contacts`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jobId }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.status === 200 && data?.status === 'ready') {
+      return { ...data, people: Array.isArray(data.people) ? data.people : [] };
+    }
+    if (res.status === 202) return { status: 'searching' };
+    if (res.status === 402) {
+      return {
+        status: 'insufficient_credits',
+        error: data?.error || 'Insufficient credits',
+        creditsRequired: data?.creditsRequired,
+        creditsAvailable: data?.creditsAvailable,
+      };
+    }
+    if (res.status === 404) return { status: 'not_found' };
+    return { status: 'error', error: data?.error || `HTTP ${res.status}` };
+  }
+
+  // Look up (and save) one found person's work email. Paid lookup on first call.
+  async revealContactEmail(jobId: string, personKey: string): Promise<RevealContactEmailResponse> {
+    const headers = await this.getAuthHeaders();
+    const res = await fetch(`${API_BASE_URL}/job-board/find-contacts/email`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jobId, personKey }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.status === 200 && data?.email) {
+      return { status: 'found', email: data.email, emailStatus: data.status || '' };
+    }
+    if (res.status === 200 || res.status === 404) return { status: 'not_found' };
+    if (res.status === 403) return { status: 'locked' };
+    return { status: 'error', error: data?.error || `HTTP ${res.status}` };
+  }
+
   async findRecruiters(params: FindRecruiterRequest): Promise<FindRecruiterResponse> {
     const headers = await this.getAuthHeaders();
     return this.makeRequest<FindRecruiterResponse>(
@@ -2883,7 +3240,8 @@ export async function trackSuggestionEvent(
   }
 }
 
-export const enrichLinkedInOnboarding = async (linkedinUrl: string) => {
+// dryRun (the onboarding preview) gets the auto-fill without saving it.
+export const enrichLinkedInOnboarding = async (linkedinUrl: string, dryRun = false) => {
   const { auth } = await import('../lib/firebase');
   const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -2891,9 +3249,37 @@ export const enrichLinkedInOnboarding = async (linkedinUrl: string) => {
   const response = await fetch(`${API_BASE_URL}/enrich-linkedin-onboarding`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ linkedin_url: linkedinUrl }),
+    body: JSON.stringify(dryRun ? { linkedin_url: linkedinUrl, dry_run: true } : { linkedin_url: linkedinUrl }),
   });
   return response.json();
+};
+
+/**
+ * LLM-interpret a career narrative into industries/roles (POST /api/extract-direction).
+ * Onboarding uses it as an optional refinement of rules-based inference, so
+ * every failure (no LLM configured, network, bad response) resolves to null.
+ */
+export const extractDirection = async (
+  narrative: string,
+): Promise<{ industries: string[]; roles: string[] } | null> => {
+  try {
+    const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE_URL}/extract-direction`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ narrative }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.success || !data.extracted) return null;
+    return {
+      industries: Array.isArray(data.extracted.industries) ? data.extracted.industries : [],
+      roles: Array.isArray(data.extracted.roles) ? data.extracted.roles : [],
+    };
+  } catch {
+    return null;
+  }
 };
 
 export const mergeLinkedInData = async () => {

@@ -633,7 +633,7 @@ export function AgentSnapshot({
         <div className="pt-9">
           <SectionHead
             title="Replies"
-            action={<ViewAll to="/tracker">Open tracker →</ViewAll>}
+            action={<ViewAll to="/contacts">Open contacts →</ViewAll>}
           />
           <RepliesPanel pipelineCompanies={pipelineCompanies} />
         </div>
@@ -656,7 +656,7 @@ export function AgentSnapshot({
         <div className="pt-9">
           <SectionHead
             title="Pipeline"
-            action={<ViewAll to="/tracker">Open tracker →</ViewAll>}
+            action={<ViewAll to="/contacts">Open contacts →</ViewAll>}
           />
           {pipelineCompanies.length > 0 ? (
             <PipelineKanban companies={pipelineCompanies} />
@@ -775,7 +775,7 @@ function OverviewContent({
         <div className="mb-10">
           <SectionHead
             title="Drafts ready to review"
-            action={<ViewAll to="/tracker" />}
+            action={<ViewAll to="/contacts" />}
           />
           {allContacts.slice(0, 3).map((d, i, arr) => (
             <DraftRow key={i} d={d} last={i === arr.length - 1} />
@@ -814,7 +814,7 @@ function OverviewContent({
             {pipelineCompanies.map((co) => (
               <Link
                 key={co.name}
-                to={`/tracker?company=${encodeURIComponent(co.name)}`}
+                to={`/contacts?q=${encodeURIComponent(co.name)}`}
                 className="shrink-0 border border-[#e9eaef] rounded-lg p-3.5 hover:shadow-sm transition-shadow"
                 style={{ minWidth: 180 }}
               >
@@ -1004,12 +1004,12 @@ function DraftRow({
           </span>
         )}
         <div className="flex gap-1.5">
-          <Link to="/tracker">
+          <Link to="/contacts">
             <button className="bg-white text-[var(--ink,#0F172A)] border border-[#e9eaef] rounded-md px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[#fafafa] transition-colors">
               Edit
             </button>
           </Link>
-          <Link to="/tracker">
+          <Link to="/contacts">
             <button className="bg-[var(--ink,#0F172A)] text-white border border-[var(--ink,#0F172A)] rounded-md px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:opacity-90 transition-opacity">
               Send
             </button>
@@ -1079,9 +1079,9 @@ function CompanyRow({ c, last }: { c: AgentCompany; last: boolean }) {
           <div className="text-[12.5px] text-[#8089a0] mt-0.5">{c.reason}</div>
         )}
       </div>
-      <Link to={`/find?tab=companies&q=${encodeURIComponent(c.name)}`}>
+      <Link to={`/find?q=${encodeURIComponent(`People at ${c.name}`)}`}>
         <button className="shrink-0 bg-white text-[var(--ink,#0F172A)] border border-[#e9eaef] rounded-md px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[#fafafa] transition-colors">
-          Add to targets
+          Find people
         </button>
       </Link>
     </div>
@@ -1477,12 +1477,12 @@ function NumberedDraftRow({
           </span>
         )}
         <div className="flex gap-1.5">
-          <Link to="/tracker">
+          <Link to="/contacts">
             <button className="bg-white text-[var(--ink,#0F172A)] border border-[#e9eaef] rounded-md px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:bg-[#fafafa] transition-colors">
               Edit
             </button>
           </Link>
-          <Link to="/tracker">
+          <Link to="/contacts">
             <button className="bg-[var(--ink,#0F172A)] text-white border border-[var(--ink,#0F172A)] rounded-md px-3 py-1.5 text-[12px] font-medium cursor-pointer hover:opacity-90 transition-opacity">
               Send
             </button>
@@ -1527,7 +1527,7 @@ function RepliesPanel({
         {withReplies.map((c, i) => (
           <Link
             key={c.name}
-            to={`/tracker?company=${encodeURIComponent(c.name)}`}
+            to={`/contacts?q=${encodeURIComponent(c.name)}`}
             className="block px-3.5 py-3 hover:bg-[#fafafa] transition-colors"
             style={{
               borderBottom:
@@ -1582,11 +1582,11 @@ function RepliesPanel({
           Pick a company on the left to jump into the full conversation, see the agent-drafted response, and approve or edit before sending.
         </p>
         <Link
-          to="/tracker"
+          to="/contacts"
           className="inline-block mt-4 text-[12px] font-medium"
           style={{ color: "var(--ink, #0F172A)" }}
         >
-          Open tracker →
+          Open contacts →
         </Link>
       </section>
     </div>
@@ -1718,7 +1718,7 @@ function PipelineKanban({ companies }: { companies: CompanyPipeline[] }) {
               {columns[col].map((c) => (
                 <Link
                   key={c.name}
-                  to={`/tracker?company=${encodeURIComponent(c.name)}`}
+                  to={`/contacts?q=${encodeURIComponent(c.name)}`}
                   className="block rounded-md p-2.5 hover:bg-[#fafbff] transition-colors"
                   style={{ border: "1px solid #f1f1f4", background: "#fafafa" }}
                 >

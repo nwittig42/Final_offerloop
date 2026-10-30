@@ -22,6 +22,7 @@ import {
   UserCredential,
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { mergeNestedMaps } from "@/utils/nestedUpdate";
 import { auth, db } from "../lib/firebase";
 import { BACKEND_URL } from "@/services/api";
 import posthog from "../lib/posthog";
@@ -557,15 +558,16 @@ const resetPassword = (email: string): Promise<void> => sendPasswordResetEmail(a
     const docExists = docSnapshot.exists();
     
     if (docExists) {
-      // Document exists - use updateDoc and exclude tier/maxCredits to comply with security rules
-      // These fields are already set during sign-in, so we don't need to update them
-      const { tier, maxCredits, ...updatePayload } = {
+      // Document exists - use updateDoc and exclude tier/maxCredits/credits to
+      // comply with security rules. These fields are already set during
+      // sign-in; firestore.rules rejects any client change to `credits`, so
+      // re-sending it only worked while the balance happened to be unchanged.
+      const { tier, maxCredits, credits, ...updatePayload } = {
         ...cleaned,
         uid: user.uid,
         email: user.email,
         name: user.name,
         ...(user.picture ? { picture: user.picture } : {}),
-        credits: initialCreditsByTier("free"),
         emailsMonthKey: getMonthKey(),
         emailsUsedThisMonth: 0,
         needsOnboarding: false,
@@ -577,9 +579,14 @@ const resetPassword = (email: string): Promise<void> => sendPasswordResetEmail(a
         updatePayload.createdAt = new Date().toISOString();
       }
       
+      // Merge the nested maps field by field: updateDoc replaces a whole map
+      // value, which would wipe goals/profile/academics fields onboarding
+      // doesn't set (and the user may have set elsewhere).
+      const writePayload = mergeNestedMaps(updatePayload, ["goals", "profile", "academics", "fieldProvenance"]);
+
       console.log("💾 [ONBOARDING] Document exists, using updateDoc");
       try {
-        await updateDoc(ref, updatePayload);
+        await updateDoc(ref, writePayload);
         console.log("✅ [ONBOARDING] Onboarding data updated successfully");
         setUser({ ...user, ...updatePayload, needsOnboarding: false });
       } catch (error: any) {

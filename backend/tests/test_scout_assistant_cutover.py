@@ -257,12 +257,12 @@ def test_14_chat_first_interview_strategy_answers_not_navigate(scout_client):
 
 # Case 15 ------------------------------------------------------------------
 # Counter-case: the chat-first rule must not over-correct. A direct command
-# with no chat cue still navigates. Uses a live route (cover letter) since
-# /interview-prep was removed in the Phase 5 cleanup.
+# with no chat cue still navigates. Uses a live route (meeting prep) since
+# /interview-prep and /cover-letter were removed.
 def test_15_explicit_command_still_navigates(scout_client):
-    status, data = _chat(scout_client, "take me to cover letter")
+    status, data = _chat(scout_client, "take me to meeting prep")
     assert status == 200, data
-    _assert_navigate(data, "/cover-letter")
+    _assert_navigate(data, "/coffee-chat-prep")
 
 
 # Case 16 ------------------------------------------------------------------

@@ -245,6 +245,15 @@ export const firebaseApi = {
     // Check resumeParsed in Firestore (from uploaded resume)
     const resumeParsed = (d.resumeParsed || {}) as Record<string, unknown>;
     const resumeEducation = (resumeParsed.education || {}) as Record<string, unknown>;
+    // Onboarding v2 has the user confirm (or correct) the school parsed from
+    // their resume. Once confirmed, their answer beats the parse — the same
+    // order the backend's get_user_school uses.
+    const onboarding = (d.onboarding || {}) as Record<string, unknown>;
+    const confirmedUniversity = onboarding.profileConfirmedAt ? ((academics.university as string) || '') : '';
+    // A confirmed "I'm not in school" also beats the parse: only a school the
+    // user set afterwards (Settings, or Find's school prompt) counts. Mirrors
+    // the backend's get_user_school.
+    const confirmedNoSchool = !!onboarding.profileConfirmedAt && d.universityOptOut === true;
     // Also check localStorage resume data for university
     let resumeUniversity = '';
     try {
@@ -258,16 +267,18 @@ export const firebaseApi = {
       // Then resumeEducation (parser_v2 list shape), then top-level overrides, then legacy
       // onboarding paths. This prevents stale "Alabama State University" defaults from old
       // onboarding test entries shadowing the real resume-parsed value.
-      university:
-        (resumeParsed.university as string) ||
-        ((resumeEducation as any)?.university as string) ||
-        (Array.isArray(resumeParsed.education) && (resumeParsed.education as any[])[0]?.university) ||
-        (d.university as string) ||
-        (pi.university as string) ||
-        (academics.university as string) ||
-        (d.college as string) ||
-        resumeUniversity ||
-        '',
+      university: confirmedNoSchool
+        ? confirmedUniversity || (d.university as string) || ''
+        : confirmedUniversity ||
+          (resumeParsed.university as string) ||
+          ((resumeEducation as any)?.university as string) ||
+          (Array.isArray(resumeParsed.education) && (resumeParsed.education as any[])[0]?.university) ||
+          (d.university as string) ||
+          (pi.university as string) ||
+          (academics.university as string) ||
+          (d.college as string) ||
+          resumeUniversity ||
+          '',
       // Explicit "I don't have a school" opt-out. Lets Find render without the
       // school wall for users with no university on file.
       universityOptOut: d.universityOptOut === true,

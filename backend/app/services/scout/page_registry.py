@@ -41,15 +41,6 @@ from typing import Any, Dict, List, Optional
 # to diff. See module docstring for the field contract.
 PAGE_REGISTRY: List[Dict[str, Any]] = [
     {
-        "route": "/dashboard",
-        "purpose": "Getting Started: the launcher home page. A prompt box that hands a search to Find, quick-start cards, and recent activity.",
-        "inputs": [],
-        "required_inputs": [],
-        "send_user_here_when": "the user wants their home base, getting-started launcher, or recent activity overview",
-        "credit_cost": None,
-        "tier_required": None,
-    },
-    {
         "route": "/find",
         "purpose": "Search, People tab: find professionals at companies to network with, then generate personalized outreach emails. The search box accepts a full natural-language prompt, so school context, alumni framing, year, or other profile signals can be carried via the `prompt` field.",
         # `prompt` carries a full natural-language search ("McKinsey
@@ -194,24 +185,6 @@ PAGE_REGISTRY: List[Dict[str, Any]] = [
         "tier_required": None,
     },
     {
-        "route": "/resume",
-        "purpose": "Resume: upload your resume, get it parsed and scored with recommendations, and edit it with live re-scoring. The stored resume also powers cover letters, auto-apply, and meeting prep.",
-        "inputs": [],
-        "required_inputs": [],
-        "send_user_here_when": "the user wants to upload, score, fix, tailor, or work on their resume",
-        "credit_cost": None,
-        "tier_required": None,
-    },
-    {
-        "route": "/cover-letter",
-        "purpose": "Cover Letter: paste a job URL or description and generate a tailored cover letter from your stored resume; edit inline and download as PDF.",
-        "inputs": ["company", "job_title", "job_url"],
-        "required_inputs": [],
-        "send_user_here_when": "the user wants to write or generate a cover letter",
-        "credit_cost": 20,
-        "tier_required": None,
-    },
-    {
         "route": "/recruiting-timeline",
         "purpose": "Your personalized recruiting timeline with key dates and milestones by industry.",
         "inputs": [],
@@ -300,9 +273,6 @@ REGISTRY_VERSION = 5
 # Every value must be a route present in PAGE_REGISTRY (asserted at import).
 # ---------------------------------------------------------------------------
 ROUTE_ALIASES: Dict[str, str] = {
-    "dashboard": "/dashboard",
-    "home": "/dashboard",
-    "getting started": "/dashboard",
     "search": "/find",
     "contact search": "/find",
     "people search": "/find",
@@ -324,10 +294,6 @@ ROUTE_ALIASES: Dict[str, str] = {
     "coffee chat prep": "/coffee-chat-prep",
     "meeting library": "/coffee-chat-library",
     "coffee chat library": "/coffee-chat-library",
-    "resume": "/resume",
-    "resume builder": "/resume",
-    "resume workshop": "/resume",
-    "cover letter": "/cover-letter",
     "inbox": "/outbox",
     "outbox": "/outbox",
     "tracker": "/outbox",

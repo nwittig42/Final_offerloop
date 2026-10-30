@@ -1070,7 +1070,6 @@ class ScoutAssistantService:
             result = self._enrich_cover_letter_report(result, helper_results)
             result = self._enrich_workflow_ctas(result, helper_results)
             result = self._enrich_network_ctas(result, helper_results)
-            result = self._ensure_cover_letter_prefill(result, helper_results)
             result = self._attach_job_matches(result, helper_results)
             # An answer colored by user-specific state must never be promoted
             # into the shared answer cache. That covers reading or writing
@@ -2037,51 +2036,6 @@ class ScoutAssistantService:
             print(f"[ScoutChat] cover letter enrichment failed: {e}")
         return result
 
-    def _ensure_cover_letter_prefill(
-        self,
-        result: Dict[str, Any],
-        helper_results: Optional[List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
-        """Every chip pointing at /cover-letter carries the letter generated
-        this turn.
-
-        Model-authored chips ("Open the Jane Street cover letter") drop the
-        letter from their prefill, so the workshop page opened onto an empty
-        form and the user had to spend credits regenerating what Scout just
-        wrote. Runs AFTER the cta enrichments so it covers both the fallback
-        chip and model-authored ones.
-        """
-        try:
-            entry = next(
-                (
-                    h["result"] for h in reversed(helper_results or [])
-                    if h.get("name") == "generate_cover_letter"
-                    and isinstance(h.get("result"), dict)
-                    and h["result"].get("cover_letter")
-                ),
-                None,
-            )
-            if not entry:
-                return result
-            chips = []
-            if isinstance(result.get("cta"), dict):
-                chips.append(result["cta"])
-            if isinstance(result.get("ctas"), list):
-                chips.extend(c for c in result["ctas"] if isinstance(c, dict))
-            for chip in chips:
-                route = str(chip.get("route") or "").split("?")[0]
-                if route != "/cover-letter":
-                    continue
-                prefill = chip.get("prefill") if isinstance(chip.get("prefill"), dict) else {}
-                prefill.setdefault("letter", str(entry["cover_letter"]))
-                for key in ("job_title", "company", "job_url"):
-                    if entry.get(key):
-                        prefill.setdefault(key, str(entry[key]))
-                chip["prefill"] = prefill
-        except Exception as e:
-            print(f"[ScoutChat] cover letter prefill normalization failed: {e}")
-        return result
-
     def _attach_job_matches(
         self,
         result: Dict[str, Any],
@@ -2275,39 +2229,6 @@ class ScoutAssistantService:
                         "label": "Open your Hiring Managers",
                         "route": "/my-network/managers",
                         "prefill": {},
-                        "credit_spending": False,
-                        "credit_cost": None,
-                    }
-                    return result
-                if name == "generate_cover_letter" and res.get("cover_letter"):
-                    # Carry the ALREADY-generated letter to the workshop so
-                    # the page shows it (and its PDF preview) on arrival —
-                    # otherwise the user lands on an empty form and has to
-                    # spend credits regenerating what Scout just wrote.
-                    prefill = {"letter": str(res["cover_letter"])}
-                    if res.get("job_title"):
-                        prefill["job_title"] = str(res["job_title"])
-                    if res.get("company"):
-                        prefill["company"] = str(res["company"])
-                    if res.get("job_url"):
-                        prefill["job_url"] = str(res["job_url"])
-                    result["cta"] = {
-                        "label": "Open the Cover Letter workshop",
-                        "route": "/cover-letter",
-                        "prefill": prefill,
-                        "credit_spending": False,
-                        "credit_cost": None,
-                    }
-                    return result
-                if name == "tailor_resume_to_job" and res.get("fit_score") is not None:
-                    # Job-specific tailoring lands on the Tailor tab with the
-                    # posting URL pasted in; general resume help (no job URL
-                    # resolved) keeps landing on the Edit tab.
-                    job_url = str(res.get("job_url") or "").strip()
-                    result["cta"] = {
-                        "label": "Open your resume",
-                        "route": "/resume?tab=tailor" if job_url else "/resume",
-                        "prefill": {"job_url": job_url} if job_url else {},
                         "credit_spending": False,
                         "credit_cost": None,
                     }

@@ -31,6 +31,13 @@ from datetime import datetime
 from app.extensions import get_db
 import re
 
+# Find contacts: the slot a person fills sets what the email asks for.
+OUTREACH_ROLE_LINES = {
+    "leader": "This person leads the team the role sits in. Ask for 15 minutes of advice about the team, not for a job.",
+    "process": "This person likely interviews for the role. Mention the student has applied and ask one specific question about the work.",
+    "recruiter": "This person coordinates recruiting. Ask a short logistics question about timeline or next steps.",
+}
+
 
 def _log_email_fallback(uid, contact, fallback_type, reason):
     """Log fallback usage to email_quality_logs for monitoring."""
@@ -694,6 +701,12 @@ def batch_generate_emails(contacts, resume_text, user_profile, career_interests,
             if enrichment_data and enrichment_data.get(i, {}).get("verified_role") is False:
                 verified_role_warning = "\n- NOTE: Role may have changed — keep opening generic, don't assume current title"
 
+            outreach_role_line = ""
+            outreach_role = contact.get("OutreachRole")
+            role_line = OUTREACH_ROLE_LINES.get(outreach_role) if isinstance(outreach_role, str) else None
+            if role_line:
+                outreach_role_line = f"\n- Outreach role: {role_line}"
+
             sections = [
                 f"RECIPIENT (PDL identity):\n- {firstname} {lastname}\n- {title} at {company}\n- Industry: {industry}"
             ]
@@ -747,7 +760,7 @@ def batch_generate_emails(contacts, resume_text, user_profile, career_interests,
 
             contact_context = f"""Contact {i}: {firstname} {lastname}
 - Angle (internal): {strategy.lead_hook}
-- Personalization instruction: {strategy.prompt_instruction}{supporting_lines}{avoid_lines}{verified_role_warning}
+- Personalization instruction: {strategy.prompt_instruction}{supporting_lines}{avoid_lines}{verified_role_warning}{outreach_role_line}
 
 {sources_block}"""
 

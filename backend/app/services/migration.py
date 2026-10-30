@@ -4,6 +4,7 @@ One-off migration utilities for contact schema and pipeline stages.
 from datetime import datetime
 
 from app.extensions import get_db
+from app.models.pipeline_stages import stage_after_send_confirmed
 
 
 # Pipeline stage enum values (canonical)
@@ -12,6 +13,7 @@ PIPELINE_STAGES = (
     "draft_created",
     "email_sent",
     "waiting_on_reply",
+    "email_opened",
     "replied",
     "meeting_scheduled",
     "connected",
@@ -28,7 +30,8 @@ def backfill_pipeline_stages(uid: str) -> dict:
 
     Rules:
     - hasUnreadReply == True → pipelineStage = "replied"
-    - gmailThreadId and draftStillExists == False → pipelineStage = "waiting_on_reply",
+    - gmailThreadId and draftStillExists == False → pipelineStage = "waiting_on_reply"
+      ("email_opened" when the pixel already recorded an open),
       and set emailSentAt from draftCreatedAt or lastActivityAt if missing
     - gmailDraftId and draftStillExists != False → pipelineStage = "draft_created"
     - No draft/thread IDs → pipelineStage = null (not in pipeline)
@@ -67,7 +70,7 @@ def backfill_pipeline_stages(uid: str) -> dict:
             if has_unread_reply:
                 new_stage = "replied"
             elif has_thread and draft_still_exists is False:
-                new_stage = "waiting_on_reply"
+                new_stage = stage_after_send_confirmed(data)
                 if not data.get("emailSentAt") and not data.get("email_sent_at"):
                     # Estimate from draftCreatedAt or lastActivityAt
                     for key in ("draftCreatedAt", "draft_created_at", "lastActivityAt", "last_activity_at"):

@@ -7800,6 +7800,17 @@ def _check_user_rate_limit(user_id: str, scope: str, limit_str: str) -> bool:
         return True
 
 
+def _feed_warehouse(people: list, tag: str) -> None:
+    """Every recruiter / hiring manager / employee a search turns up becomes
+    a permanent warehouse row, same as People search (flag-gated by
+    ENABLE_FIRM_CACHE_WRITE, async). Never breaks the search."""
+    try:
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        cache_pdl_contacts(people or [], shape="app", async_write=True)
+    except Exception:
+        logger.warning(f"[{tag}] warehouse feed failed")
+
+
 @job_board_bp.route("/find-recruiter", methods=["POST"])
 @require_firebase_auth
 @require_tier(['pro', 'elite'])
@@ -8032,6 +8043,7 @@ def find_recruiter_endpoint():
         all_recruiters = result.get("recruiters", [])
         all_emails = result.get("emails", [])
         total_found = result.get("total_found", 0)
+        _feed_warehouse(all_recruiters, "FindRecruiter")
         # Results are already limited to max_results_to_fetch, but we still need to respect credits
         affordable_recruiters = all_recruiters[:max_affordable]
         
@@ -8130,7 +8142,9 @@ def find_recruiter_endpoint():
                             # Add text/html alternative part
                             alt = MIMEMultipart('alternative')
                             alt.attach(MIMEText(body_plain, 'plain'))
-                            alt.attach(MIMEText(body_html, 'html'))
+                            from app.services import email_tracking
+                            tracking_token = email_tracking.start(user_id)
+                            alt.attach(MIMEText(email_tracking.add_pixel(body_html, tracking_token), 'html'))
                             message.attach(alt)
 
                             # Add resume attachment if available
@@ -8152,6 +8166,7 @@ def find_recruiter_endpoint():
                             }
 
                             draft = gmail_service.users().drafts().create(userId='me', body=draft_body).execute()
+                            email_tracking.register(tracking_token, user_id, 'hiring_manager', recipient_email=to_email, draft_id=draft.get('id'), message_id=draft.get('message', {}).get('id'), thread_id=draft.get('message', {}).get('threadId'))
                             draft_id = draft['id']
 
                             # Get Gmail account email for URL
@@ -8390,7 +8405,9 @@ def _create_gmail_drafts_for_emails(user_id: str, user_data: Dict, emails_to_dra
 
             alt = MIMEMultipart('alternative')
             alt.attach(MIMEText(body_plain, 'plain'))
-            alt.attach(MIMEText(body_html, 'html'))
+            from app.services import email_tracking
+            tracking_token = email_tracking.start(user_id)
+            alt.attach(MIMEText(email_tracking.add_pixel(body_html, tracking_token), 'html'))
             message.attach(alt)
 
             if resume_content and resume_filename:
@@ -8402,6 +8419,7 @@ def _create_gmail_drafts_for_emails(user_id: str, user_data: Dict, emails_to_dra
 
             raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
             draft = gmail_service.users().drafts().create(userId='me', body={'message': {'raw': raw_message}}).execute()
+            email_tracking.register(tracking_token, user_id, 'hiring_manager', recipient_email=to_email, draft_id=draft.get('id'), message_id=draft.get('message', {}).get('id'), thread_id=draft.get('message', {}).get('threadId'))
             draft_id = draft['id']
 
             try:
@@ -8588,6 +8606,7 @@ def find_employee_endpoint():
         all_people = result.get("recruiters", [])
         all_emails = result.get("emails", [])
         total_found = result.get("total_found", 0)
+        _feed_warehouse(all_people, "FindEmployee")
         affordable_people = all_people[:max_affordable]
 
         affordable_emails = []
@@ -9072,6 +9091,7 @@ def find_hiring_manager_endpoint():
         all_hiring_managers = result.get("hiringManagers", [])
         all_emails = result.get("emails", [])
         total_found = result.get("total_found", 0)
+        _feed_warehouse(all_hiring_managers, "FindHiringManager")
         
         # Results are already limited to max_results_to_fetch, but we still need to respect credits
         affordable_managers = all_hiring_managers[:max_affordable]
@@ -9164,7 +9184,9 @@ def find_hiring_manager_endpoint():
                             # Add text/html alternative part
                             alt = MIMEMultipart('alternative')
                             alt.attach(MIMEText(body_plain, 'plain'))
-                            alt.attach(MIMEText(body_html, 'html'))
+                            from app.services import email_tracking
+                            tracking_token = email_tracking.start(user_id)
+                            alt.attach(MIMEText(email_tracking.add_pixel(body_html, tracking_token), 'html'))
                             message.attach(alt)
 
                             # Add resume attachment if available
@@ -9186,6 +9208,7 @@ def find_hiring_manager_endpoint():
                             }
 
                             draft = gmail_service.users().drafts().create(userId='me', body=draft_body).execute()
+                            email_tracking.register(tracking_token, user_id, 'hiring_manager', recipient_email=to_email, draft_id=draft.get('id'), message_id=draft.get('message', {}).get('id'), thread_id=draft.get('message', {}).get('threadId'))
                             draft_id = draft['id']
 
                             # Extract message ID from draft (more reliable for opening drafts)
@@ -9962,6 +9985,12 @@ def save_job():
         "match_score": payload.get("match_score"),
         "saved_at": firestore.SERVER_TIMESTAMP,
     })
+    # A saved job's company becomes a People deck target (OFF-41).
+    try:
+        from app.services.people_deck_cache import mark_stale
+        mark_stale(uid, db, reason="saved_job")
+    except Exception:
+        pass
     return jsonify({"success": True, "job_id": str(job_id)})
 
 

@@ -25,7 +25,7 @@ def find_contacts_cap(user_ctx: Optional[dict]) -> int:
     if tier == "elite":
         return 15
     if tier == "pro":
-        return 8
+        return 10
     return 5  # anonymous + free signed-in
 
 
@@ -40,7 +40,7 @@ def cap_message(user_ctx: Optional[dict], cap: int) -> str:
     if tier == "free":
         return (
             f"Free plan returns up to {cap} contacts. "
-            "Upgrade to Pro for 8 per search or Elite for 15."
+            "Upgrade to Pro for 10 per search or Elite for 15."
         )
     if tier == "pro":
         return f"Pro plan returns up to {cap} contacts. Upgrade to Elite for 15."

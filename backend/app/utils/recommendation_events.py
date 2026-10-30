@@ -31,16 +31,19 @@ VALID_REC_EVENT_TYPES = {
     "email_replied",            # reply detected (via gmail webhook)
     "meeting_scheduled",        # meeting booked with contact
     "offer_received",           # offer from contact's company
-    # Deck ranker (ranker.py) — person_swipe_* training signals.
-    # Signal values are validated upstream to {right, left, skip, restore}.
-    "person_swipe_right",
-    "person_swipe_left",
-    "person_swipe_skip",
-    "person_swipe_restore",
-    # Deck ranker — reveal / outreach commercial events
-    "email_revealed",           # user spent credits to reveal an email
-    "outreach_sent",            # user sent an outreach via the deck
-    "outreach_drafted",         # user drafted an outreach via the deck
+    "connection_made",          # contact reached the connected stage (Nick, OFF-12)
+    # Deck ranker (person_ranker). Each may carry a deterministic doc_id for
+    # idempotent writes (reveal_email and deck_served use this; swipe/outreach
+    # events still write with .add() for now — bringing them under doc_id is
+    # a separate concern).
+    "deck_served",              # one row per deck: every person shown, rank, features
+    "person_swipe_right",       # user swiped right on a ranker candidate
+    "person_swipe_left",        # user swiped left on a ranker candidate
+    "person_swipe_skip",        # user skipped a ranker candidate (pass)
+    "person_swipe_restore",     # user put a passed person back in the pool
+    "email_revealed",           # metered email reveal, credit-worthy result
+    "outreach_sent",            # deck outreach sent straight from the card
+    "outreach_drafted",         # deck outreach saved as a Gmail draft
 }
 
 
@@ -59,16 +62,15 @@ def log_recommendation_event(
     features_snapshot: dict | None = None,
     attribution_source: str = "",
     extra: dict | None = None,
-    doc_id: str = "",
+    doc_id: str | None = None,
 ) -> None:
     """Write a recommendation event to Firestore. Swallows all errors.
 
-    When `doc_id` is non-empty, the write goes to
-    `recommendation_events/{doc_id}` as a set() — safe to retry, same event
-    stays one row. The reveal-email path uses this to make a credit-spend
-    event idempotent against client retries. When `doc_id` is empty, the
-    write uses .add() for an auto-generated id (impression/feedback
-    events, which are safe to duplicate at low frequency).
+    When `doc_id` is provided, uses `.document(doc_id).set()` — deterministic,
+    so client retries and Pub/Sub redelivery can't double-count the event.
+    The reveal-email path uses this to make credit-spend events idempotent
+    against client retries. When omitted, falls back to `.add()` (auto-ID)
+    for legacy call sites and non-idempotent events like impressions.
     """
     try:
         if event_type not in VALID_REC_EVENT_TYPES:

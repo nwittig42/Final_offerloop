@@ -1,0 +1,4 @@
+# Emulator data exported between runs, and the empty gcloud config dir.
+data/
+.no-gcloud-config/
+*.log

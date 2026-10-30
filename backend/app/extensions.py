@@ -56,6 +56,17 @@ def init_firebase(app):
             print(f"⚠️ Firebase already initialized but Firestore client failed: {e}")
             firebase_admin._apps.clear()
 
+    # Local end-to-end testing against the Firebase Emulator Suite
+    # (scripts/e2e-emulator). Every Firebase service must point at a local
+    # emulator, and the credential is anonymous, so nothing here can
+    # authenticate to a real Google project: production is unreachable even
+    # if a request somehow went to a real endpoint.
+    if os.environ.get("OFFERLOOP_E2E_EMULATOR") == "1":
+        _init_firebase_emulator()
+        db = firestore.client()
+        print(f"✅ Firebase initialized against the local emulators (no production access): {db}")
+        return
+
     # Use only GOOGLE_APPLICATION_CREDENTIALS (no hardcoded fallback paths)
     cred = None
     cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -107,6 +118,34 @@ def init_firebase(app):
         db = None
         # Don't raise here - allow app to start but auth will fail gracefully
         print("⚠️ App will start but Firebase-dependent features will not work")
+
+E2E_EMULATOR_ENV = ("FIRESTORE_EMULATOR_HOST", "FIREBASE_AUTH_EMULATOR_HOST", "STORAGE_EMULATOR_HOST")
+
+
+class _AnonymousCredential(credentials.Base):
+    """Firebase Admin credential that never authenticates (emulators only)."""
+
+    def get_credential(self):
+        from google.auth.credentials import AnonymousCredentials
+        return AnonymousCredentials()
+
+
+def _init_firebase_emulator():
+    """Initialize Firebase Admin for the emulators, or refuse to start."""
+    missing = [k for k in E2E_EMULATOR_ENV if not os.environ.get(k)]
+    if missing:
+        raise RuntimeError(
+            "OFFERLOOP_E2E_EMULATOR=1 but these emulator hosts are not set: "
+            + ", ".join(missing) + ". Refusing to start (it would fall back to production)."
+        )
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        raise RuntimeError("OFFERLOOP_E2E_EMULATOR=1 must not run with GOOGLE_APPLICATION_CREDENTIALS set.")
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or "offerloop-native"
+    firebase_admin.initialize_app(_AnonymousCredential(), {
+        "projectId": project,
+        "storageBucket": f"{project}.firebasestorage.app",
+    })
+
 
 def get_db():
     """Returns the Firestore client instance."""
@@ -387,6 +426,11 @@ def get_rate_limit_key():
             or request.path == '/claim'):
         return None
     
+    # Exempt the email open pixel: mail providers fetch images through a
+    # handful of shared proxy IPs, so a per-IP limit would drop real opens.
+    if request.path.startswith('/api/t/o/'):
+        return None
+
     # For authenticated requests, use user ID instead of IP address
     if hasattr(request, 'firebase_user') and request.firebase_user:
         user_id = request.firebase_user.get('uid')

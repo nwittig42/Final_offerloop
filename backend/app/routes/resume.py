@@ -182,6 +182,15 @@ def save_resume_to_firebase(user_id, resume_text, resume_url, parsed_info=None, 
         
         # Save to Firestore
         db.collection('users').document(user_id).update(update_data)
+
+        # Start the People deck now (OFF-41): the resume is the first thing
+        # onboarding collects, so the recommended people are ranked and
+        # saved in the background before the student reaches Search.
+        try:
+            from app.services.people_deck_cache import schedule_build
+            schedule_build(user_id, "resume")
+        except Exception as deck_err:
+            print(f"[Resume] people deck build not queued: {deck_err}")
         
         # DEBUG: Read back and verify
         print(f"[Resume DEBUG] Verifying save...")

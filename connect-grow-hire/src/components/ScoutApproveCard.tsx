@@ -38,20 +38,12 @@ const FIELD_LABELS: Record<string, string> = {
 // Friendly destination names; falls back to a prettified path.
 const PAGE_LABELS: Record<string, string> = {
   '/find': 'Find People',
-  '/find?tab=companies': 'Find Companies',
-  '/find?tab=hiring-managers': 'Find Hiring Managers',
-  '/coffee-chat-prep': 'Meeting Prep',
-  '/coffee-chat-library': 'Meeting Prep Library',
-  '/cover-letter': 'Cover Letter',
-  '/resume': 'Resume',
+  '/contacts': 'Contacts',
   '/job-board': 'Job Board',
   '/applications': 'Applications',
-  '/outbox': 'your Inbox',
   '/agent': 'Loops',
   '/agent/setup': 'a new Loop',
   '/upload-list': 'Upload List',
-  '/my-network/people': 'My Network',
-  '/my-network/companies': 'My Network (Companies)',
   '/integrations': 'Integrations',
 };
 
