@@ -73,6 +73,11 @@ def get_frontend_redirect_uri():
     Query params like ?connected=gmail or ?gmail_error=wrong_account 
     are added by gmail_oauth.py callback handler.
     """
+    # FRONTEND_BASE_URL (e.g. a staging host, or a local e2e frontend on
+    # another port) overrides the environment default.
+    base = (os.getenv("FRONTEND_BASE_URL") or "").strip().rstrip("/")
+    if base:
+        return f"{base}/signin"
     is_production = os.getenv("FLASK_ENV") == "production" or os.getenv("RENDER")
     return (
         "https://offerloop.ai/signin"
@@ -501,8 +506,8 @@ TIER_CONFIGS = {
         'max_auto_sends_per_day': 0,
     },
     'pro': {
-        'max_contacts': 8,   # Maximum contacts returned per search
-        'batch_size': 8,      # Maximum batch operations allowed (per audit spec)
+        'max_contacts': 10,  # Maximum contacts returned per search (8 -> 10, 2026-10-25)
+        'batch_size': 10,     # Maximum batch operations allowed (per audit spec)
         'min_contacts': 1, 
         'fields': ['FirstName', 'LastName', 'LinkedIn', 'Email', 'Title', 'Company', 'City', 'State', 'College',
                   'Phone', 'PersonalEmail', 'WorkEmail', 'SocialProfiles', 'EducationTop', 'VolunteerHistory',
@@ -575,8 +580,8 @@ TIER_CONFIGS = {
     # Season Pass — 4-month one-time pre-paid pass. Treated as a tier for the
     # duration of its active window so feature gates light up identically to Pro.
     'season_pass': {
-        'max_contacts': 8,
-        'batch_size': 8,
+        'max_contacts': 10,
+        'batch_size': 10,
         'min_contacts': 1,
         'fields': TARGET_INDUSTRIES and None,  # populated below
         'uses_pdl': True,
@@ -686,3 +691,25 @@ else:
 # OAuth insecure transport for localhost
 if (os.environ.get("OAUTH_REDIRECT_URI") or "").startswith("http://localhost"):
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
+
+# Integrations the signup -> first email journey needs, by env var. Logged
+# once at startup (names and set/unset only, never values) so a missing key
+# shows up in the server log instead of as a vague failure later.
+FIRST_EMAIL_JOURNEY_INTEGRATIONS = {
+    "resume parsing + email writing (OpenAI)": ("OPENAI_API_KEY",),
+    "email writing fallback (Claude)": ("CLAUDE_API_KEY",),
+    "Gmail connect + send (Google OAuth client)": ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"),
+    "email lookup (Hunter)": ("HUNTER_API_KEY",),
+    "email lookup (FullEnrich)": ("FULLENRICH_API_KEY",),
+    "LinkedIn import (Apify)": ("APIFY_API_KEY",),
+    "free first outreach cutoff": ("FIRST_OUTREACH_FREE_SINCE",),
+}
+
+
+def integration_status() -> dict:
+    return {
+        name: all((os.getenv(k) or "").strip() for k in keys)
+        for name, keys in FIRST_EMAIL_JOURNEY_INTEGRATIONS.items()
+    }
+

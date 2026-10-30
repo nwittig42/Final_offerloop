@@ -1,371 +1,625 @@
-import React, { Suspense, useState, useEffect, useRef } from "react";
-import { useSearchParams, useLocation, useNavigate } from "react-router-dom";
+// Search. Opens on a gallery of recommended people (the same ranked deck the
+// mobile People feed uses), so there is always someone to reach out to.
+// The search bar and LinkedIn-style filter pills on top swap the gallery for
+// search results in the same card layout.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw, ArrowLeft, Users, ChevronRight } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { MainContentWrapper } from "@/components/MainContentWrapper";
-import { Search, Building2, UserCheck } from "lucide-react";
-import { PageTitle } from "@/components/PageTitle";
-import { LoadingSkeleton } from "@/components/LoadingSkeleton";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
-import { apiService, type EmailTemplate } from "@/services/api";
+import { apiService, isErrorResponse, type EmailTemplate } from "@/services/api";
 import { firebaseApi } from "@/services/firebaseApi";
-import { EliteGateModal } from "@/components/EliteGateModal";
+import { toast } from "@/hooks/use-toast";
 import { NoSchoolEmptyState } from "@/components/NoSchoolEmptyState";
 import { GoalsPromptBanner } from "@/components/find/GoalsPromptBanner";
-import MountainsLake from "@/assets/for-students/mountains-lake.png";
 import { IS_DEV_PREVIEW, DEV_MOCK_USER } from "@/lib/devPreview";
-import { getUniversityShortName } from "@/lib/universityUtils";
-import { PersonalizationStrip } from "@/components/personalization/PersonalizationStrip";
-import { TrialBanner } from "@/components/TrialBanner";
-import { FindFilterRail } from "@/components/find/FindFilterRail";
+import { EMPTY_PEOPLE_FILTERS, peopleFiltersActive, type PeopleFilters } from "@/types/findFilters";
+import { CONTACTS_KEY, THREADS_KEY, normalizeLinkedIn, rankerContactId } from "@/components/contacts/contactsModel";
+import { TIER_CONFIGS } from "@/lib/constants";
+import { PeopleSearchBar } from "@/components/find/people/PeopleSearchBar";
+import { useOrgs } from "@/hooks/useOrgs";
+import { orgLogo } from "@/lib/orgLogos";
+import type { Org } from "@/services/api";
+import { APPLE_FONT, PersonCard, type ContactState } from "@/components/find/people/PersonCard";
+import { ContactProgressTray, type TrayItem } from "@/components/find/people/ContactProgressTray";
+import { PersonProfileDialog } from "@/components/find/people/PersonProfileDialog";
+import { SearchLoader } from "@/components/find/people/SearchLoader";
+import { GOLD_RING } from "@/components/find/people/PersonAvatar";
+import { seedCompanies, type FeedProfile } from "@/components/find/people/feedSeeds";
+import { neverEmailed, useBookmarks } from "@/components/find/people/useBookmarks";
 import {
-  FindTab, PeopleFilters, CompanyFilters, EMPTY_PEOPLE_FILTERS, EMPTY_COMPANY_FILTERS,
-  peopleFiltersActive, companyFiltersActive,
-} from "@/types/findFilters";
+  personFromRanker, personFromSavedSearch, personFromSearch, type Person,
+} from "@/components/find/people/peopleModel";
+import { FirstEmailReminder } from "@/components/walkthrough/FirstEmailReminder";
+import { ScoutTour } from "@/components/walkthrough/ScoutTour";
+import { findTourPrimaryTitle, findTourView } from "@/components/walkthrough/findTourSteps";
+import { useFirstEmailTour } from "@/components/walkthrough/useFirstEmailTour";
+import { advanceToReview, hasSavedDraft, runTourContact, staleDraftStep } from "@/components/walkthrough/findTourContact";
 
-const ContactSearchPage = React.lazy(() => import("./ContactSearchPage"));
-const FirmSearchPage = React.lazy(() => import("./FirmSearchPage"));
-const RecruiterSpreadsheetPage = React.lazy(() => import("./RecruiterSpreadsheetPage"));
-const TABS = [
-  { id: "people", label: "People", mobileLabel: "People", icon: Search },
-  { id: "companies", label: "Companies", mobileLabel: "Companies", icon: Building2 },
-  { id: "hiring-managers", label: "Hiring Managers", mobileLabel: "Hiring", icon: UserCheck },
-] as const;
+// First screen loads 40 people; scrolling near the bottom pulls 20 more.
+const FIRST_PAGE = 40;
+const NEXT_PAGE = 20;
+// Narrow cards: as many ~236px columns as fit.
+const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(236px,1fr))]";
+// Default for the "how many people" slider; the plan's cap is the max.
+const DEFAULT_COUNT = 5;
+const COUNT_KEY = "offerloop_find_count";
+// "Recently found" (OFF-56): how many lead the feed, and how often the rest
+// are mixed in among recommended cards.
+const FOUND_LEAD = 8;
+const FOUND_EVERY = 6;
+// How long, and how often, to re-read Contacts for late emails. The backend
+// gives the email lookup 2 minutes after the search returns.
+const EMAIL_POLL_MS = 130_000;
+const EMAIL_POLL_EVERY = 6_000;
+// How many people lead the feed as "Top connections".
+const TOP_COUNT = 4;
+// Written by the landing page hero search (HeroSearchCTA.PENDING_QUERY_KEY).
+const PENDING_QUERY_KEY = "offerloop_pending_query";
 
-function resolveTab(raw: string | null): FindTab {
-  if (raw === "people") return "people";
-  if (raw === "companies") return "companies";
-  if (raw === "hiring-managers") return "hiring-managers";
-  return "people";
+// "USC · San Francisco · tech startups (private, 2–500 people, founded 2012+)":
+// how the backend read the prompt (OFF-58), shown under the results header.
+type CompanyTraits = { label?: string; min_employees?: number | null; max_employees?: number | null; company_types?: string[]; founded_after?: number | null; funded_after?: string | null; industries?: string[] };
+function describeParse(pq: { schools?: string[]; locations?: string[]; companies?: { name: string }[]; company_traits?: CompanyTraits | null } | undefined): string[] {
+  if (!pq) return [];
+  const parts: string[] = [...(pq.schools ?? []), ...(pq.locations ?? []), ...(pq.companies ?? []).map((c) => c.name)];
+  const t = pq.company_traits;
+  if (t) {
+    const facts: string[] = [];
+    if (t.company_types?.includes("Privately Held")) facts.push("private");
+    if (t.company_types?.includes("Public Company")) facts.push("public");
+    if (t.min_employees || t.max_employees) {
+      facts.push(t.min_employees && t.max_employees ? `${t.min_employees}–${t.max_employees} people` : t.max_employees ? `under ${t.max_employees} people` : `${t.min_employees}+ people`);
+    }
+    if (t.founded_after) facts.push(`founded ${t.founded_after}+`);
+    if (t.funded_after) facts.push(`funded since ${t.funded_after.slice(0, 4)}`);
+    parts.push(`${t.label || "companies"}${facts.length ? ` (${facts.join(", ")})` : ""}`);
+  }
+  return parts;
 }
 
-// SearchSurface: just the tabs + tab content, no page shell.
-// Used by DashboardPage to embed search below the agent snapshot.
-export const SearchSurface: React.FC = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = resolveTab(searchParams.get("tab"));
-  const routerLocation = useLocation();
-  const { user: authUser } = useFirebaseAuth();
-  const user = IS_DEV_PREVIEW ? DEV_MOCK_USER : authUser;
+// Puts one `extra` after every `every` items of `list`; leftovers go last.
+function disperse<T>(list: T[], extras: T[], every: number): T[] {
+  const out: T[] = [];
+  let e = 0;
+  list.forEach((item, i) => {
+    out.push(item);
+    if ((i + 1) % every === 0 && e < extras.length) out.push(extras[e++]);
+  });
+  return out.concat(extras.slice(e));
+}
 
-  const [savedEmailTemplate, setSavedEmailTemplate] = useState<EmailTemplate | null>(null);
-  const [sessionEmailTemplate, setSessionEmailTemplate] = useState<EmailTemplate | null>(null);
-  const activeEmailTemplate = sessionEmailTemplate ?? savedEmailTemplate;
-  const [userUniversity, setUserUniversity] = useState<string | null>(null);
-  const [userFirstName, setUserFirstName] = useState<string | null>(null);
+// When only filters are set, build the sentence the prompt parser expects.
+// Org pills read as "who are USC TKE alumni"; the backend strips that back
+// out and searches the directory (the ids travel in `filters` too).
+function promptFromFilters(f: PeopleFilters, orgs: Org[]): string {
+  const parts = [f.titles.length ? f.titles.join(" or ") : "People"];
+  if (f.companies.length) parts.push(`at ${f.companies.join(" or ")}`);
+  if (f.industries.length) parts.push(`in ${f.industries.join(" or ")}`);
+  if (f.locations.length) parts.push(`in ${f.locations.join(" or ")}`);
+  if (f.schools.length) parts.push(`who went to ${f.schools.join(" or ")}`);
+  const orgNames = orgs.filter((o) => f.organizations.includes(o.id)).map((o) => o.shortName);
+  if (orgNames.length) parts.push(`who are ${orgNames.join(" or ")} alumni`);
+  return parts.join(" ");
+}
 
-  useEffect(() => {
-    if (!user?.uid) return;
-    if (IS_DEV_PREVIEW) {
-      setUserUniversity((user as any)?.university || "");
-      setUserFirstName("Demo");
-      return;
-    }
-    firebaseApi.getUserOnboardingData(user.uid).then((data) => {
-      setUserUniversity(data.university || null);
-      setUserFirstName(data.firstName || null);
-    }).catch(() => {});
-  }, [user?.uid]);
-
-  useEffect(() => {
-    if (!user?.uid || IS_DEV_PREVIEW) return;
-    apiService.getEmailTemplate().then((t) => {
-      setSavedEmailTemplate({
-        purpose: t.purpose, stylePreset: t.stylePreset, customInstructions: t.customInstructions,
-        signoffPhrase: t.signoffPhrase, signatureBlock: t.signatureBlock, name: t.name,
-        subject: t.subject, savedTemplateId: t.savedTemplateId,
-      });
-    }).catch(() => {});
-  }, [user?.uid]);
-
-  useEffect(() => {
-    const state = (routerLocation.state as { appliedEmailTemplate?: EmailTemplate } | undefined)?.appliedEmailTemplate;
-    if (state) {
-      setSessionEmailTemplate(state);
-      sessionStorage.removeItem("offerloop_applied_email_template");
-      return;
-    }
-    try {
-      const raw = sessionStorage.getItem("offerloop_applied_email_template");
-      if (raw) {
-        const parsed = JSON.parse(raw) as EmailTemplate;
-        if (parsed && typeof parsed === "object") setSessionEmailTemplate(parsed);
-        sessionStorage.removeItem("offerloop_applied_email_template");
-      }
-    } catch {}
-  }, [routerLocation.state]);
-
-  // Flash effect: when a tab changes, briefly tint the active tab vibrant
-  // blue then fade back to the slate accent. Adds visible feedback to the
-  // segmented-control slide.
-  const [tabFlashing, setTabFlashing] = useState(false);
-  const tabFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flashTab = () => {
-    setTabFlashing(true);
-    if (tabFlashTimer.current) clearTimeout(tabFlashTimer.current);
-    tabFlashTimer.current = setTimeout(() => setTabFlashing(false), 700);
-  };
-  useEffect(() => () => {
-    if (tabFlashTimer.current) clearTimeout(tabFlashTimer.current);
-  }, []);
-
-  const setActiveTab = (tab: FindTab) => {
-    setSearchParams({ tab }, { replace: true });
-    flashTab();
-  };
-
-  const isCompaniesTab = activeTab === "companies";
-
+function CardSkeleton() {
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      {/* Page title */}
-      <div>
-        <div style={{ maxWidth: 800, margin: "0 auto", padding: "24px 0 8px" }}>
-          {isCompaniesTab && userUniversity && (
-            <PersonalizationStrip firstName={userFirstName} university={userUniversity} />
-          )}
-          <PageTitle
-            lead={
-              isCompaniesTab
-                ? "Discover"
-                : activeTab === "hiring-managers"
-                ? "Connect with"
-                : undefined
-            }
-            accent={
-              isCompaniesTab
-                ? "Companies"
-                : activeTab === "hiring-managers"
-                ? "Hiring Managers"
-                : "meet?"
-            }
-          >
-            {isCompaniesTab || activeTab === "hiring-managers"
-              ? undefined
-              : "Who do you want to"}
-          </PageTitle>
+    <div className="h-[244px] animate-pulse rounded-[22px] bg-white p-[18px]" style={{ boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.05)" }}>
+      <div className="flex gap-3">
+        <div className="h-[52px] w-[52px] rounded-full bg-[#F5F5F7]" />
+        <div className="flex-1 space-y-2 pt-1.5">
+          <div className="h-3.5 w-2/3 rounded-full bg-[#F5F5F7]" />
+          <div className="h-3 w-1/2 rounded-full bg-[#F5F5F7]" />
         </div>
       </div>
-
-      {/* Tab bar */}
-      <div style={{ borderBottom: "1px solid var(--line)" }}>
-        <div style={{ maxWidth: 800, margin: "0 auto" }}>
-          <div style={{ display: "flex", gap: 0 }}>
-            {TABS.map((tab) => {
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className="max-sm:!px-4 max-sm:!text-[13px]"
-                  style={{
-                    display: "flex", alignItems: "center", gap: 7,
-                    padding: "12px 20px 10px", fontSize: 13,
-                    fontWeight: isActive ? 500 : 400, cursor: "pointer",
-                    border: "none",
-                    borderBottom: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                    marginBottom: -1, background: "transparent",
-                    color: isActive ? "var(--ink)" : "var(--ink-3)",
-                    transition: "all .15s", fontFamily: "inherit",
-                  }}
-                  onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "var(--ink-2)"; }}
-                  onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.color = "var(--ink-3)"; }}
-                >
-                  <tab.icon style={{ width: 14, height: 14, flexShrink: 0 }} />
-                  <span className="hidden sm:inline">{tab.label}</span>
-                  <span className="sm:hidden">{tab.mobileLabel}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Stats bar */}
-      {(() => {
-        const uniShort = getUniversityShortName(userUniversity);
-        const statsItems = [
-          uniShort ? `3,200+ ${uniShort} alumni tracked` : null,
-          "13,700+ jobs indexed",
-          "Updated today",
-        ].filter(Boolean) as string[];
-        return (
-          <div style={{
-            display: "flex", justifyContent: "center", alignItems: "center", gap: 0,
-            padding: "10px 0 14px", fontSize: 11, fontWeight: 400, color: "var(--ink-2)",
-            fontFamily: "'JetBrains Mono', monospace",
-          }}>
-            {statsItems.map((item, i) => (
-              <React.Fragment key={item}>
-                {i > 0 && <span style={{ margin: "0 8px", fontSize: 9 }}>·</span>}
-                <span>{item}</span>
-              </React.Fragment>
-            ))}
-          </div>
-        );
-      })()}
-
-      {/* Tab body */}
-      <div style={{ borderTop: "none" }}>
-        <div style={{ maxWidth: 800, margin: "0 auto", padding: "0 0 44px" }}>
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center py-20">
-                <LoadingSkeleton />
-              </div>
-            }
-          >
-            <div style={{ display: activeTab === "people" ? "block" : "none" }}>
-              <ContactSearchPage embedded hideSubTabs parentEmailTemplate={activeEmailTemplate} isDevPreview={IS_DEV_PREVIEW} />
-            </div>
-            <div data-tour="tour-find-companies" style={{ display: activeTab === "companies" ? "block" : "none" }}>
-              <FirmSearchPage embedded isDevPreview={IS_DEV_PREVIEW} />
-            </div>
-            <div data-tour="tour-find-hiring-managers" style={{ display: activeTab === "hiring-managers" ? "block" : "none" }}>
-              <RecruiterSpreadsheetPage embedded isDevPreview={IS_DEV_PREVIEW} />
-            </div>
-          </Suspense>
-        </div>
-      </div>
+      <div className="mt-5 h-8 w-3/4 rounded-lg bg-[#F5F5F7]" />
+      <div className="mt-3 h-6 w-1/2 rounded-full bg-[#F5F5F7]" />
     </div>
   );
-};
+}
 
 const FindPage: React.FC = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = resolveTab(searchParams.get("tab"));
   const routerLocation = useLocation();
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user: authUser } = useFirebaseAuth();
   const user = IS_DEV_PREVIEW ? DEV_MOCK_USER : authUser;
 
-  const [showEliteGate, setShowEliteGate] = useState(false);
-  const [savedEmailTemplate, setSavedEmailTemplate] = useState<EmailTemplate | null>(null);
-  const [sessionEmailTemplate, setSessionEmailTemplate] = useState<EmailTemplate | null>(null);
-  const activeEmailTemplate = sessionEmailTemplate ?? savedEmailTemplate;
+  // ── School gate (unchanged from the old Find) ───────────────────────────
   const [userUniversity, setUserUniversity] = useState<string | null>(null);
-  const [userFirstName, setUserFirstName] = useState<string | null>(null);
-  // Explicit "I don't have a school" opt-out: skips the school wall and renders
-  // Find without alumni personalization.
   const [universityOptOut, setUniversityOptOut] = useState(false);
   const [schoolLoaded, setSchoolLoaded] = useState(false);
   const [forceRefresh, setForceRefresh] = useState(0);
-
-  // Filter-rail state. Nonce bumps ONLY on user edits (not on parse-populate),
-  // signalling the embedded search page to re-run with overrides. An edit that
-  // clears every dimension resets instead of re-searching (backend would 400).
-  const [peopleFilters, setPeopleFilters] = useState<PeopleFilters>(EMPTY_PEOPLE_FILTERS);
-  const [peopleFiltersNonce, setPeopleFiltersNonce] = useState(0);
-  const [companyFilters, setCompanyFilters] = useState<CompanyFilters>(EMPTY_COMPANY_FILTERS);
-  const [companyFiltersNonce, setCompanyFiltersNonce] = useState(0);
-
-  const handlePeopleFiltersChange = (f: PeopleFilters) => {
-    setPeopleFilters(f);
-    if (peopleFiltersActive(f)) setPeopleFiltersNonce((n) => n + 1);
-    else setPeopleFiltersNonce(0); // cleared → fresh state, no re-search
-  };
-  const handleCompanyFiltersChange = (f: CompanyFilters) => {
-    setCompanyFilters(f);
-    if (companyFiltersActive(f)) setCompanyFiltersNonce((n) => n + 1);
-    else setCompanyFiltersNonce(0);
-  };
-
-  // Load user university + first name
+  // What the feed is built from; null until the profile loads.
+  const [feedProfile, setFeedProfile] = useState<FeedProfile | null>(null);
   useEffect(() => {
     if (!user?.uid) return;
     if (IS_DEV_PREVIEW) {
       setUserUniversity((user as any)?.university || "");
-      setUserFirstName("Demo");
+      setFeedProfile({ dreamCompanies: [], targetFirms: [], targetIndustries: [], careerTrack: "", preferredJobRole: "", extractedRoles: [], directionNarrative: "", personalContext: "" });
       setSchoolLoaded(true);
       return;
     }
     firebaseApi.getUserOnboardingData(user.uid).then((data) => {
       setUserUniversity(data.university || null);
-      setUserFirstName(data.firstName || null);
       setUniversityOptOut(data.universityOptOut === true);
+      setFeedProfile({
+        dreamCompanies: data.dreamCompanies || [], targetFirms: data.targetFirms || [],
+        targetIndustries: data.targetIndustries || [], careerTrack: data.careerTrack || "",
+        preferredJobRole: data.preferredJobRole || "", extractedRoles: data.extractedRoles || [],
+        directionNarrative: data.directionNarrative || "", personalContext: data.personalContext || "",
+      });
       setSchoolLoaded(true);
-    }).catch(() => setSchoolLoaded(true));
+    }).catch(() => {
+      setFeedProfile({ dreamCompanies: [], targetFirms: [], targetIndustries: [], careerTrack: "", preferredJobRole: "", extractedRoles: [], directionNarrative: "", personalContext: "" });
+      setSchoolLoaded(true);
+    });
   }, [user?.uid, forceRefresh]);
 
-  // Load saved email template on mount
+  // Saved email template (or one applied from /find/templates) rides along
+  // on every draft so Contact writes in the user's voice.
+  const [emailTemplate, setEmailTemplate] = useState<EmailTemplate | null>(null);
   useEffect(() => {
     if (!user?.uid || IS_DEV_PREVIEW) return;
-    apiService.getEmailTemplate().then((t) => {
-      setSavedEmailTemplate({
-        purpose: t.purpose,
-        stylePreset: t.stylePreset,
-        customInstructions: t.customInstructions,
-        signoffPhrase: t.signoffPhrase,
-        signatureBlock: t.signatureBlock,
-        name: t.name,
-        subject: t.subject,
-        savedTemplateId: t.savedTemplateId,
-      });
-    }).catch(() => {});
+    apiService.getEmailTemplate().then((t) => setEmailTemplate({
+      purpose: t.purpose, stylePreset: t.stylePreset, customInstructions: t.customInstructions,
+      signoffPhrase: t.signoffPhrase, signatureBlock: t.signatureBlock, name: t.name,
+      subject: t.subject, savedTemplateId: t.savedTemplateId,
+    })).catch(() => {});
   }, [user?.uid]);
-
-  // Pick up template applied from EmailTemplatesPage via router state or sessionStorage
   useEffect(() => {
-    const state = (routerLocation.state as { appliedEmailTemplate?: EmailTemplate } | undefined)?.appliedEmailTemplate;
-    if (state) {
-      setSessionEmailTemplate(state);
-      sessionStorage.removeItem("offerloop_applied_email_template");
-      return;
-    }
-    try {
-      const raw = sessionStorage.getItem("offerloop_applied_email_template");
-      if (raw) {
-        const parsed = JSON.parse(raw) as EmailTemplate;
-        if (parsed && typeof parsed === "object") setSessionEmailTemplate(parsed);
-        sessionStorage.removeItem("offerloop_applied_email_template");
-      }
-    } catch {}
+    const applied = (routerLocation.state as { appliedEmailTemplate?: EmailTemplate } | null)?.appliedEmailTemplate;
+    if (applied) setEmailTemplate(applied);
   }, [routerLocation.state]);
 
-  // Flash effect: when a tab changes, briefly tint the active tab vibrant
-  // blue then fade back to the slate accent. Adds visible feedback to the
-  // segmented-control slide.
-  const [tabFlashing, setTabFlashing] = useState(false);
-  const tabFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flashTab = () => {
-    setTabFlashing(true);
-    if (tabFlashTimer.current) clearTimeout(tabFlashTimer.current);
-    tabFlashTimer.current = setTimeout(() => setTabFlashing(false), 700);
+  // ── Recommended gallery (ranker deck) ───────────────────────────────────
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  // Companies to pull people from: named targets, then firms inferred from
+  // the profile, then a broad mix. Never empty, so the feed never is.
+  const seeds = useMemo(() => (feedProfile ? seedCompanies(feedProfile) : []), [feedProfile]);
+
+  // Each page = the general recommender (first page only) plus a few seed
+  // companies in parallel, mixed round-robin so one firm doesn't take over.
+  // pageParam carries who's been shown and which seed comes next.
+  type FeedCursor = { seen: string[]; next: number };
+  // Scout's first-email tour (OFF-60). Feed pages fetched while it's on the
+  // pick step (or drafting, or before we know whether it runs) skip paid
+  // lookups, so the tour's people get them first. Read through a ref:
+  // leaving the step shouldn't refetch the feed.
+  const tour = useFirstEmailTour(IS_DEV_PREVIEW ? undefined : user?.uid);
+  const tourPicking = tour.step === "pick" || tour.step === "draft";
+  const holdPaidLookups = !tour.loaded || tourPicking;
+  const holdPaidLookupsRef = useRef(holdPaidLookups);
+  holdPaidLookupsRef.current = holdPaidLookups;
+  const recommended = useInfiniteQuery({
+    queryKey: ["findRecommended-v2", user?.uid, seeds],
+    enabled: !!user?.uid && !IS_DEV_PREVIEW && feedProfile !== null && tour.loaded,
+    initialPageParam: { seen: [], next: 0 } as FeedCursor,
+    staleTime: 10 * 60 * 1000,
+    queryFn: async ({ pageParam: rawParam }) => {
+      // Defensive: a cursor from anywhere unexpected starts the feed over.
+      const pageParam: FeedCursor = rawParam && Array.isArray(rawParam.seen) && typeof rawParam.next === "number"
+        ? rawParam : { seen: [], next: 0 };
+      const first = pageParam.next === 0;
+      const want = first ? FIRST_PAGE : NEXT_PAGE;
+      const batch = seeds.slice(pageParam.next, pageParam.next + (first ? 4 : 2));
+      const perCompany = Math.ceil(want / Math.max(1, batch.length)) + 4;
+      const seen = new Set(pageParam.seen);
+      const allowPaidLookups = !holdPaidLookupsRef.current;
+
+      const requests = [
+        ...(first ? [apiService.getRankerCandidates({ limit: want, exclude: pageParam.seen, allowPaidLookups })] : []),
+        ...batch.map((company) => apiService.getRankerCandidates({ limit: perCompany, company, exclude: pageParam.seen, allowPaidLookups })),
+      ];
+      const settled = await Promise.allSettled(requests);
+      if (settled.every((r) => r.status === "rejected")) throw new Error("Couldn't load recommendations");
+
+      const lists = settled.map((r) => {
+        if (r.status !== "fulfilled") return [] as Person[];
+        const res = r.value;
+        return (res.candidates || [])
+          .map((c, i) => personFromRanker(c, i, res.deck_id || ""))
+          .filter((p): p is Person => p !== null);
+      });
+      // Round-robin across the lists, skipping anyone already shown.
+      const people: Person[] = [];
+      for (let i = 0; people.length < want && lists.some((l) => i < l.length); i++) {
+        for (const l of lists) {
+          const p = l[i];
+          if (p && !seen.has(p.id) && people.length < want) { seen.add(p.id); people.push({ ...p, rank: pageParam.seen.length + people.length }); }
+        }
+      }
+      return { people, cursor: { seen: [...seen], next: pageParam.next + batch.length } as FeedCursor };
+    },
+    // Keep going while there are seed companies left, or the last page was full.
+    getNextPageParam: (last) => {
+      if (!last?.cursor) return undefined;
+      return last.cursor.next < seeds.length || (last.people?.length ?? 0) >= NEXT_PAGE ? last.cursor : undefined;
+    },
+  });
+  const recommendedPeople = useMemo(
+    () => (recommended.data?.pages ?? []).flatMap((p) => p?.people ?? []).filter((p) => !dismissed.has(p.id)),
+    [recommended.data, dismissed],
+  );
+  // Also "loading" while the tour state loads (the feed waits on it).
+  const recommendedLoading = (recommended.isLoading || (!!user?.uid && !tour.loaded)) && !IS_DEV_PREVIEW;
+  // Nothing to show after loading: ask for dream companies right in the feed.
+  const feedEmpty = !recommendedLoading && feedProfile !== null && recommendedPeople.length === 0 && !recommended.hasNextPage;
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = recommended;
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasNextPage) return;
+    const io = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting && !isFetchingNextPage) void fetchNextPage(); },
+      { root: scrollRef.current, rootMargin: "800px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, recommendedPeople.length]);
+
+  // ── Search ──────────────────────────────────────────────────────────────
+  // Pre-fill from ?q= or from the landing page's hero search, which stashes
+  // the visitor's query before sending them through sign-up.
+  const [query, setQuery] = useState(() => {
+    const q = searchParams.get("q");
+    if (q) return q;
+    try {
+      const pending = localStorage.getItem(PENDING_QUERY_KEY);
+      if (pending) localStorage.removeItem(PENDING_QUERY_KEY);
+      return pending ?? "";
+    } catch { return ""; }
+  });
+  const [filters, setFilters] = useState<PeopleFilters>(EMPTY_PEOPLE_FILTERS);
+  // Orgs are added in Account Settings (OFF-42); Find just reflects them.
+  const { joined: joinedOrgs, orgs: allOrgs } = useOrgs(!!user?.uid && !IS_DEV_PREVIEW);
+  // A search that named an org the student hasn't joined ("TKE alumni").
+  const [orgHint, setOrgHint] = useState<{ id: string; name: string; shortName: string } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<Person[] | null>(null);
+  const [resultsLabel, setResultsLabel] = useState("");
+  const [resultsNote, setResultsNote] = useState<string | null>(null);
+  const [readAs, setReadAs] = useState<string[]>([]);
+  // Emails the backend is still finding after the search returned; Contacts
+  // is refetched until this time so the cards fill in (OFF-56).
+  const [emailPollUntil, setEmailPollUntil] = useState(0);
+  // How many people a search finds: 1..the plan's cap, remembered per browser.
+  const maxCount = TIER_CONFIGS[(authUser?.tier as keyof typeof TIER_CONFIGS) || "free"]?.maxContacts ?? 3;
+  const [count, setCountState] = useState(() => {
+    try { return Number(localStorage.getItem(COUNT_KEY)) || DEFAULT_COUNT; } catch { return DEFAULT_COUNT; }
+  });
+  const searchCount = Math.min(Math.max(1, count), maxCount);
+  const setCount = (n: number) => {
+    setCountState(n);
+    try { localStorage.setItem(COUNT_KEY, String(n)); } catch { /* private mode */ }
   };
-  useEffect(() => () => {
-    if (tabFlashTimer.current) clearTimeout(tabFlashTimer.current);
+
+  // The search in flight, so Cancel (button, Esc or Ctrl+C) can stop it.
+  const activeSearch = useRef<{ id: string; abort: AbortController } | null>(null);
+
+  const runSearch = useCallback(async (q: string, rawFilters: PeopleFilters) => {
+    if (activeSearch.current) return;
+    // Drop orgs the student has since left, so a stale pill can't linger.
+    const f = { ...rawFilters, organizations: rawFilters.organizations.filter((id) => joinedOrgs.some((o) => o.id === id)) };
+    setFilters(f);
+    const prompt = q.trim() || (peopleFiltersActive(f) ? promptFromFilters(f, joinedOrgs) : "");
+    if (!prompt) { setResults(null); return; }
+    const search = { id: `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, abort: new AbortController() };
+    activeSearch.current = search;
+    setSearching(true);
+    setResultsLabel(prompt);
+    setResultsNote(null);
+    setReadAs([]);
+    setOrgHint(null);
+    try {
+      const res = await apiService.runPromptSearch({
+        prompt, batchSize: searchCount, mode: "preview", emailTemplate,
+        filters: peopleFiltersActive(f) ? f : undefined,
+        searchId: search.id, signal: search.abort.signal,
+      });
+      if (search.abort.signal.aborted || (res as { cancelled?: boolean }).cancelled) return;
+      if (isErrorResponse(res)) throw new Error(res.error);
+      setResults((res.contacts || []).map(personFromSearch));
+      const pq = (res as { parsed_query?: Parameters<typeof describeParse>[0] & { org_hint?: { id: string; name: string; shortName: string }; judge_rejected?: number } }).parsed_query;
+      setOrgHint(pq?.org_hint ?? null);
+      setReadAs(describeParse(pq));
+      if ((res as { emails_pending?: number }).emails_pending) setEmailPollUntil(Date.now() + EMAIL_POLL_MS);
+      const saved = res.already_saved_contacts?.length ?? 0;
+      const found = (res.contacts || []).length;
+      const skipped = found < searchCount ? pq?.judge_rejected ?? 0 : 0;
+      setResultsNote(res.message || (skipped
+        ? `Found ${found} of ${searchCount}. We skipped ${skipped} who didn't fit your search, and you're only charged for the ${found} shown.`
+        : saved ? `${saved} more ${saved === 1 ? "match is" : "matches are"} already in your Contacts.` : null));
+      queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+    } catch (e: any) {
+      if (search.abort.signal.aborted) return;
+      const msg = e?.status === 402
+        ? "You need more credits for this search. Searches cost 10 credits per person found."
+        : e?.message || "Try again in a moment.";
+      toast({ title: "Search failed", description: msg, variant: "destructive" });
+    } finally {
+      if (activeSearch.current === search) {
+        activeSearch.current = null;
+        setSearching(false);
+      }
+    }
+  }, [emailTemplate, queryClient, joinedOrgs, searchCount]);
+
+  const cancelSearch = useCallback(() => {
+    const search = activeSearch.current;
+    if (!search) return;
+    activeSearch.current = null;
+    search.abort.abort();
+    setSearching(false);
+    setResults(null);
+    void apiService.cancelPromptSearch(search.id).catch(() => {});
+    toast({ title: "Search cancelled", description: "No credits were charged." });
   }, []);
 
-  const setActiveTab = (tab: FindTab) => {
-    setSearchParams({ tab }, { replace: true });
-    flashTab();
+  // Esc or Ctrl+C cancels a running search. Ctrl only (not Cmd), and not
+  // while text is selected, so copying still works.
+  useEffect(() => {
+    if (!searching) return;
+    const onKey = (e: KeyboardEvent) => {
+      const ctrlC = e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c" && !window.getSelection()?.toString();
+      if (e.key === "Escape" || ctrlC) { e.preventDefault(); cancelSearch(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searching, cancelSearch]);
+
+  // ?q= hands a query in from elsewhere (Loop cards, Getting Started). Run
+  // it once, then drop it (and any legacy ?tab=) from the URL.
+  useEffect(() => {
+    if (!user?.uid) return;
+    const q = searchParams.get("q");
+    if (!q && !searchParams.has("tab")) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("q");
+    next.delete("tab");
+    setSearchParams(next, { replace: true });
+    if (q?.trim()) void runSearch(q, EMPTY_PEOPLE_FILTERS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid]);
+
+  const clearSearch = () => {
+    setResults(null);
+    setQuery("");
+    setFilters(EMPTY_PEOPLE_FILTERS);
   };
 
-  // Query handed off from the Getting Started launcher (/find?tab=..&q=..).
-  // Captured once, then stripped from the URL so it does not re-fire. Because
-  // both search pages stay mounted behind the toggle, we pass it only to the
-  // tab it targets so the hidden page never consumes it.
-  const [launchQuery, setLaunchQuery] = useState<{ tab: FindTab; q: string } | null>(null);
+  // ── Contact + Info ──────────────────────────────────────────────────────
+  const [contactStates, setContactStates] = useState<Record<string, ContactState>>({});
+  const bookmarks = useBookmarks();
+
+  // People the student's own searches saved and they haven't reached out to
+  // yet, newest first, with the search each came from.
+  const [foundFilter, setFoundFilter] = useState<string | null>(null);
+  const found = useMemo(() => {
+    const seen = new Set<string>();
+    return bookmarks.contacts
+      .filter((c) => c.source === "find_search" && neverEmailed(c))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .map((c) => ({ person: personFromSavedSearch(c), query: String(c.foundQuery || "").trim() }))
+      // One card per person, even if Contacts holds duplicate rows.
+      .filter((f) => !seen.has(f.person.id) && !!seen.add(f.person.id));
+  }, [bookmarks.contacts]);
+  const recentSearches = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of found) if (f.query) counts.set(f.query, (counts.get(f.query) ?? 0) + 1);
+    return [...counts.entries()].slice(0, 5).map(([query, n]) => ({ query, n }));
+  }, [found]);
+  // A search chip that no longer has anyone left falls back to All.
+  const activeFilter = foundFilter && recentSearches.some((r) => r.query === foundFilter) ? foundFilter : null;
+  const foundLead = activeFilter
+    ? found.filter((f) => f.query === activeFilter).map((f) => f.person)
+    : found.slice(0, FOUND_LEAD).map((f) => f.person);
+  const foundMixed = activeFilter ? [] : found.slice(FOUND_LEAD).map((f) => f.person);
+  const missingEmails = (results ?? []).some((p) => !p.email && !bookmarks.contactFor(p)?.email);
   useEffect(() => {
-    const q = searchParams.get("q");
-    if (q && q.trim()) {
-      setLaunchQuery({ tab: resolveTab(searchParams.get("tab")), q });
-      const next = new URLSearchParams(searchParams);
-      next.delete("q");
-      setSearchParams(next, { replace: true });
+    if (!emailPollUntil || !missingEmails) return;
+    const t = setInterval(() => {
+      if (Date.now() > emailPollUntil) { setEmailPollUntil(0); return; }
+      void queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+    }, EMAIL_POLL_EVERY);
+    return () => clearInterval(t);
+  }, [emailPollUntil, missingEmails, queryClient]);
+  const foundLinkedIns = useMemo(
+    () => new Set(found.map((f) => normalizeLinkedIn(f.person.linkedinUrl)).filter(Boolean)),
+    [found],
+  );
+  const [profilePerson, setProfilePerson] = useState<Person | null>(null);
+  const setContactState = (id: string, s: ContactState) => setContactStates((m) => ({ ...m, [id]: s }));
+  // Gmail links from this session's drafts, until Contacts refetches.
+  const [draftUrls, setDraftUrls] = useState<Record<string, string>>({});
+  // People contacted this session, newest first, for the progress tray.
+  const [trayPeople, setTrayPeople] = useState<Person[]>([]);
+  // Tour: a draft is in flight from this page (a reload mid-draft shows the
+  // pick step again), and who had no email last.
+  const [tourDrafting, setTourDrafting] = useState(false);
+  const [noEmailFor, setNoEmailFor] = useState<string | undefined>();
+  // Whose free first email was refused (used up): the bubble asks before charging.
+  const [needsPaymentFor, setNeedsPaymentFor] = useState<string | undefined>();
+  const navigate = useNavigate();
+
+  // A card's state: what's in flight this session, else what Contacts says,
+  // so someone drafted earlier still reads as drafted after a reload.
+  const stateFor = (p: Person): ContactState => {
+    const local = contactStates[p.id];
+    if (local && local !== "idle") return local;
+    const c = bookmarks.contactFor(p);
+    return c && !neverEmailed(c) ? "drafted" : "idle";
+  };
+  const contactHrefFor = (p: Person) => {
+    const c = bookmarks.contactFor(p);
+    return c?.id ? `/contacts?contact=${encodeURIComponent(c.id)}` : "/contacts";
+  };
+  const emailHrefFor = (p: Person): string | null => {
+    const c = bookmarks.contactFor(p);
+    if (c?.gmailThreadId) return `https://mail.google.com/mail/u/0/#all/${c.gmailThreadId}`;
+    return c?.gmailDraftUrl || draftUrls[p.id] || null;
+  };
+
+  const contact = useCallback(async (person: Person, opts: { paid?: boolean } = {}) => {
+    if (person.source === "sample") return;
+    // On the tour's pick step (or a stale draft step after a reload) a
+    // recommended person is drafted in the app only (Gmail comes later, on
+    // Contacts), asking for the free first outreach; paid only when chosen.
+    const inTour = tourPicking && person.source === "recommended";
+    setTrayPeople((list) => [person, ...list.filter((q) => q.id !== person.id)].slice(0, 4));
+    setContactState(person.id, person.source === "recommended" || (person.source === "search" && !person.email) ? "finding" : "working");
+    let gmailDraft = false;
+    try {
+      if (inTour) {
+        setNoEmailFor(undefined);
+        setNeedsPaymentFor(undefined);
+        setTourDrafting(true);
+        const r = await runTourContact(person, {
+          goTo: tour.goTo,
+          reveal: (id, deckId, useFree) => apiService.revealRankerEmail(id, deckId, undefined, useFree ? { useFirstOutreach: true } : undefined),
+          draft: (id, deckId) => apiService.rankerOutreach(id, "draft", deckId, { createGmailDraft: false }),
+          navigate,
+          onWriting: () => setContactState(person.id, "working"),
+          onDrafted: () => {
+            void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
+            setContactState(person.id, "drafted");
+            queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+            queryClient.invalidateQueries({ queryKey: THREADS_KEY });
+            toast({ title: `Drafted an email to ${person.firstName}`, description: "Saved in Contacts." });
+          },
+        }, { paid: opts.paid });
+        setTourDrafting(false);
+        if (r.kind === "no_email") {
+          // The bubble on the cards says so.
+          setContactState(person.id, "no_email");
+          setProfilePerson(null);
+          setNoEmailFor(r.firstName);
+        } else if (r.kind === "free_busy") {
+          setContactState(person.id, "idle");
+          setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+          toast({ title: "One moment", description: "Your free email is still being prepared. Try again in a moment." });
+        } else if (r.kind === "needs_payment") {
+          // The profile's bubble shows the price and a "Use 8 credits" button.
+          setContactState(person.id, "idle");
+          setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+          setNeedsPaymentFor(person.id);
+        }
+        return;
+      }
+      if (person.source === "recommended") {
+        // Reveal (8 credits, refunded on a miss), then draft to that exact
+        // person. The outreach route also saves them to Contacts.
+        const reveal = await apiService.revealRankerEmail(person.id, person.deckId);
+        if (!reveal.email) {
+          setContactState(person.id, "no_email");
+          toast({ title: "No email found", description: `We couldn't find a verified address for ${person.firstName}. No credits were charged.` });
+          return;
+        }
+        setContactState(person.id, "working");
+        await apiService.rankerOutreach(person.id, "draft", person.deckId);
+        void apiService.sendRankerFeedback({ candidateId: person.id, signal: "right", deckId: person.deckId, rank: person.rank }).catch(() => {});
+        // The route doesn't say whether Gmail got a draft too; the contact does.
+        if (user?.uid) {
+          gmailDraft = !!(await firebaseApi.getContact(user.uid, rankerContactId(person.id)).catch(() => null) as { gmailDraftId?: string } | null)?.gmailDraftId;
+        }
+      } else {
+        let email = person.email;
+        if (!email) {
+          // Searched people saved without an email get one free retry of
+          // the lookup before drafting (OFF-56).
+          const saved = bookmarks.contactFor(person);
+          if (person.source === "search" && saved?.id) {
+            setContactState(person.id, "finding");
+            email = (await apiService.findSearchContactEmail(saved.id)).email || "";
+            queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+          }
+          if (!email) {
+            setContactState(person.id, "no_email");
+            toast({ title: "No email found", description: `We couldn't find a verified address for ${person.firstName}. No credits were charged.` });
+            return;
+          }
+          setContactState(person.id, "working");
+        }
+        const res = await apiService.generateAndDraftEmails({
+          contacts: [{
+            FirstName: person.firstName, LastName: person.lastName, name: person.name,
+            Email: email, Company: person.company, Title: person.title,
+          }],
+          emailTemplate,
+        });
+        if ("error" in res) throw new Error(res.message || res.error);
+        if (!res.success || !res.draft_count) throw new Error("No draft was created. Check that Gmail is connected.");
+        const url = res.drafts?.[0]?.gmailUrl;
+        if (url) setDraftUrls((m) => ({ ...m, [person.id]: url }));
+        gmailDraft = res.deliveryMode !== "fallback";
+      }
+      setContactState(person.id, "drafted");
+      queryClient.invalidateQueries({ queryKey: CONTACTS_KEY });
+      queryClient.invalidateQueries({ queryKey: THREADS_KEY });
+      toast({
+        title: `Drafted an email to ${person.firstName}`,
+        description: gmailDraft ? "It's in your Gmail drafts and in Contacts." : "Saved in Contacts.",
+      });
+    } catch (e: any) {
+      setContactState(person.id, "idle");
+      setTrayPeople((list) => list.filter((q) => q.id !== person.id));
+      const msg = e?.status === 402 ? "You're out of credits for this. Contacting someone costs 8 credits." : e?.message || "Try again.";
+      toast({ title: "Couldn't contact them", description: msg, variant: "destructive" });
+      // runTourContact already put the tour back on pick.
+      if (inTour) setTourDrafting(false);
     }
-  }, [searchParams, setSearchParams]);
+  }, [emailTemplate, queryClient, bookmarks.contactFor, tourPicking, tour.goTo, user?.uid, navigate]);
 
-  const peopleInitialQuery =
-    launchQuery && launchQuery.tab === "people" ? launchQuery.q : undefined;
-  const companiesInitialQuery =
-    launchQuery && launchQuery.tab === "companies" ? launchQuery.q : undefined;
+  // A reload on the tour's draft step: if the picked person's draft got
+  // saved, carry on to review on Contacts; otherwise it reads as pick.
+  const [staleDraftChecked, setStaleDraftChecked] = useState(false);
+  const staleDraft = tour.step === "draft" && !tourDrafting;
+  const staleContactId = tour.state?.tourContactId;
+  useEffect(() => {
+    if (!staleDraft || !user?.uid) return;
+    let cancelled = false;
+    const uid = user.uid;
+    void (staleContactId ? firebaseApi.getContact(uid, staleContactId).catch(() => null) : Promise.resolve(null)).then(async (c) => {
+      if (cancelled) return;
+      const next = staleDraftStep({ step: "draft", drafting: false, contactId: staleContactId, savedDraft: hasSavedDraft(c as Record<string, unknown> | null) });
+      if (next === "review" && staleContactId) {
+        await tour.goTo("review");
+        navigate("/contacts?contact=" + encodeURIComponent(staleContactId));
+      } else {
+        setStaleDraftChecked(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [staleDraft, staleContactId, user?.uid, tour.goTo, navigate]);
 
-  const isCompaniesTab = activeTab === "companies";
+  const dismiss = (person: Person) => {
+    setDismissed((d) => new Set(d).add(person.id));
+    void apiService.sendRankerFeedback({ candidateId: person.id, signal: "left", deckId: person.deckId, rank: person.rank }).catch(() => {});
+  };
 
-  // No-school empty state. Users who explicitly opted out of having a school
-  // (universityOptOut) get the normal Find experience, minus alumni personalization.
+  // Dev only: /find?previewContact=1 puts the first three cards in the
+  // finding / writing / drafted states so the UI can be checked without
+  // spending credits or creating real drafts.
+  const previewContact = import.meta.env.DEV && searchParams.get("previewContact") === "1";
+  const previewPeople = results ?? recommendedPeople;
+  const previewReady = previewContact && previewPeople.length >= 3;
+  useEffect(() => {
+    if (!previewReady) return;
+    const [a, b, c] = previewPeople;
+    setContactStates((m) => ({ ...m, [a.id]: "finding", [b.id]: "working", [c.id]: "drafted" }));
+    setDraftUrls((m) => ({ ...m, [c.id]: "https://mail.google.com/mail/u/0/#drafts" }));
+    setTrayPeople([a, b, c]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewReady]);
+
+  // ── Render ──────────────────────────────────────────────────────────────
   if (schoolLoaded && !userUniversity && !universityOptOut && user?.uid) {
     return (
       <SidebarProvider>
@@ -373,145 +627,351 @@ const FindPage: React.FC = () => {
           <AppSidebar />
           <MainContentWrapper>
             <AppHeader title="" />
-            <NoSchoolEmptyState
-              uid={user.uid}
-              onSchoolSet={() => setForceRefresh((n) => n + 1)}
-            />
+            <NoSchoolEmptyState uid={user.uid} onSchoolSet={() => setForceRefresh((n) => n + 1)} />
           </MainContentWrapper>
         </div>
       </SidebarProvider>
     );
   }
 
+  const inSearch = results !== null || searching;
+  // The tour's pick and draft steps. A stale "draft" from a reload shows
+  // nothing until it's checked, then "pick". Only a recommended person's
+  // profile is part of the tour; any other profile hides Scout until it closes.
+  const tourStepShown = staleDraft ? (staleDraftChecked ? "pick" : null) : tour.step;
+  const needsPayment = !!profilePerson && profilePerson.id === needsPaymentFor;
+  const tourView = profilePerson && profilePerson.source !== "recommended"
+    ? null
+    : findTourView(tourStepShown, { profileOpen: !!profilePerson, noEmailFor, needsPayment, feedEmpty });
+  // The banner's Continue: bring the tour back where it was. Its later steps live on Contacts.
+  const resumeTour = async () => {
+    const s = tour.state;
+    await tour.resume();
+    if (s?.tourContactId && (s.tourStep === "review" || s.tourStep === "gmail" || s.tourStep === "open")) {
+      navigate("/contacts?contact=" + encodeURIComponent(s.tourContactId));
+    }
+  };
+  // Search cards pick up emails that arrived after the search returned.
+  const withLateEmail = (p: Person): Person => (p.email ? p : { ...p, email: bookmarks.contactFor(p)?.email || "" });
+  // Someone already in "Recently found" doesn't show twice in the feed.
+  const people = inSearch
+    ? (results ?? []).map(withLateEmail)
+    : recommendedPeople.filter((p) => !foundLinkedIns.has(normalizeLinkedIn(p.linkedinUrl)));
+
+  const card = (p: Person, featured = false, found = false, foundLabel?: string) => (
+    <PersonCard
+      key={`${p.source}-${p.id}`}
+      person={p}
+      featured={featured}
+      found={found}
+      foundLabel={foundLabel}
+      contactState={stateFor(p)}
+      contactHref={contactHrefFor(p)}
+      emailHref={emailHrefFor(p)}
+      onContact={() => contact(p)}
+      onOpen={() => setProfilePerson(p)}
+      onDismiss={p.source === "recommended" ? () => dismiss(p) : undefined}
+      bookmarked={bookmarks.isBookmarked(p)}
+      onToggleBookmark={() => void bookmarks.toggle(p)}
+      userSchool={userUniversity}
+    />
+  );
+  // Cards from earlier searches mixed into the recommended feed.
+  const withFound = (list: Person[]) => (
+    foundMixed.length
+      ? disperse(list.map((p) => card(p)), foundMixed.map((p) => card(p, false, true, "Your find")), FOUND_EVERY)
+      : list.map((p) => card(p))
+  );
+
+
   return (
-    <>
     <SidebarProvider>
-      <div className="flex min-h-screen w-full font-sans" style={{
-        color: 'var(--ink)',
-      }}>
+      <div className="flex min-h-screen w-full bg-[#F5F5F7] font-sans text-ink">
         <AppSidebar />
         <MainContentWrapper>
           <AppHeader title="" />
           <GoalsPromptBanner />
-
-          {/* Scrollable page body */}
-          <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", position: "relative" }}>
-            {/* Mountains as a top-anchored backdrop behind the hero/search only.
-                Sits as an upper band that fades in at the top and fades out before
-                the results area, so a successful search renders on clean page bg
-                rather than over the mountain ridge. */}
-            <div
-              aria-hidden
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                height: "88vh",
-                pointerEvents: "none",
-                zIndex: 0,
-                backgroundImage: `url(${MountainsLake})`,
-                backgroundSize: "120% auto",
-                backgroundPosition: "center bottom",
-                backgroundRepeat: "no-repeat",
-                opacity: 0.5,
-                maskImage:
-                  "linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.4) 18%, #000 50%, rgba(0,0,0,0.45) 82%, transparent 100%)",
-                WebkitMaskImage:
-                  "linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.4) 18%, #000 50%, rgba(0,0,0,0.45) 82%, transparent 100%)",
-              }}
-            />
-            {/* Page title — wrapped in a z-index:1 layer so it sits above
-                the mountain backdrop. */}
-            <div style={{ flexShrink: 0, position: "relative", zIndex: 1 }}>
-              {/* Pro trial banner — auto-hides for paid and post-trial users.
-                  Renders "Try Pro free" CTA for eligible users, or an active-trial
-                  countdown mid-trial. Mounted the way Nick had it on the Find surface. */}
-              <div style={{ maxWidth: 1000, margin: '0 auto', padding: '16px 40px 0' }}>
-                <TrialBanner
-                  variant="full"
-                  onUpgrade={() => navigate('/pricing')}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#F5F5F7]">
+            <div className="mx-auto max-w-[1320px] px-6 pb-16 pt-4 sm:px-10">
+              {user?.uid && !IS_DEV_PREVIEW && (
+                <FirstEmailReminder uid={user.uid} state={tour.state} onContinue={() => void resumeTour()} />
+              )}
+              <div className="mt-4" data-tour="tour-search-form">
+                <PeopleSearchBar
+                  query={query}
+                  onQueryChange={setQuery}
+                  filters={filters}
+                  onSearch={runSearch}
+                  userSchool={userUniversity}
+                  orgs={joinedOrgs}
+                  showJoinOrg={joinedOrgs.length === 0 && allOrgs.length > 0}
+                  searching={searching}
+                  count={searchCount}
+                  maxCount={maxCount}
+                  onCountChange={setCount}
+                  onCancel={cancelSearch}
                 />
               </div>
-              <div style={{ maxWidth: 1000, margin: '0 auto', padding: '36px 40px 6px' }}>
-                <PageTitle
-                  align="center"
-                  noScribble
-                  size={isCompaniesTab ? "lg" : "md"}
-                  lead={
-                    isCompaniesTab
-                      ? "Discover"
-                      : activeTab === "hiring-managers"
-                      ? "Connect with"
-                      : "Who do you want to"
-                  }
-                  accent={
-                    isCompaniesTab
-                      ? "Companies"
-                      : activeTab === "hiring-managers"
-                      ? "Hiring Managers"
-                      : "meet?"
-                  }
-                  subtitle={
-                    isCompaniesTab
-                      ? "Find companies that match your interests."
-                      : activeTab === "hiring-managers"
-                      ? "Find the hiring manager behind a role, and draft a message that gets noticed."
-                      : "Find the right people, get their contact info, and draft outreach in one step."
-                  }
-                />
-              </div>
-            </div>
 
-            {/* Body — left vertical toggle + tab content */}
-            <div style={{ flex: 1, overflowY: "auto", borderTop: "none", position: "relative", zIndex: 1 }}>
-              <div
-                className="flex flex-col sm:flex-row"
-                style={{ maxWidth: 1120, margin: "0 auto", padding: "0 40px 44px", gap: 28 }}
-              >
-                {/* Left rail — tab toggle + filter panel (FindFilterRail) */}
-                <div className="flex-shrink-0 sm:w-[236px]">
-                  <FindFilterRail
-                    activeTab={activeTab}
-                    onTabChange={setActiveTab}
-                    tabFlashing={tabFlashing}
-                    peopleFilters={peopleFilters}
-                    onPeopleFiltersChange={handlePeopleFiltersChange}
-                    companyFilters={companyFilters}
-                    onCompanyFiltersChange={handleCompanyFiltersChange}
-                  />
+              {/* Org alumni directories the student belongs to (OFF-42) */}
+              {joinedOrgs.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {joinedOrgs.map((o) => (
+                    <Link
+                      key={o.id}
+                      to={`/directory/${o.id}`}
+                      className="group flex min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.05)] transition-shadow hover:shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.08)] sm:max-w-[520px]"
+                      style={{ fontFamily: APPLE_FONT }}
+                    >
+                      {orgLogo(o.id) ? (
+                        <img src={orgLogo(o.id)!} alt="" aria-hidden className="h-10 w-10 shrink-0 object-contain" />
+                      ) : (
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#EEF1FA] text-[#3A4E8C]">
+                          <Users className="h-4 w-4" />
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14.5px] font-semibold text-[#1D1D1F]">{o.name} alumni directory</span>
+                        <span className="block truncate text-[12.5px] text-[#6E6E73]">See every alum, free to browse</span>
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-medium text-[#0071E3]">
+                        Open <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                      </span>
+                    </Link>
+                  ))}
                 </div>
+              )}
 
-                {/* Tab content */}
-                <div className="min-w-0 flex-1">
-                  <Suspense
-                    fallback={
-                      <div className="flex items-center justify-center py-20">
-                        <LoadingSkeleton />
+              {/* Section header */}
+              <div className="mb-4 mt-8 flex flex-wrap items-end justify-between gap-3">
+                {inSearch ? (
+                  <div>
+                    <button type="button" onClick={clearSearch} className="mb-1 inline-flex items-center gap-1 text-[13px] text-[var(--accent,#4A60A8)] hover:underline">
+                      <ArrowLeft className="h-3.5 w-3.5" /> Back to recommended
+                    </button>
+                    <div className="text-[28px] font-semibold tracking-[-0.02em]" style={{ fontFamily: APPLE_FONT, color: "#1D1D1F" }}>
+                      {searching ? "Searching…" : `${people.length} ${people.length === 1 ? "person" : "people"} found`}
+                    </div>
+                    <p className="mt-0.5 text-[13px] text-ink-3">"{resultsLabel}" · 10 credits per person found</p>
+                    {readAs.length > 0 && !searching && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5" style={{ fontFamily: APPLE_FONT }}>
+                        <span className="text-[12.5px] text-[#6E6E73]">Searched for</span>
+                        {readAs.map((part) => (
+                          <span key={part} className="rounded-full bg-[#E8F3EE] px-2.5 py-[3px] text-[12px] font-medium text-[#01754F]">{part}</span>
+                        ))}
                       </div>
-                    }
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-[28px] font-semibold tracking-[-0.02em]" style={{ fontFamily: APPLE_FONT, color: "#1D1D1F" }}>Recommended for you</div>
+                    {/* One quiet line, Apple style: the status in grey, the fix as a blue link. */}
+                    <p className="mt-1 text-[14px]" style={{ fontFamily: APPLE_FONT, color: "#6E6E73" }}>
+                      {feedEmpty ? (
+                        <>
+                          {recommended.isError ? "We couldn't load your recommendations." : "We couldn't find anyone just now."}{" "}
+                          <button type="button" onClick={() => recommended.refetch()} className="whitespace-nowrap text-[#0066CC] hover:underline">
+                            Try again ›
+                          </button>
+                        </>
+                      ) : (
+                        "People worth reaching out to, picked from your school and target companies."
+                      )}
+                    </p>
+                  </div>
+                )}
+                {!inSearch && !feedEmpty && (
+                  <button
+                    type="button"
+                    onClick={() => { setDismissed(new Set()); queryClient.resetQueries({ queryKey: ["findRecommended-v2", user?.uid, seeds] }); }}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3.5 text-[13px] font-medium text-[#1D1D1F] shadow-[0_1px_2px_rgba(0,0,0,0.06)] hover:bg-[#FAFAFA]"
                   >
-                    <div style={{ display: activeTab === "people" ? "block" : "none" }}>
-                      <ContactSearchPage embedded hideSubTabs parentEmailTemplate={activeEmailTemplate} isDevPreview={IS_DEV_PREVIEW} initialQuery={peopleInitialQuery}
-                        railFilters={peopleFilters} railFiltersNonce={peopleFiltersNonce} onParsedQuery={setPeopleFilters} />
-                    </div>
-                    <div data-tour="tour-find-companies" style={{ display: activeTab === "companies" ? "block" : "none" }}>
-                      <FirmSearchPage embedded isDevPreview={IS_DEV_PREVIEW} initialQuery={companiesInitialQuery}
-                        railFilters={companyFilters} railFiltersNonce={companyFiltersNonce} onParsedFilters={setCompanyFilters} />
-                    </div>
-                    <div data-tour="tour-find-hiring-managers" style={{ display: activeTab === "hiring-managers" ? "block" : "none" }}>
-                      <RecruiterSpreadsheetPage embedded isDevPreview={IS_DEV_PREVIEW} />
-                    </div>
-                  </Suspense>
-                </div>
+                    <RefreshCw className="h-3.5 w-3.5" /> Refresh
+                  </button>
+                )}
               </div>
+
+              {/* Recently found (OFF-56): leads the feed in the search green */}
+              {!inSearch && found.length > 0 && (
+                <section
+                  className="mb-8 rounded-[26px] p-4 sm:p-5"
+                  style={{ fontFamily: APPLE_FONT, background: "linear-gradient(180deg, #EAF5EF 0%, rgba(234,245,239,0) 100%)" }}
+                >
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-2 px-1">
+                    <div className="flex items-center gap-2.5">
+                      <span className="h-2.5 w-2.5 rounded-full bg-[#01754F]" />
+                      <div>
+                        <div className="text-[17px] font-semibold tracking-[-0.01em] text-[#1D1D1F]">Recently found</div>
+                        <div className="text-[13px] text-[#6E6E73]">
+                          People from your searches you haven't reached out to yet. They're saved in Contacts.
+                        </div>
+                      </div>
+                    </div>
+                    <Link to="/contacts" className="inline-flex items-center gap-0.5 text-[13px] font-medium text-[#01754F] hover:underline">
+                      Contacts <ChevronRight className="h-4 w-4" />
+                    </Link>
+                  </div>
+                  {recentSearches.length > 1 && (
+                    <div className="mb-3.5 flex gap-2 overflow-x-auto px-1 pb-1">
+                      {[{ query: null as string | null, label: "All", n: found.length }, ...recentSearches.map((r) => ({ query: r.query as string | null, label: r.query, n: r.n }))].map((chip) => {
+                        const on = activeFilter === chip.query;
+                        return (
+                          <button
+                            key={chip.label}
+                            type="button"
+                            onClick={() => setFoundFilter(chip.query)}
+                            aria-pressed={on}
+                            title={chip.label}
+                            className={`inline-flex h-8 max-w-[280px] shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium transition-colors ${
+                              on ? "border-[#01754F] bg-[#01754F] text-white" : "border-[#CFE5D9] bg-white text-[#1D1D1F] hover:border-[#01754F]"
+                            }`}
+                          >
+                            <span className="truncate">{chip.label}</span>
+                            <span className={`tabular-nums ${on ? "text-white/80" : "text-[#86868B]"}`}>{chip.n}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className={GRID}>{foundLead.map((p) => card(p, false, true, "Your find"))}</div>
+                  {foundMixed.length > 0 && (
+                    <p className="mt-3 px-1 text-[12.5px] text-[#6E6E73]">
+                      {foundMixed.length} more from your searches are mixed into your feed below.
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {inSearch && orgHint && !searching && (
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[18px] px-4 py-3 text-white" style={{ fontFamily: APPLE_FONT, background: "linear-gradient(165deg, #25335A 0%, #0F172A 100%)" }}>
+                  <span className="text-[14px]">{orgHint.shortName} alumni are in a members-only directory. Join with your chapter's password to search them.</span>
+                  <Link to="/account-settings#organizations" className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full bg-white px-4 text-[14px] font-semibold text-[#0F172A]">
+                    Add {orgHint.shortName} in Settings <ChevronRight className="h-4 w-4" />
+                  </Link>
+                </div>
+              )}
+              {inSearch && resultsNote && !searching && !orgHint && (
+                <p className="mb-4 text-[13px] text-ink-3">{resultsNote}</p>
+              )}
+
+              {/* Gallery */}
+              {searching ? (
+                <SearchLoader count={searchCount} grid={GRID} onCancel={cancelSearch} />
+              ) : !inSearch && feedEmpty ? (
+                foundMixed.length > 0 ? <div className={GRID}>{withFound([])}</div> : null
+              ) : (recommendedLoading || feedProfile === null || (recommendedPeople.length === 0 && (hasNextPage || isFetchingNextPage))) && !inSearch ? (
+                <div className={GRID}>
+                  {Array.from({ length: 15 }).map((_, i) => <CardSkeleton key={i} />)}
+                </div>
+              ) : people.length === 0 && orgHint ? null : people.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-line px-6 py-14 text-center text-[14px] text-ink-3">
+                  Nobody new matched that search. Try fewer filters or a broader title.
+                </div>
+              ) : (
+                (() => {
+                  // Search results are one flat grid. The feed leads with the
+                  // top 4. PLACEHOLDER: these are simply the first four the
+                  // recommender returned; the real pick (shared clubs, same
+                  // alumni groups, likeliest to reply) comes with the pairing
+                  // algorithm.
+                  if (inSearch) {
+                    return <div className={GRID}>{people.map((p) => card(p, false, true))}</div>;
+                  }
+                  if (people.length <= TOP_COUNT) {
+                    // The tour's spotlight covers only the recommended cards.
+                    return (
+                      <>
+                        <div className={GRID} data-tour="tour-first-cards">{people.map((p) => card(p, true))}</div>
+                        {foundMixed.length > 0 && <div className={`${GRID} mt-4`}>{foundMixed.map((p) => card(p, false, true, "Your find"))}</div>}
+                      </>
+                    );
+                  }
+                  const top = people.slice(0, TOP_COUNT);
+                  const rest = people.slice(TOP_COUNT);
+                  return (
+                    <>
+                      <section
+                        className="rounded-[26px] p-4 sm:p-5"
+                        style={{ fontFamily: APPLE_FONT, background: "linear-gradient(180deg, #FFFBF0 0%, rgba(255,251,240,0) 100%)" }}
+                      >
+                        <div className="mb-3.5 flex items-center gap-2.5 px-1">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ background: GOLD_RING }} />
+                          <div>
+                            <div className="text-[17px] font-semibold tracking-[-0.01em] text-[#1D1D1F]">Top connections for you</div>
+                            <div className="text-[13px] text-[#6E6E73]">
+                              These four have the most in common with you, so they're the most likely to reply.
+                            </div>
+                          </div>
+                        </div>
+                        <div className={GRID} data-tour="tour-first-cards">{top.map((p) => card(p, true))}</div>
+                      </section>
+                      <div className="mb-3 mt-8 px-1 text-[17px] font-semibold tracking-[-0.01em] text-[#1D1D1F]" style={{ fontFamily: APPLE_FONT }}>
+                        More people for you
+                      </div>
+                      <div className={GRID}>{withFound(rest)}</div>
+                    </>
+                  );
+                })()
+              )}
+
+              {!inSearch && !feedEmpty && (
+                <>
+                  <div ref={sentinelRef} aria-hidden className="h-px" />
+                  {isFetchingNextPage && (
+                    <div className={`${GRID} mt-4`}>
+                      {Array.from({ length: 5 }).map((_, i) => <CardSkeleton key={i} />)}
+                    </div>
+                  )}
+                  {!hasNextPage && recommendedPeople.length > 0 && (
+                    <p className="mt-10 text-center text-[13px]" style={{ color: "#86868B" }}>
+                      That's everyone for now. Check back soon for new people.
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </MainContentWrapper>
       </div>
+
+      <PersonProfileDialog
+        person={profilePerson}
+        contactState={profilePerson ? stateFor(profilePerson) : "idle"}
+        onContact={() => profilePerson && contact(profilePerson)}
+        contactHref={profilePerson ? contactHrefFor(profilePerson) : undefined}
+        isBookmarked={!!profilePerson && bookmarks.isBookmarked(profilePerson)}
+        onToggleBookmark={() => { if (profilePerson) void bookmarks.toggle(profilePerson); }}
+        ensureSaved={bookmarks.ensureSaved}
+        userSchool={userUniversity}
+        email={profilePerson ? profilePerson.email || bookmarks.contactFor(profilePerson)?.email || "" : ""}
+        onClose={() => setProfilePerson(null)}
+        // During the tour, opening a drafted recommended person moves the tour on to review.
+        onOpenContact={tourPicking && profilePerson?.source === "recommended"
+          ? () => void advanceToReview(profilePerson, { goTo: tour.goTo, navigate })
+          : undefined}
+        primaryTitle={findTourPrimaryTitle(tour.step, { recommended: profilePerson?.source === "recommended", needsPayment })}
+      />
+      <ContactProgressTray
+        items={trayPeople.map((p): TrayItem => ({
+          person: p, state: stateFor(p), contactHref: contactHrefFor(p), emailHref: emailHrefFor(p),
+        }))}
+        onDismiss={(id) => setTrayPeople((list) => list.filter((q) => q.id !== id))}
+      />
+      {!IS_DEV_PREVIEW && tourView && (
+        <ScoutTour
+          target={tourView.target}
+          title={tourView.title}
+          body={tourView.body}
+          action={tourView.action && profilePerson
+            ? { label: tourView.action.label, onClick: () => void contact(profilePerson, { paid: true }) }
+            : undefined}
+          onSkip={() => void tour.skip()}
+          onClose={() => void tour.close()}
+          // Escape closes the profile first; the tour stays.
+          closeOnEscape={!profilePerson}
+        />
+      )}
     </SidebarProvider>
-    <EliteGateModal open={showEliteGate} onClose={() => setShowEliteGate(false)} />
-    </>
   );
 };
 

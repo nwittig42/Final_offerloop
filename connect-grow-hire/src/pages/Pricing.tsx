@@ -818,7 +818,7 @@ const Pricing = () => {
               Never navigate(-1): a Stripe-cancel bounce would otherwise dump them
               back on Stripe. */}
           <button
-            onClick={() => navigate(user ? '/dashboard' : '/')}
+            onClick={() => navigate(user ? '/find' : '/')}
             className="of-link"
             style={{
               display: 'inline-flex',
@@ -1233,7 +1233,7 @@ const Pricing = () => {
                 <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink3, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: -1 }}>
                   Everything in Free, plus
                 </div>
-                <FeatureRow checkColor={T.purple} textColor={T.ink} weight={500}>Up to 8 contacts per search</FeatureRow>
+                <FeatureRow checkColor={T.purple} textColor={T.ink} weight={500}>Up to 10 contacts per search</FeatureRow>
                 <FeatureRow checkColor={T.purple} textColor={T.ink} weight={500}>Find hiring managers + firm search</FeatureRow>
                 <FeatureRow checkColor={T.purple} textColor={T.ink} weight={500}>Single agent use</FeatureRow>
                 <FeatureRow checkColor={T.purple} textColor={T.ink} weight={500}>Bulk drafting + CSV & Gmail export</FeatureRow>

@@ -62,7 +62,7 @@ export default function PaymentSuccess() {
         setStatus('success');
         setMessage('You are already upgraded to Pro! 🎉');
         setTimeout(() => {
-          navigate('/home');
+          navigate('/find');
         }, 2000);
         hasProcessedRef.current = true;
         return;
@@ -106,7 +106,7 @@ export default function PaymentSuccess() {
               setStatus('success');
               setMessage('You are already upgraded to Pro! 🎉');
               setTimeout(() => {
-                navigate('/home');
+                navigate('/find');
               }, 2000);
               return;
             }
@@ -204,7 +204,7 @@ export default function PaymentSuccess() {
                 : `Successfully upgraded to ${plan === 'elite' ? 'Elite' : 'Pro'}!`,
             );
             setTimeout(() => {
-              navigate('/home');
+              navigate('/find');
             }, 2000);
           }
         } else {
@@ -246,10 +246,10 @@ export default function PaymentSuccess() {
           } catch {
             /* refresh best-effort */
           }
-          navigate('/home');
+          navigate('/find');
         }}
         onDeclined={() => {
-          navigate('/home');
+          navigate('/find');
         }}
       />
     );

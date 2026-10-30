@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, CheckCircle, Inbox, Linkedin, Loader2, Mail, Send, Table2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle, Inbox, Linkedin, Loader2, Mail, Send, Table2 } from "lucide-react";
 import DraftDeliveryActions from "@/components/DraftDeliveryActions";
 import InboxConnectNudge from "@/components/InboxConnectNudge";
 import { Button } from "@/components/ui/button";
@@ -529,11 +529,11 @@ export function FindHumansModal({ open, onOpenChange, job, kind = "recruiter", c
   }, [open]);
 
   const handleInbox = () => {
-    navigate("/outbox", { state: { focusEmail: focusEmail(), segment: outboxSegment } });
+    navigate("/contacts", { state: { focusEmail: focusEmail(), segment: outboxSegment } });
     onOpenChange(false);
   };
   const handleViewSpreadsheet = () => {
-    navigate(`/my-network/${networkTab}`);
+    navigate(networkTab === "people" ? "/contacts?view=table" : "/contacts");
     onOpenChange(false);
   };
 
@@ -552,7 +552,7 @@ export function FindHumansModal({ open, onOpenChange, job, kind = "recruiter", c
             void handleSendAll();
           }}
         />
-        <DialogHeader className="px-5 pt-5 pb-3 border-b border-gray-100">
+        <DialogHeader className="pl-5 pr-12 pt-5 pb-3 border-b border-gray-100">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <DialogTitle className="text-base font-semibold text-gray-900">{heading}</DialogTitle>
@@ -567,14 +567,6 @@ export function FindHumansModal({ open, onOpenChange, job, kind = "recruiter", c
                 </p>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-              aria-label="Close"
-            >
-              <X className="h-4 w-4" />
-            </button>
           </div>
         </DialogHeader>
 

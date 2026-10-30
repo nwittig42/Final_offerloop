@@ -56,11 +56,11 @@ export const TIER_CONFIGS = {
     usesResume: false,
   },
   pro: {
-    maxContacts: 8,
+    maxContacts: 10,
     minContacts: 1,
     name: "Search Pro Plan Tier",
     credits: 2000,
-    description: "Everything in free plus advanced features - up to 8 contacts + Resume matching",
+    description: "Everything in free plus advanced features - up to 10 contacts + Resume matching",
     coffeeChat: true,
     timeSavedMinutes: 2500,
     usesResume: true,

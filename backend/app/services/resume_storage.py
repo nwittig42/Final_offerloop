@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
+import os
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,12 @@ THUMB_ZOOM = 0.8  # ~490px wide for a US Letter page
 def _bucket():
     from firebase_admin import storage
     return storage.bucket()
+
+
+def _with_download_token(blob) -> None:
+    """Mint the download token as part of the upload (one write instead of
+    upload + metadata patch; the Storage emulator can't patch metadata)."""
+    blob.metadata = {**(blob.metadata or {}), "firebaseStorageDownloadTokens": uuid.uuid4().hex}
 
 
 def token_url(blob) -> str:
@@ -48,7 +55,18 @@ def token_url(blob) -> str:
         blob.metadata = meta
         blob.patch()
     path = urllib.parse.quote(blob.name, safe="")
-    return f"https://firebasestorage.googleapis.com/v0/b/{blob.bucket.name}/o/{path}?alt=media&token={token}"
+    return f"{_download_base()}/v0/b/{blob.bucket.name}/o/{path}?alt=media&token={token}"
+
+
+def _download_base() -> str:
+    """Where download links point. Local e2e testing runs the Firebase
+    Storage emulator (STORAGE_EMULATOR_HOST, e.g. http://127.0.0.1:9199),
+    which serves the same /v0/b/... download path; links must point there so
+    nothing reaches the production Storage host."""
+    emulator = (os.environ.get("STORAGE_EMULATOR_HOST") or "").strip().rstrip("/")
+    if emulator:
+        return emulator if "://" in emulator else f"http://{emulator}"
+    return "https://firebasestorage.googleapis.com"
 
 
 def revoke_public(blob) -> bool:
@@ -90,6 +108,7 @@ def store_thumbnail(uid: str, pdf_bytes: bytes) -> str | None:
         return None
     try:
         blob = _bucket().blob(f"resumes/{uid}/{THUMB_FILENAME}")
+        _with_download_token(blob)
         blob.upload_from_string(png, content_type="image/png")
         return token_url(blob)
     except Exception as exc:
@@ -102,6 +121,7 @@ def store_resume(uid: str, filename: str, data: bytes, content_type: str) -> dic
     url is None when the upload itself failed (callers already handle that)."""
     try:
         blob = _bucket().blob(f"resumes/{uid}/{filename}")
+        _with_download_token(blob)
         blob.upload_from_string(data, content_type=content_type or "application/octet-stream")
         url = token_url(blob)
     except Exception as exc:
@@ -132,6 +152,9 @@ def storage_path_from_url(url: str) -> str | None:
             parts = p.path.lstrip("/").split("/", 1)
             return urllib.parse.unquote(parts[1]) if len(parts) == 2 else None
         if "firebasestorage.googleapis.com" in p.netloc and "/o/" in p.path:
+            return urllib.parse.unquote(p.path.split("/o/", 1)[1])
+        emulator = urllib.parse.urlparse(_download_base())
+        if emulator.netloc and p.netloc == emulator.netloc and "/o/" in p.path:
             return urllib.parse.unquote(p.path.split("/o/", 1)[1])
     except Exception:
         return None

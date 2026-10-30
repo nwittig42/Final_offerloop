@@ -6,7 +6,7 @@ import {
   downloadResumeBuilderPdf,
   downloadPdfBlob,
 } from "@/services/api";
-import { ResumePrefill, resumePrefillFromParse } from "@/utils/onboardingPrefill";
+import { EMPTY_PREFILL, ResumePrefill, resumePrefillFromParse } from "@/utils/onboardingPrefill";
 import { OB, obFieldLabel, obPrimaryButton } from "./onboardingTheme";
 
 // Empty Harvard outline shown before the first generation.
@@ -49,9 +49,11 @@ type SectionKey = (typeof BUILDER_SECTIONS)[number]["key"];
 interface OnboardingBuilderProps {
   onComplete: (prefill: ResumePrefill) => void;
   submitting: boolean;
+  // Onboarding dry run: "Use this resume" moves on without saving it.
+  preview?: boolean;
 }
 
-export const OnboardingBuilder = ({ onComplete, submitting }: OnboardingBuilderProps) => {
+export const OnboardingBuilder = ({ onComplete, submitting, preview = false }: OnboardingBuilderProps) => {
   const [sections, setSections] = useState<Record<SectionKey, string>>({
     education: "",
     experience: "",
@@ -103,6 +105,10 @@ export const OnboardingBuilder = ({ onComplete, submitting }: OnboardingBuilderP
 
   const handleUse = async () => {
     if (!resume || finalizing) return;
+    if (preview) {
+      onComplete(EMPTY_PREFILL);
+      return;
+    }
     setError("");
     setFinalizing(true);
     try {

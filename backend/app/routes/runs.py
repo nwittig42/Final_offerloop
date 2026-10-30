@@ -124,6 +124,142 @@ def invalidate_contact_dedup_cache():
     return jsonify({"ok": True}), 200
 
 
+# Find's Cancel (OFF-56). The client tags each search with a searchId; Cancel
+# writes users/{uid}/searchCancels/{searchId}, and the search checks it before
+# drafting and again before it charges credits or saves contacts. Firestore,
+# not memory, because gunicorn runs several workers.
+_CANCELLED_RESPONSE = {"cancelled": True, "contacts": [], "already_saved_contacts": [], "total_contacts": 0}
+
+
+def _search_cancelled(db, user_id, search_id):
+    if not (db and user_id and search_id):
+        return False
+    try:
+        return db.collection("users").document(user_id).collection("searchCancels").document(search_id).get().exists
+    except Exception as e:
+        print(f"[ContactSearch] cancel check failed, continuing: {e}")
+        return False
+
+
+@runs_bp.route("/prompt-search/cancel", methods=["POST"])
+@require_firebase_auth
+def cancel_prompt_search():
+    user_id = request.firebase_user["uid"]
+    search_id = str((request.get_json(silent=True) or {}).get("searchId") or "").strip()[:64]
+    if not search_id:
+        return jsonify({"error": "searchId is required"}), 400
+    db = get_db()
+    if db:
+        db.collection("users").document(user_id).collection("searchCancels").document(search_id).set(
+            {"cancelledAt": datetime.utcnow().isoformat() + "Z"}
+        )
+    return jsonify({"ok": True})
+
+
+_LATE_EMAIL_WAIT_SECONDS = 120
+
+
+def _finish_emails_later(enrichment_id, late, user_id):
+    """Background half of the search's email pass. `late` is
+    [(pid, contact, doc_ref)] for saved contacts the bulk job covers."""
+    try:
+        from app.services import fullenrich_client
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        db = get_db()
+        ready, hits = fullenrich_client.fetch_bulk(enrichment_id, wait_seconds=_LATE_EMAIL_WAIT_SECONDS, db=db)
+        gained = []
+        for pid, contact, ref in late:
+            hit = (hits or {}).get(pid)
+            if not hit:
+                continue
+            ref.update({"email": hit["email"], "emailSource": "fullenrich_backfill", "emailVerified": True})
+            gained.append({**contact, "Email": hit["email"], "WorkEmail": hit["email"],
+                           "EmailSource": "fullenrich_backfill", "EmailVerified": True})
+        if gained:
+            cache_pdl_contacts(gained, shape="app", async_write=True)
+        print(f"[ContactSearch] late email pass uid={user_id}: {len(gained)}/{len(late)} found (ready={ready})")
+    except Exception as e:
+        print(f"[ContactSearch] late email pass failed: {e}")
+
+
+# Contact on a Find card whose search came back without an email (OFF-56).
+# The search already charged find_contact (which includes the email), so this
+# second try is free, and it runs once per contact. Same ladder as the search's
+# email pass (Hunter, then one FullEnrich waterfall) but with a longer wait,
+# since the search gives FullEnrich only a few seconds.
+_RETRY_FE_WAIT_SECONDS = 45
+
+
+@runs_bp.route("/prompt-search/find-email", methods=["POST"])
+@require_firebase_auth
+def find_search_contact_email():
+    user_id = request.firebase_user["uid"]
+    contact_id = str((request.get_json(silent=True) or {}).get("contactId") or "").strip()
+    if not contact_id or "/" in contact_id:
+        return jsonify({"error": "contactId is required"}), 400
+    db = get_db()
+    if not db:
+        return jsonify({"error": "Database not available"}), 500
+
+    ref = db.collection("users").document(user_id).collection("contacts").document(contact_id)
+    snap = ref.get()
+    if not snap.exists:
+        return jsonify({"error": "Contact not found"}), 404
+    c = snap.to_dict() or {}
+    if (c.get("email") or "").strip():
+        return jsonify({"email": c["email"].strip()}), 200
+    if c.get("source") != "find_search":
+        return jsonify({"error": "Only people from a search can be looked up here"}), 400
+    # One retry per contact. The claim lives where clients can't write
+    # (firestore.rules has no rule for emailRetries), so it can't be reset.
+    from google.api_core.exceptions import AlreadyExists
+    try:
+        db.collection("users").document(user_id).collection("emailRetries").document(contact_id).create(
+            {"at": datetime.utcnow().isoformat() + "Z"}
+        )
+    except AlreadyExists:
+        return jsonify({"email": None, "retried": True}), 200
+
+    first = (c.get("firstName") or "").strip()
+    last = (c.get("lastName") or "").strip()
+    company = (c.get("company") or "").strip()
+    linkedin = (c.get("linkedinUrl") or "").strip()
+    email, source, verified = "", "", False
+    try:
+        from app.services import email_fast
+        hit = email_fast.hunter_email(first, last, company)
+        if hit and hit.get("email"):
+            email, source = hit["email"], "hunter_finder"
+    except Exception:
+        print("[FindEmail] Hunter errored; trying FullEnrich")
+    if not email:
+        try:
+            from app.services import fullenrich_client
+            eid = fullenrich_client.start_bulk([("0", first, last, company, linkedin)], db=db)
+            if eid:
+                _ready, hits = fullenrich_client.fetch_bulk(eid, wait_seconds=_RETRY_FE_WAIT_SECONDS, db=db)
+                if (hits or {}).get("0", {}).get("email"):
+                    email, source, verified = hits["0"]["email"], "fullenrich_backfill", True
+        except Exception:
+            print("[FindEmail] FullEnrich errored; contact stays email-less")
+
+    print(f"[FindEmail] uid={user_id} contact={contact_id} found={bool(email)} source={source or '-'}")
+    if not email:
+        return jsonify({"email": None}), 200
+    ref.update({"email": email, "emailSource": source, "emailVerified": verified})
+    # Same warehouse re-feed as the search, so the next student gets it free.
+    try:
+        from app.services.firm_cache.writer import cache_pdl_contacts
+        cache_pdl_contacts([{
+            "FirstName": first, "LastName": last, "Company": company, "LinkedIn": linkedin,
+            "Title": c.get("jobTitle") or "", "College": c.get("college") or "",
+            "Email": email, "WorkEmail": email, "EmailSource": source, "EmailVerified": verified,
+        }], shape="app", async_write=True)
+    except Exception:
+        pass
+    return jsonify({"email": email}), 200
+
+
 @runs_bp.route("/prompt-search", methods=["POST"])
 @require_firebase_auth
 def prompt_search():
@@ -154,6 +290,7 @@ def prompt_search():
         data = request.get_json(silent=True) or {}
         prompt = (data.get("prompt") or "").strip()
         batch_size = data.get("batchSize")
+        search_id = str(data.get("searchId") or "").strip()[:64]
 
         # Validate prompt length
         if not prompt:
@@ -226,50 +363,136 @@ def prompt_search():
         outreach_mode = requested_mode
         print(f"[Runs] Outreach mode: requested={data.get('mode')!r}, tier={user_tier}, resolved={outreach_mode}")
 
+        # Org alumni directory (OFF-42): a member who picks their org's pill or
+        # names it ("TKE alumni at Goldman") searches that directory instead of
+        # the provider ladder. Non-members never get here (resolve_org_targets
+        # only returns orgs the user is an active member of).
+        org_targets: list[str] = []
+        org_list: list[dict] = []
+        org_prompt = prompt
+        org_hint = None
+        try:
+            from app.services.org_directory import join_hint, list_orgs, resolve_org_targets
+            if db:
+                raw_filters = data.get("filters") if isinstance(data.get("filters"), dict) else {}
+                org_list = list_orgs(db)
+                org_targets, org_prompt = resolve_org_targets(prompt, raw_filters.get("organizations"), user_data, org_list)
+                # Named an org they haven't joined: the UI offers the join.
+                org_hint = join_hint(prompt, user_data, org_list) if not org_targets else None
+        except Exception as e:
+            print(f"[OrgDirectory] org resolve failed, running a normal search: {e}")
+            org_targets = []
+
         # Parse prompt
-        parsed = parse_search_prompt_structured(prompt)
+        if org_targets:
+            # "TKE alumni" alone parses as too vague; in org mode the parse only
+            # narrows the directory, so it never blocks the search.
+            parsed = parse_search_prompt_structured(org_prompt) if len(org_prompt) >= 3 else {}
+            if parsed.get("error"):
+                parsed = {}
+            parsed = {"companies": [], "title_variations": [], "locations": [], "schools": [], "industries": [],
+                      **{k: v for k, v in parsed.items() if v is not None}}
+            print(f"[OrgDirectory] org search {org_targets} with remainder {org_prompt!r}")
+        else:
+            parsed = parse_search_prompt_structured(prompt)
         if parsed.get("error"):
             return jsonify({
                 "error": parsed.get("error", "Failed to parse prompt"),
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
             }), 400
-        if parsed.get("confidence") == "low":
+        if parsed.get("confidence") == "low" and not org_targets and org_hint:
+            # "TKE alumni" from a non-member: point them at joining instead of
+            # calling the search too vague.
+            return jsonify({
+                "contacts": [],
+                "already_saved_contacts": [],
+                "total_contacts": 0,
+                "tier": user_tier,
+                "parsed_query": {"org_hint": org_hint},
+                "message": f"{org_hint['shortName']} alumni are in a members-only directory. Join with your chapter's password to search them.",
+            }), 200
+        if parsed.get("confidence") == "low" and not org_targets:
             return jsonify({
                 "error": "Your search was too vague. Please add more specifics (e.g. job title, company, or location).",
                 "parsed_query": {k: parsed.get(k) for k in ("companies", "title_variations", "locations") if k in parsed},
             }), 400
 
-        # Provider ladder: delegated to app/services/engine_search.py, which
-        # is the single implementation every other people-search surface
-        # routes through (chrome extension endpoints, hiring-manager finder,
-        # find-similar, scout). engine_search_contacts handles:
-        #   1. firm_employees warehouse lookup (free)
-        #   2. FullEnrich /people/search for the remainder (primary vendor
-        #      as of 2026-10-28, ~half the per-search cost of Coresignal)
-        #   3. Coresignal fallback when FullEnrich returns zero or is
-        #      disabled (missing key, exhausted budget, outage)
-        #   4. Warehouse write-back of vendor results
-        #   5. log_demand + log_search_mix metrics
-        # The Hunter domain-search bridge below is kept here as a
-        # route-specific last resort for company-targeted prompts; the other
-        # surfaces don't need it.
+        # Provider ladder:
+        #   - Org directory flow (OFF-42): when the student has resolved
+        #     org_targets (TKE, AKPsi, etc.), search their directory
+        #     directly from Firestore. No vendor involvement.
+        #   - Normal flow: delegate to app/services/engine_search.py, the
+        #     one door every people-search surface walks through
+        #     (warehouse → FullEnrich; Coresignal removed PR #238).
+        # The judge pass (OFF-58 "result checker") then reads each candidate
+        # against the prompt via LLM to drop irrelevant hits — defends
+        # "USC alumni at tech startups" from filling up on whichever USC
+        # alumni the warehouse happens to hold.
+        # The Hunter domain-search bridge is kept as a last resort for
+        # company-targeted prompts when the engine comes back empty.
+        #
+        # NOTE on company_traits (OFF-58): Nick's original Coresignal path
+        # used company_employees_count / industry / founded_year to narrow
+        # the deck. FullEnrich's /people/search doesn't expose those filter
+        # fields, so trait-constrained searches now fall through to a
+        # normal FullEnrich search (relying on the judge pass to drop
+        # off-brand companies). A proper trait filter needs a company-pre-
+        # resolver (Perplexity → list of matching company names → feed to
+        # engine); tracked as a follow-up.
+        retry_level_used = 0
+        already_saved_contacts: list = []
+        contacts: list = []
+        adjacency_metadata: dict = {}
+        from app.services.search_judge import judge_contacts
+        judge = (lambda batch: judge_contacts(prompt, batch)) if not org_targets else None
+        judge_rejected = 0
+
         try:
-            from app.services.engine_search import engine_search_contacts
-            contacts, retry_level_used, already_saved_contacts, adjacency_metadata = engine_search_contacts(
-                parsed, max_contacts,
-                exclude_keys=seen_contact_set,
-                user_profile=user_data,
-                source="prompt_search",
-            )
-            adjacency_metadata = adjacency_metadata or {}
-        except Exception as engine_err:
-            print(f"[ContactSearch] engine_search failed ({engine_err!r})")
+            if org_targets:
+                # Org directory only: no warehouse, no vendors. Already-saved
+                # members are skipped before the cut so a repeat search shows
+                # new people.
+                from app.services.org_directory import search_org_directory
+                org_hits = search_org_directory(db, org_targets, parsed, org_list, prompt=org_prompt)
+                if exclusion_data is not None:
+                    fresh = []
+                    for c in org_hits:
+                        if _contact_already_exists(c, exclusion_data["email_set"], exclusion_data["name_company_set"], exclusion_data["linkedin_set"]):
+                            already_saved_contacts.append(c)
+                        else:
+                            fresh.append(c)
+                    org_hits = fresh
+                contacts = org_hits[:max_contacts]
+                adjacency_metadata = {"provider": "org_directory", "org_ids": org_targets}
+                if not contacts:
+                    names = " / ".join(o["shortName"] for o in org_list if o["id"] in org_targets)
+                    adjacency_metadata["message"] = f"No {names} alumni matched that. Try fewer filters."
+            else:
+                # Normal path: warehouse → FullEnrich via engine_search_contacts.
+                from app.services.engine_search import engine_search_contacts
+                contacts, retry_level_used, already_saved_contacts, adjacency_metadata = engine_search_contacts(
+                    parsed, max_contacts,
+                    exclude_keys=seen_contact_set,
+                    user_profile=user_data,
+                    source="prompt_search",
+                )
+                adjacency_metadata = adjacency_metadata or {}
+                # OFF-58 result checker — drop candidates that don't match
+                # the prompt's intent (e.g. "tech startups" when the engine
+                # returned a city-government employee by title match).
+                if judge and contacts:
+                    verdicts = judge(contacts)
+                    judge_rejected += verdicts.count(False)
+                    contacts = [c for c, ok in zip(contacts, verdicts) if ok]
+                    if judge_rejected:
+                        adjacency_metadata["judge_rejected"] = judge_rejected
+        except Exception as ladder_err:
+            print(f"[ContactSearch] provider ladder failed ({ladder_err!r})")
             contacts, retry_level_used, already_saved_contacts, adjacency_metadata = [], 0, [], {}
 
-        # Last rung: Hunter domain-search bridge for company-targeted
-        # prompts when both vendors came back empty. Route-specific — the
-        # other surfaces don't call this.
-        if not contacts and (parsed.get("companies") or []):
+        # Last rung: Hunter domain-search bridge for company-targeted prompts
+        # when the engine came back empty. Not applied to org searches.
+        if not contacts and not org_targets and (parsed.get("companies") or []):
             try:
                 from app.services.hunter_person_search import search_people_via_hunter
                 contacts, retry_level_used, already_saved_contacts, hunter_meta = search_people_via_hunter(
@@ -286,6 +509,11 @@ def prompt_search():
                     print("[ContactSearch] Hunter warehouse feed failed")
             except Exception as hunter_err:
                 print(f"[ContactSearch] Hunter bridge failed ({hunter_err!r})")
+        # Warehouse writes happen inside engine_search_contacts for the
+        # normal path and inside the Hunter bridge block above for the
+        # fallback path. Org-directory results stay out of the shared
+        # warehouse by design (the vetted subset is mirrored deliberately
+        # by scripts/org_directory_mirror_to_warehouse.py).
         search_broadened = retry_level_used >= 1
 
         # Surface which dimensions were dropped at the rung that succeeded so the
@@ -322,8 +550,16 @@ def prompt_search():
             "companies": parsed.get("companies", []),
             "title_variations": parsed.get("title_variations", []),
             "locations": parsed.get("locations", []),
+            "schools": parsed.get("schools", []),
             "company_context": parsed.get("company_context", ""),
+            # How the search read the prompt, for the line under the box.
+            "company_traits": parsed.get("company_traits"),
+            "judge_rejected": judge_rejected,
         }
+        if org_targets:
+            parsed_query_payload["org_ids"] = org_targets
+        if org_hint:
+            parsed_query_payload["org_hint"] = org_hint
 
         if not contacts and not already_saved_contacts:
             response_data = {
@@ -408,6 +644,10 @@ def prompt_search():
 
         # Trim to the originally requested count (whether or not dedup ran)
         contacts = contacts[:max_contacts]
+
+        if _search_cancelled(db, user_id, search_id):
+            print(f"[ContactSearch] {search_id} cancelled before enrichment; nothing charged or saved")
+            return jsonify(_CANCELLED_RESPONSE), 200
 
         # Enrichment — deferred out of preview mode. Perplexity talking points,
         # Apify LinkedIn posts, and Perplexity company news are consumed only
@@ -595,7 +835,15 @@ def prompt_search():
         # stay email-less rather than blocking forever.
         _FE_BACKFILL_CAP = 6
         _fe_wait = int(os.environ.get("FE_SEARCH_WAIT_SECONDS", "75"))
+        if outreach_mode == "preview":
+            # Preview (Find) finishes the job in the background and the cards
+            # fill in (_finish_emails_later), so waiting here only delays the
+            # results; one quick poll still catches jobs that finish at once.
+            _fe_wait = min(_fe_wait, 1)
         _gained_email = []
+        # FullEnrich job still running when the wait ran out (preview only):
+        # finished in the background after the response, see below.
+        _fe_pending_eid, _fe_pending = "", []
         _missing = [c for c in contacts
                     if not (c.get("Email") or c.get("email") or "").strip()][:_FE_BACKFILL_CAP]
         if _missing:
@@ -641,6 +889,8 @@ def prompt_search():
                     if _eid:
                         _ready, _hits = fullenrich_client.fetch_bulk(
                             _eid, wait_seconds=_fe_wait, db=_fe_db)
+                        if not _ready and outreach_mode == "preview":
+                            _fe_pending_eid, _fe_pending = _eid, list(_still)
                         for _i, _hit in (_hits or {}).items():
                             _c = _still[int(_i)]
                             _c["Email"] = _hit["email"]
@@ -970,10 +1220,15 @@ def prompt_search():
                 }), 401
             print(f"[Runs] Gmail draft error (prompt-search): {gmail_error}")
 
+        if _search_cancelled(db, user_id, search_id):
+            print(f"[ContactSearch] {search_id} cancelled before save; nothing charged or saved")
+            return jsonify(_CANCELLED_RESPONSE), 200
+
         if not (db and user_id):
             print(f"[Runs] Prompt-search: skipping Firestore save")
         credits_used = 0
         credits_remaining = None
+        saved_refs = {}
         if db and user_id:
             try:
                 credits_amount = CREDIT_COSTS['find_contact'] * len(contacts)
@@ -1027,6 +1282,10 @@ def prompt_search():
                     # Persisted so My Network can render a "Verified" /
                     # "Best guess" badge and we have data for tuning.
                     contact_doc["emailSource"] = contact.get("EmailSource") or None
+                    # Find's "Recently found" feed (OFF-56) groups these by the
+                    # search that produced them.
+                    contact_doc["source"] = "find_search"
+                    contact_doc["foundQuery"] = prompt[:200]
                     # Face for Inbox/Network rows; clients fall back to
                     # initials when the hotlink expires.
                     contact_doc["photoUrl"] = (contact.get("PhotoUrl") or "").strip()
@@ -1071,11 +1330,16 @@ def prompt_search():
                     if contact.get("gmailDraftId") or contact.get("gmailDraftUrl"):
                         contact_doc["pipelineStage"] = "draft_created"
                     now_iso = datetime.utcnow().isoformat() + "Z"  # TODO: deprecated in Python 3.12
-                    contact_doc["inOutbox"] = True
-                    contact_doc["draftToEmail"] = contact.get("_draftRecipientEmail") or email
-                    contact_doc["draftCreatedAt"] = now_iso
-                    contact_doc["emailGeneratedAt"] = now_iso
-                    contact_doc["draftStillExists"] = True
+                    # Preview writes no email, so the contact isn't in the
+                    # outbox yet; marking it there made Find show "Drafted".
+                    if outreach_mode == "preview":
+                        contact_doc["inOutbox"] = False
+                    else:
+                        contact_doc["inOutbox"] = True
+                        contact_doc["draftToEmail"] = contact.get("_draftRecipientEmail") or email
+                        contact_doc["draftCreatedAt"] = now_iso
+                        contact_doc["emailGeneratedAt"] = now_iso
+                        contact_doc["draftStillExists"] = True
                     contact_doc["lastActivityAt"] = now_iso
                     contact_doc["hasUnreadReply"] = False
                     contact_doc["gmailMessageId"] = contact.get("gmailMessageId") or None
@@ -1090,7 +1354,8 @@ def prompt_search():
                         contact_doc["draftToEmail"] = contact.get("_sentRecipientEmail") or contact_doc["draftToEmail"]
                         if contact.get("gmailThreadId"):
                             contact_doc["gmailThreadId"] = contact["gmailThreadId"]
-                    contacts_ref.add(contact_doc)
+                    _, _doc_ref = contacts_ref.add(contact_doc)
+                    saved_refs[id(contact)] = _doc_ref
                     saved_count += 1
                     # Avoid duplicates within same batch
                     if email:
@@ -1103,6 +1368,18 @@ def prompt_search():
             except Exception as save_error:
                 print(f"⚠️ Error saving contacts (prompt-search): {save_error}")
                 traceback.print_exc()
+
+        # Late email pass: the FullEnrich job usually finishes 20-60s after the
+        # search's short wait gives up, so finish it in the background and
+        # write the emails onto the saved contacts; Find refetches Contacts and
+        # the cards fill in. The search itself never waits longer.
+        emails_pending = 0
+        if _fe_pending_eid and saved_refs:
+            _late = [(str(i), c, saved_refs[id(c)]) for i, c in enumerate(_fe_pending) if id(c) in saved_refs]
+            if _late:
+                emails_pending = len(_late)
+                threading.Thread(target=_finish_emails_later, args=(_fe_pending_eid, _late, user_id),
+                                 daemon=True).start()
 
         # Metrics: log email_generated per contact with email (outside save block
         # so events fire even if Firestore save fails — emails were already generated)
@@ -1136,6 +1413,7 @@ def prompt_search():
             "tier": user_tier,
             "user_email": user_email,
             "credits_used": credits_used,
+            "emails_pending": emails_pending,
             "parsed_query": parsed_query_payload,
             "search_broadened": search_broadened,
             "retry_level_used": retry_level_used,

@@ -171,11 +171,11 @@ def test_workflow_cta_fallbacks_for_job_tools():
     r2 = svc._enrich_workflow_ctas(
         {"tool": "answer", "message": "m", "cta": None},
         [{"name": "generate_cover_letter", "result": {"cover_letter": "Dear", "company": "Stripe"}}])
-    assert r2["cta"]["route"] == "/cover-letter"
+    assert r2["cta"] is None
     r3 = svc._enrich_workflow_ctas(
         {"tool": "answer", "message": "m", "cta": None},
         [{"name": "tailor_resume_to_job", "result": {"fit_score": 55}}])
-    assert r3["cta"]["route"] == "/resume"
+    assert r3["cta"] is None
 
 
 @pytest.mark.unit

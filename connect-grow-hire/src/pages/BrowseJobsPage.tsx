@@ -29,8 +29,13 @@ import {
   FindHumansModal,
   type FindHumansJob,
 } from "@/components/jobs/FindHumansModal";
+import {
+  FindContactsModal,
+  type FindContactsJob,
+} from "@/components/jobs/FindContactsModal";
 import { ApplicationProfileModal } from "@/components/jobs/ApplicationProfileModal";
-import { IconSearch, IconClose } from "@/components/jobs/icons";
+import { IconClose } from "@/components/jobs/icons";
+import { JobBoardSearchBar, jobPillClass } from "@/components/jobs/JobBoardSearchBar";
 import { JobRow } from "@/components/jobs/browse/JobRow";
 import { JobGrid } from "@/components/jobs/browse/JobGrid";
 import type { BrowseCardActions } from "@/components/jobs/browse/BrowseJobCard";
@@ -86,8 +91,8 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
   const [, setDescVersion] = useState(0);
   const bumpDesc = () => setDescVersion((v) => v + 1);
   const [findHumansJob, setFindHumansJob] = useState<FindHumansJob | null>(null);
-  const [findHumansKind, setFindHumansKind] = useState<"employee" | "hiring-manager">("hiring-manager");
   const [findHumansCount, setFindHumansCount] = useState(3);
+  const [findContactsJob, setFindContactsJob] = useState<FindContactsJob | null>(null);
 
   // Auto-apply (mirrors the personalized board's flow): one in-flight job at a
   // time drives the card's "Applying…" state; PROFILE_REQUIRED opens the
@@ -213,10 +218,10 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
     if (j.applyUrl) window.open(j.applyUrl, "_blank", "noopener,noreferrer");
   };
 
-  const openFindHumans = useCallback(
-    (j: ProtoJob, kind: "employee" | "hiring-manager" = "hiring-manager", count = 3) => {
+  // Employee search only; the hiring team goes through FindContactsModal.
+  const openFindEmployees = useCallback(
+    (j: ProtoJob, count = 3) => {
       const cached = descriptionCache.get(j.id);
-      setFindHumansKind(kind);
       setFindHumansCount(count);
       setFindHumansJob({
         id: j.id,
@@ -300,11 +305,10 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
     () => ({
       onOpen: setDetailJob,
       onToggleSave: toggleSave,
-      onFindHiringManager: (j) => openFindHumans(j, "hiring-manager", 3),
-      onFindTeam: (j) => openFindHumans(j, "employee", 5),
+      onFindContacts: (j) => setFindContactsJob({ id: j.id, title: j.title, company: j.company }),
       onAutoApply: handleAutoApply,
     }),
-    [toggleSave, openFindHumans, handleAutoApply]
+    [toggleSave, handleAutoApply]
   );
 
   const pillActiveKey = useMemo(() => {
@@ -320,7 +324,7 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
       <div className="flex h-screen w-full overflow-hidden">
         <AppSidebar />
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <AppHeader title="Job Board" />
+          <AppHeader title="" />
 
           {/* Search + browse pills (pinned) */}
           <div
@@ -331,98 +335,37 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
               background: "var(--paper, #fff)",
             }}
           >
-            {/* Title + view toggle */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                marginBottom: 14,
-                flexWrap: "wrap",
-              }}
-            >
-              {/* Matches the list view's .jb-fb-title treatment so the two
-                  views share one header. Inlined because this page does not
-                  load the redesign stylesheet. */}
-              <h1 style={{
-                fontFamily: "'Libre Baskerville', Georgia, serif",
-                fontSize: 30, fontWeight: 400, lineHeight: "36px",
-                color: "#1e2d4d", margin: 0,
-              }}>
-                Browse all jobs
-              </h1>
-              {onViewChange && <JobBoardViewToggle view={view} onChange={onViewChange} />}
-            </div>
+            {/* Same search treatment as Find: logo + pill search bar, then the
+                filter pills underneath. The search itself is live (debounced
+                above). */}
+            <div className="space-y-3">
+              <JobBoardSearchBar value={searchTerm} onChange={setSearchTerm} />
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                maxWidth: 560,
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: "1px solid var(--line, #E5E5E5)",
-                background: "var(--paper-2, #FAFBFF)",
-              }}
-            >
-              <span style={{ color: "var(--ink-3, #94A3B8)", display: "inline-flex" }}>
-                <IconSearch />
-              </span>
-              <input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search jobs by title, company, or keyword…"
-                style={{
-                  flex: 1,
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  fontSize: 14,
-                  fontFamily: "inherit",
-                  color: "var(--ink-1, #0F172A)",
-                }}
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm("")}
-                  aria-label="Clear search"
-                  style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-3, #94A3B8)" }}
-                >
-                  <IconClose />
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-              {BROWSE_PILLS.map((c) => {
-                const active = pillActiveKey === c.key;
-                return (
-                  <button
-                    key={c.key}
-                    type="button"
-                    onClick={() => openGridForCategory(c)}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "6px 14px",
-                      borderRadius: 999,
-                      border: `1px solid ${active ? "var(--brand-blue, #3B82F6)" : "var(--line, #E5E5E5)"}`,
-                      background: active ? "var(--brand-blue, #3B82F6)" : "var(--paper, #fff)",
-                      color: active ? "#fff" : "var(--ink-2, #475569)",
-                      fontSize: 13,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    <c.icon size={14} strokeWidth={1.75} style={{ flexShrink: 0 }} />
-                    {c.label}
-                  </button>
-                );
-              })}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                <span className={jobPillClass(true)} aria-hidden>
+                  Jobs
+                </span>
+                <span className="mx-1 h-7 w-px shrink-0 bg-line" />
+                {BROWSE_PILLS.map((c) => {
+                  const active = pillActiveKey === c.key;
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => (active ? backToRows() : openGridForCategory(c))}
+                      className={jobPillClass(active)}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                })}
+                {onViewChange && (
+                  <div className="ml-auto shrink-0 pl-2">
+                    <JobBoardViewToggle view={view} onChange={onViewChange} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -501,8 +444,10 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
                   toast({ title: "Job link copied" });
                 }
               }}
-              onFindPeople={() => openFindHumans(detailJob, "hiring-manager", 3)}
-              onFindEmployees={(count) => openFindHumans(detailJob, "employee", count)}
+              onFindPeople={() =>
+                setFindContactsJob({ id: detailJob.id, title: detailJob.title, company: detailJob.company })
+              }
+              onFindEmployees={(count) => openFindEmployees(detailJob, count)}
               onAutoApply={
                 detailJob.autoApplyEligible ? () => handleAutoApply(detailJob) : undefined
               }
@@ -518,8 +463,14 @@ export const BrowseJobsPage: React.FC<BrowseJobsPageProps> = ({ view = "gallery"
         open={!!findHumansJob}
         onOpenChange={(o) => !o && setFindHumansJob(null)}
         job={findHumansJob}
-        kind={findHumansKind}
+        kind="employee"
         count={findHumansCount}
+      />
+
+      <FindContactsModal
+        open={!!findContactsJob}
+        onOpenChange={(o) => !o && setFindContactsJob(null)}
+        job={findContactsJob}
       />
 
       <ApplicationProfileModal

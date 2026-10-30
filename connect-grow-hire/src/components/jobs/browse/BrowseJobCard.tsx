@@ -6,16 +6,16 @@
 //
 // Card actions (all stopPropagation so they don't open the detail drawer):
 //   • Save (bookmark, top-right)
-//   • Find hiring manager
-//   • Email the team
-//   • Auto-apply (only when the job's ATS supports it)
+//   • Find contacts (team leader, interviewer, recruiter)
+//   • Auto-apply when the job's ATS supports it, otherwise Apply (opens the
+//     posting in a new tab)
 import React, { useMemo, useState } from "react";
 import type { ProtoJob } from "@/pages/jobBoardAdapter";
 import {
   IconBookmark,
   IconLocation,
   IconRecruiterSearch,
-  IconMail,
+  IconExternalLink,
   IconRocket,
 } from "@/components/jobs/icons";
 
@@ -24,8 +24,7 @@ import {
 export interface BrowseCardActions {
   onOpen: (job: ProtoJob) => void;
   onToggleSave: (job: ProtoJob) => void;
-  onFindHiringManager: (job: ProtoJob) => void;
-  onFindTeam: (job: ProtoJob) => void;
+  onFindContacts: (job: ProtoJob) => void;
   onAutoApply: (job: ProtoJob) => void;
 }
 
@@ -201,24 +200,28 @@ export const BrowseJobCard: React.FC<BrowseJobCardProps> = ({
       >
         <CardAction
           icon={<IconRecruiterSearch />}
-          label="Find manager"
-          title="Find the hiring manager for this role"
-          onClick={act(() => actions.onFindHiringManager(job))}
+          label="Find contacts"
+          title="Find the people to reach for this role"
+          onClick={act(() => actions.onFindContacts(job))}
         />
-        <CardAction
-          icon={<IconMail />}
-          label="Email team"
-          title="Email people on this team"
-          onClick={act(() => actions.onFindTeam(job))}
-        />
-        {job.autoApplyEligible && (
+        {job.autoApplyEligible ? (
           <CardAction
             icon={<IconRocket />}
             label={autoApplyBusy ? "Applying…" : "Auto-apply"}
             title="Let Offerloop apply for you"
-            primary
+            variant="primary"
             disabled={autoApplyBusy}
             onClick={act(() => actions.onAutoApply(job))}
+          />
+        ) : (
+          <CardAction
+            icon={<IconExternalLink />}
+            label="Apply"
+            title="Open the job posting in a new tab"
+            variant="secondary"
+            href={job.applyUrl || undefined}
+            disabled={!job.applyUrl}
+            onClick={(e) => e.stopPropagation()}
           />
         )}
       </div>
@@ -295,39 +298,59 @@ const CompanyLogo: React.FC<{ company: string; logoUrl: string | null; monogram:
   );
 };
 
+// default: quiet outline. primary: filled brand blue (Auto-apply).
+// secondary: dark-ink outline (Apply), so it never reads as Auto-apply.
+const CARD_ACTION_COLORS = {
+  default: { border: "var(--line, #E5E5E5)", background: "var(--paper, #fff)", color: "var(--ink-2, #475569)" },
+  primary: { border: "var(--brand-blue, #3B82F6)", background: "var(--brand-blue, #3B82F6)", color: "#fff" },
+  secondary: { border: "var(--ink-1, #0F172A)", background: "var(--paper, #fff)", color: "var(--ink-1, #0F172A)" },
+} as const;
+
 const CardAction: React.FC<{
   icon: React.ReactNode;
   label: string;
   title: string;
-  primary?: boolean;
+  variant?: keyof typeof CARD_ACTION_COLORS;
   disabled?: boolean;
+  // When set (and not disabled), renders a link that opens in a new tab.
+  href?: string;
   onClick: (e: React.MouseEvent) => void;
-}> = ({ icon, label, title, primary, disabled, onClick }) => (
-  <button
-    type="button"
-    title={title}
-    aria-label={title}
-    disabled={disabled}
-    onClick={onClick}
-    style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 4,
-      padding: "5px 9px",
-      borderRadius: 8,
-      fontSize: 11,
-      fontWeight: 600,
-      fontFamily: "inherit",
-      cursor: disabled ? "default" : "pointer",
-      border: primary ? "1px solid var(--brand-blue, #3B82F6)" : "1px solid var(--line, #E5E5E5)",
-      background: primary ? "var(--brand-blue, #3B82F6)" : "var(--paper, #fff)",
-      color: primary ? "#fff" : "var(--ink-2, #475569)",
-      opacity: disabled ? 0.6 : 1,
-    }}
-  >
-    <span style={{ display: "inline-flex", width: 13, height: 13 }}>{icon}</span>
-    {label}
-  </button>
-);
+}> = ({ icon, label, title, variant = "default", disabled, href, onClick }) => {
+  const colors = CARD_ACTION_COLORS[variant];
+  const style: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "5px 9px",
+    borderRadius: 8,
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: "inherit",
+    textDecoration: "none",
+    cursor: disabled ? "default" : "pointer",
+    border: `1px solid ${colors.border}`,
+    background: colors.background,
+    color: colors.color,
+    opacity: disabled ? 0.6 : 1,
+  };
+  const content = (
+    <>
+      <span style={{ display: "inline-flex", width: 13, height: 13 }}>{icon}</span>
+      {label}
+    </>
+  );
+  if (href && !disabled) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" title={title} aria-label={title} onClick={onClick} style={style}>
+        {content}
+      </a>
+    );
+  }
+  return (
+    <button type="button" title={title} aria-label={title} disabled={disabled} onClick={onClick} style={style}>
+      {content}
+    </button>
+  );
+};
 
 export default BrowseJobCard;

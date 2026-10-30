@@ -178,7 +178,8 @@ def _gmail_service(creds):
     return build("gmail", "v1", credentials=creds)
 
 
-def send_email_for_user(uid: str, to: str, subject: str, body_html: str) -> dict:
+def send_email_for_user(uid: str, to: str, subject: str, body_html: str, tracking_kind: str = None,
+                        contact_id: str = None) -> dict:
     """Send an email via user's Gmail OAuth credentials (from the student's
     own address).
 
@@ -188,6 +189,11 @@ def send_email_for_user(uid: str, to: str, subject: str, body_html: str) -> dict
             "threadId": Gmail thread id (str),
             "labelIds": list[str],  # whatever Gmail stamped
         }
+
+    Pass tracking_kind (e.g. "outreach") for emails that go to a contact, so
+    the open-tracking pixel is added. Leave it unset for emails the user sends
+    to themselves (digests). contact_id, when known, ties the tracking token
+    to users/{uid}/contacts/{contact_id} instead of matching by address.
 
     Phase 9 callers (Loop auto-send) MUST stamp `id` and `threadId` onto the
     contact doc immediately so the Pub/Sub webhook can join replies via the
@@ -208,13 +214,19 @@ def send_email_for_user(uid: str, to: str, subject: str, body_html: str) -> dict
     if not service:
         raise ValueError(f"Failed to build Gmail service for uid={uid}")
 
-    message = MIMEText(body_html, "html")
+    from app.services import email_tracking
+    tracking_token = email_tracking.start(uid) if tracking_kind else None
+    message = MIMEText(email_tracking.add_pixel(body_html, tracking_token), "html")
     message["to"] = to
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     resp = service.users().messages().send(
         userId="me", body={"raw": raw}
     ).execute() or {}
+    email_tracking.register(
+        tracking_token, uid, tracking_kind, recipient_email=to, contact_id=contact_id,
+        message_id=resp.get("id"), thread_id=resp.get("threadId"), sent=True,
+    )
 
     return {
         "id": resp.get("id", ""),
@@ -1071,7 +1083,8 @@ def _select_recipient_email(contact):
 
 
 def _build_outreach_mime(recipient_email, gmail_account_email, email_subject, email_body,
-                         user_info=None, resume_content=None, resume_filename=None, resume_url=None):
+                         user_info=None, resume_content=None, resume_filename=None, resume_url=None,
+                         tracking_token=None):
     """Build the multipart outreach message (HTML body, signature, resume attachment).
 
     This is the single source of truth for outreach email content. Both
@@ -1079,7 +1092,10 @@ def _build_outreach_mime(recipient_email, gmail_account_email, email_subject, em
     call it, so a draft and a send produce byte-for-byte identical email,
     including the resume attachment. email_subject and email_body are expected
     to already be cleaned by the caller.
+
+    tracking_token (from email_tracking.start) adds the open-tracking pixel.
     """
+    from app.services import email_tracking
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     from email.mime.base import MIMEBase
@@ -1132,7 +1148,11 @@ def _build_outreach_mime(recipient_email, gmail_account_email, email_subject, em
 </div>
 </body>
 </html>"""
+        html_content = email_tracking.add_pixel(html_content, tracking_token)
         message.attach(MIMEText(html_content, 'html', 'utf-8'))
+    elif tracking_token:
+        # Plain text can't carry the pixel, so send text + an HTML copy.
+        message.attach(email_tracking.tracked_text_mime(email_body, tracking_token))
     else:
         # Plain text fallback
         message.attach(MIMEText(email_body, 'plain', 'utf-8'))
@@ -1276,6 +1296,8 @@ def create_gmail_draft_for_user(contact, email_subject, email_body, tier='free',
 
         # Build the multipart message (HTML body, signature, resume attachment),
         # shared with the send path so drafts and sends are identical.
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(user_id)
         message = _build_outreach_mime(
             recipient_email=recipient_email,
             gmail_account_email=gmail_account_email,
@@ -1285,6 +1307,7 @@ def create_gmail_draft_for_user(contact, email_subject, email_body, tier='free',
             resume_content=resume_content,
             resume_filename=resume_filename,
             resume_url=resume_url,
+            tracking_token=tracking_token,
         )
 
         # Create the draft
@@ -1301,6 +1324,11 @@ def create_gmail_draft_for_user(contact, email_subject, email_body, tier='free',
             draft_result = gmail_service.users().drafts().create(userId='me', body=draft_body).execute()
             draft_id = draft_result['id']
             message_id = draft_result.get('message', {}).get('id')
+            email_tracking.register(
+                tracking_token, user_id, 'outreach', recipient_email=recipient_email,
+                draft_id=draft_id, message_id=message_id,
+                thread_id=draft_result.get('message', {}).get('threadId'),
+            )
         except Exception as api_error:
             print(f"[GmailClient] Gmail API error creating draft: {api_error}")
             import traceback
@@ -1583,6 +1611,8 @@ def send_gmail_email_for_user(contact, email_subject, email_body, tier='free', u
             return f"mock_{tier}_send_{contact.get('FirstName', 'unknown').lower()}_no_email"
 
         # Build the same multipart message the draft path builds.
+        from app.services import email_tracking
+        tracking_token = email_tracking.start(user_id)
         message = _build_outreach_mime(
             recipient_email=recipient_email,
             gmail_account_email=gmail_account_email,
@@ -1592,6 +1622,7 @@ def send_gmail_email_for_user(contact, email_subject, email_body, tier='free', u
             resume_content=resume_content,
             resume_filename=resume_filename,
             resume_url=resume_url,
+            tracking_token=tracking_token,
         )
 
         raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
@@ -1607,6 +1638,10 @@ def send_gmail_email_for_user(contact, email_subject, email_body, tier='free', u
         message_id = send_result.get('id')
         thread_id = send_result.get('threadId')
         print(f"[GmailClient] Sent {tier.capitalize()} email {message_id} (thread {thread_id})")
+        email_tracking.register(
+            tracking_token, user_id, 'outreach', recipient_email=recipient_email,
+            message_id=message_id, thread_id=thread_id, sent=True,
+        )
 
         return {
             'message_id': message_id,
@@ -1690,170 +1725,6 @@ def send_emails_parallel(contacts_with_emails, resume_bytes=None, resume_filenam
     return [result for _, result, _ in results]
 
 
-# ✅ FIX #5: Gmail batch API for draft creation (single HTTP request for all drafts)
-def create_drafts_batch(contacts_with_emails, gmail_service, resume_bytes=None, resume_filename=None, user_info=None, tier='free', user_email=None):
-    """
-    Create all Gmail drafts using Gmail batch API (single HTTP request).
-    Much faster than individual API calls.
-    
-    Args:
-        contacts_with_emails: List of dicts with 'contact', 'email_subject', 'email_body'
-        gmail_service: Gmail service object
-        resume_bytes: Optional resume content as bytes
-        resume_filename: Optional resume filename
-        user_info: Optional user profile info
-        tier: 'free' or 'pro'
-        user_email: User's email address
-    
-    Returns:
-        List of results (dicts with draft_id, message_id, draft_url) or error strings
-    """
-    from googleapiclient.http import BatchHttpRequest
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    from email.mime.base import MIMEBase
-    from email import encoders
-    import base64
-    import os
-    import threading
-    
-    if not contacts_with_emails or not gmail_service:
-        return []
-    
-    print(f"[GmailClient] Creating {len(contacts_with_emails)} Gmail drafts using batch API")
-    
-    results = {}
-    recipients = {}  # Track recipient email per request index
-    results_lock = threading.Lock()
-
-    def build_draft_message(item, index):
-        """Build draft message for a single contact. Returns (raw_message, recipient_email) or (None, None)."""
-        from app.utils.contact import clean_email_text
-
-        contact = item['contact']
-        email_subject = clean_email_text(item['email_subject'])
-        email_body = clean_email_text(item['email_body'])
-
-        # Get recipient email — prefer work/verified over personal
-        recipient_email = None
-        source = None
-        if contact.get('WorkEmail') and contact['WorkEmail'] != 'Not available' and '@' in contact['WorkEmail']:
-            recipient_email = contact['WorkEmail']
-            source = 'WorkEmail'
-        elif contact.get('Email') and '@' in contact['Email']:
-            recipient_email = contact['Email']
-            source = 'Email'
-        elif contact.get('PersonalEmail') and contact['PersonalEmail'] != 'Not available' and '@' in contact['PersonalEmail']:
-            recipient_email = contact['PersonalEmail']
-            source = 'PersonalEmail'
-
-        if recipient_email:
-            print(f"[GmailDraft] Batch recipient for {contact.get('FirstName')} {contact.get('LastName')}: selected={recipient_email} (source={source})")
-
-        if not recipient_email:
-            return None, None
-
-        recipients[str(index)] = recipient_email
-        
-        # Get Gmail account email
-        try:
-            gmail_account_email = gmail_service.users().getProfile(userId='me').execute().get('emailAddress')
-        except Exception:
-            gmail_account_email = user_email or os.getenv("DEFAULT_FROM_EMAIL", "noreply@offerloop.ai")
-        
-        # Create multipart message
-        message = MIMEMultipart('mixed')
-        message['to'] = recipient_email
-        message['subject'] = email_subject
-        message['from'] = gmail_account_email
-        
-        # Add body (HTML if user_info provided)
-        if user_info:
-            email_body_html = email_body.replace('\n\n', '<br><br>').replace('\n', '<br>')
-            html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-<div style="white-space: pre-wrap;">
-{email_body_html}
-</div>
-</body>
-</html>"""
-            message.attach(MIMEText(html_content, 'html', 'utf-8'))
-        else:
-            message.attach(MIMEText(email_body, 'plain', 'utf-8'))
-        
-        # Attach resume when available
-        if resume_bytes:
-            try:
-                filename = resume_filename or "resume.pdf"
-                attachment = MIMEBase('application', 'pdf')
-                attachment.set_payload(resume_bytes)
-                encoders.encode_base64(attachment)
-                attachment.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-                attachment.add_header('Content-Type', 'application/pdf')
-                message.attach(attachment)
-            except Exception:
-                pass
-        
-        return base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8'), recipient_email
-
-    def callback(request_id, response, exception):
-        """Callback for batch request"""
-        with results_lock:
-            if exception:
-                results[request_id] = {'error': str(exception), 'draft_id': None}
-            else:
-                draft_id = response.get('id') if response else None
-                message_id = response.get('message', {}).get('id') if response else None
-                
-                # Build draft URL
-                if message_id:
-                    draft_url = f"https://mail.google.com/mail/u/0/#drafts?compose={message_id}"
-                elif draft_id:
-                    draft_url = f"https://mail.google.com/mail/u/0/#draft/{draft_id}"
-                else:
-                    draft_url = None
-                
-                results[request_id] = {
-                    'draft_id': draft_id,
-                    'message_id': message_id,
-                    'draft_url': draft_url,
-                    'recipient_email': recipients.get(request_id),
-                    'error': None
-                }
-    
-    # Build batch request
-    batch = gmail_service.new_batch_http_request(callback=callback)
-    
-    for i, item in enumerate(contacts_with_emails):
-        raw_message, _ = build_draft_message(item, i)
-        if raw_message:
-            batch.add(
-                gmail_service.users().drafts().create(
-                    userId='me',
-                    body={'message': {'raw': raw_message}}
-                ),
-                request_id=str(i)
-            )
-        else:
-            # No valid email, mark as error
-            with results_lock:
-                results[str(i)] = {'error': 'No valid recipient email', 'draft_id': None}
-    
-    # Execute batch (single HTTP request for all drafts!)
-    try:
-        batch.execute()
-        print(f"✅ Batch draft creation complete: {len([r for r in results.values() if r.get('draft_id')])} successful")
-    except Exception as e:
-        print(f"❌ Batch draft creation failed: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    # Return results in order
-    return [results.get(str(i), {'error': 'Missing result', 'draft_id': None}) for i in range(len(contacts_with_emails))]
 
 
 # ============================================================================

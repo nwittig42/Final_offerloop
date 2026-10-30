@@ -129,6 +129,14 @@ RULES:
     - "Management Consultant" → also include "Consultant"
     - "Product Manager" → also include "PM"
     Place domain-specific titles first, generic fallbacks last.
+14. company_traits (OFF-58): when the user describes the KIND of company instead of (or as well as) naming one, e.g. "tech startups", "early-stage fintech", "seed-stage companies", "boutique investment banks", "big tech", "Fortune 500", "unicorns", "family offices", fill company_traits so the search can filter on the company itself. Otherwise set it to null. Fields (use null for anything the user didn't imply):
+    - label: the user's own phrase, short, e.g. "tech startups"
+    - min_employees / max_employees: integers. startup ~ 2-500, early-stage/seed ~ 2-100, boutique ~ 5-500, big/large/Fortune 500 ~ min 5000
+    - company_types: LinkedIn company types, e.g. ["Privately Held"] for startups and boutiques, ["Public Company"] for public or Fortune 500
+    - founded_after: year as an integer, e.g. 2012 for startups, 2018 for early-stage
+    - funded_after: "YYYY-MM-DD" of the latest funding round, for venture-backed or recently funded companies, e.g. "2022-01-01"
+    - industries: 2 to 6 LinkedIn industry names, e.g. "Software Development", "Technology, Information and Internet", "IT Services and IT Consulting", "Financial Services", "Investment Banking", "Venture Capital and Private Equity Principals", "Biotechnology Research", "Hospitals and Health Care". Leave empty when the industry is unspecified.
+    Example: "USC alumni at tech startups in SF" -> schools ["University of Southern California"], locations ["San Francisco"], companies [], company_traits {"label": "tech startups", "min_employees": 2, "max_employees": 500, "company_types": ["Privately Held"], "founded_after": 2012, "funded_after": null, "industries": ["Software Development", "Technology, Information and Internet", "IT Services and IT Consulting"]}.
 
 Return ONLY valid JSON with this exact structure (no markdown, no explanation):
 {
@@ -139,7 +147,8 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
   "schools": [],
   "industries": [],
   "confidence": "high" or "low",
-  "title_variations": ["<title1>", "<title2>", ...]
+  "title_variations": ["<title1>", "<title2>", ...],
+  "company_traits": null or {"label": "", "min_employees": null, "max_employees": null, "company_types": [], "founded_after": null, "funded_after": null, "industries": []}
 }"""
 
     user_prompt = f'Extract search parameters from this prompt:\n\n"{prompt}"'
@@ -212,9 +221,12 @@ def _validate_structured_parse(parsed: Dict, original_prompt: str) -> Dict[str, 
                 if t and t not in seen:
                     seen.add(t)
                     out["title_variations"].append(t)
+    traits = _validate_company_traits(parsed.get("company_traits"))
+    if traits:
+        out["company_traits"] = traits
     # Override confidence: high if we have at least one search dimension
     has_specifics = bool(
-        out["title_variations"] or out["companies"] or out["schools"] or out["locations"]
+        out["title_variations"] or out["companies"] or out["schools"] or out["locations"] or traits
     )
     if has_specifics:
         out["confidence"] = "high"
@@ -222,6 +234,35 @@ def _validate_structured_parse(parsed: Dict, original_prompt: str) -> Dict[str, 
         conf = (parsed.get("confidence") or "").strip().lower()
         out["confidence"] = "high" if conf == "high" else "low"
     return out
+
+
+def _int_or_none(v, lo: int, hi: int):
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if lo <= n <= hi else None
+
+
+def _validate_company_traits(raw) -> Dict[str, Any] | None:
+    """Keep only well-formed traits; None when nothing usable is left."""
+    if not isinstance(raw, dict):
+        return None
+    def strs(v):
+        return [str(x).strip() for x in v if x and str(x).strip()][:8] if isinstance(v, list) else []
+    funded = str(raw.get("funded_after") or "").strip()
+    traits = {
+        "label": str(raw.get("label") or "").strip()[:60],
+        "min_employees": _int_or_none(raw.get("min_employees"), 1, 10_000_000),
+        "max_employees": _int_or_none(raw.get("max_employees"), 1, 10_000_000),
+        "company_types": strs(raw.get("company_types")),
+        "founded_after": _int_or_none(raw.get("founded_after"), 1800, 2100),
+        "funded_after": funded if len(funded) == 10 and funded[4] == "-" and funded[7] == "-" else None,
+        "industries": strs(raw.get("industries")),
+    }
+    if not any(v for k, v in traits.items() if k != "label"):
+        return None
+    return traits
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ const COPY: Record<
       "Your resume powers the good stuff: personalized emails that draw real connections between you and each contact, better job matches, and auto-apply.",
     cta: "Upload resume",
     continueLabel: "Continue without resume",
-    route: "/resume",
+    route: "/account-settings",
   },
 };
 

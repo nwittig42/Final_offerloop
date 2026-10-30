@@ -25,11 +25,6 @@ const COMPLETION_AUTO_DISMISS_MS = 3000;
 // -----------------------------------------------------------------------------
 export type TourDemoSurface =
   | 'people'
-  | 'hiring-managers'
-  | 'companies'
-  | 'my-network'
-  | 'inbox'
-  | 'meeting-prep'
   | 'scout'
   | 'loops'
   | 'applications';
@@ -82,22 +77,6 @@ export const TOUR_STEPS: TourStepConfig[] = [
     tab: 'contact-search',
     demoSurface: 'people',
   },
-  // Find Companies
-  {
-    target: '[data-tour="tour-find-companies"]',
-    title: 'Find Companies',
-    content: "Describe the kind of companies you're targeting in plain English and we'll surface the ones that fit.",
-    route: '/find?tab=companies',
-    demoSurface: 'companies',
-  },
-  // Find Hiring Manager
-  {
-    target: '[data-tour="tour-find-hiring-managers"]',
-    title: 'Find Hiring Manager',
-    content: "Paste a job posting URL and we'll find the recruiter and hiring manager for that role.",
-    route: '/find?tab=hiring-managers',
-    demoSurface: 'hiring-managers',
-  },
   // Job Board block: list → find-people → auto-apply → applications. The page
   // auto-selects the first job on mount (JobBoardPage.redesign.tsx ~287-298),
   // so the detail panel (and its find-people + action-row anchors) is in the
@@ -139,59 +118,22 @@ export const TOUR_STEPS: TourStepConfig[] = [
     route: '/applications',
     demoSurface: 'applications',
   },
-  // My Network. Trimmed: the inbox/Gmail story now lives in its own step.
+  // Contacts: everyone you've saved, each with their conversation and
+  // meeting prep on the same card.
   {
-    target: '[data-tour="tour-network-table"]',
-    title: 'My Network',
-    content: "Everyone you find and save lands here. Click the mail icon on any contact to open the conversation.",
-    route: '/my-network/people',
-    demoSurface: 'my-network',
+    target: '[data-tour="tour-contacts"]',
+    title: 'Contacts',
+    content: "Everyone you find and save lands here. Open a contact to see your conversation, reply, and run a meeting prep before you talk.",
+    route: '/contacts',
   },
-  // Inbox. Was implicit in the old My Network copy; now a step of its own
-  // anchored on the /outbox surface so the spotlight matches the language.
-  {
-    target: '[data-tour="tour-inbox"]',
-    title: 'Inbox',
-    content: "Track every conversation in one place. Manage replies and follow-ups here, or jump to Gmail to see the drafts we wrote.",
-    route: '/outbox',
-    demoSurface: 'inbox',
-  },
-  // Meeting Prep
-  {
-    target: '[data-tour="tour-coffee-chat-prep"]',
-    title: 'Meeting Prep',
-    content: "When you land a call, prep here. Paste a LinkedIn URL and get talking points, recent news, and smart questions tailored to who you're meeting.",
-    route: '/coffee-chat-prep',
-    demoSurface: 'meeting-prep',
-  },
-  // Ask Scout. The orchestration in ScoutSidePanel opens the panel
-  // and seeds a Mark Cuban conversation so the user sees both the trigger
-  // and the assistant's strategist behavior. Anchored on the floating
-  // Ask Scout pill, which is mounted app-wide (hidden only on /dashboard),
-  // so this shares Meeting Prep's route — same-route advance, no nav.
-  // The old /agent (Loops) route was removed from the app; pointing a step
-  // there stranded the tour on the 404 page with no tooltip (the reported
-  // "tour dies near the end" bug).
-  {
-    target: '[data-tour="tour-scout-button"]',
-    title: 'Ask Scout',
-    content: "Stuck anywhere in Offerloop? Press Cmd+K or click Ask Scout for help from your AI copilot.",
-    route: '/coffee-chat-prep',
-    // Centered, not anchored: the Scout panel opens right-0 full-height for
-    // this step's seeded demo. A 'bottom' tooltip anchored on the top-right
-    // scout button lands over the panel and covers the demo, so center the
-    // tooltip in the viewport (clear of the 420px panel) instead.
-    placement: 'center',
-    demoSurface: 'scout',
-  },
-  // Closer — centered send-off on Home so the tour ends where the user will
+  // Closer — centered send-off on Search so the tour ends where the user will
   // actually live, not parked on the Loops setup page.
   {
     id: 'closing',
     target: 'body',
     title: "You're ready",
-    content: "Home shows your next moves, replies to answer, and everything running for you. Start by finding one person you want to talk to.",
-    route: '/dashboard',
+    content: "Start by finding one person you want to talk to. Replies land in Contacts, and Loops keep working for you in the background.",
+    route: '/find',
     placement: 'center',
     nextLabel: 'Finish',
   },
@@ -350,14 +292,14 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
 
       // Joyride hit an internal error (e.g. a step whose target selector
       // matches nothing at render time). Without this branch the tour just
-      // unmounts silently mid-flow — end it cleanly on Home instead of
+      // unmounts silently mid-flow — end it cleanly on Search instead of
       // stranding the user with no tooltip and no way to resume.
       if (status === STATUS.ERROR) {
         console.warn(`[Tour] Joyride STATUS.ERROR on step ${index}; ending tour.`);
         markTourCompleteInFirestore();
         setRun(false);
         pendingStepRef.current = null;
-        navigate('/dashboard');
+        navigate('/find');
         return;
       }
 
@@ -419,9 +361,9 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
           setShowCompletion(true);
           setRun(false);
           // Natural finish (clicked Done on the last step): drop the user on
-          // the home dashboard. Skip/Close paths below intentionally do NOT
+          // Search. Skip/Close paths below intentionally do NOT
           // navigate — if a user bails early we leave them where they were.
-          navigate('/dashboard');
+          navigate('/find');
           completionTimerRef.current = setTimeout(dismissCompletion, COMPLETION_AUTO_DISMISS_MS);
           return;
         }
@@ -446,7 +388,7 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
           // STATUS.FINISHED event in some completion paths in addition to the
           // STEP_AFTER+NEXT we already navigate from, so this is a belt-and-
           // suspenders home-route nav for the natural finish.
-          navigate('/dashboard');
+          navigate('/find');
           completionTimerRef.current = setTimeout(dismissCompletion, COMPLETION_AUTO_DISMISS_MS);
         }
       }

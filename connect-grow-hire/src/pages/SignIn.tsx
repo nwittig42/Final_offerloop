@@ -1,7 +1,7 @@
 // src/pages/SignIn.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useFirebaseAuth, friendlyAuthError } from "@/contexts/FirebaseAuthContext";
 import OfferloopLogo from '@/assets/offerloop_logo2.png';
@@ -9,6 +9,42 @@ import OfferloopLogo from '@/assets/offerloop_logo2.png';
 
 
 type Tab = "signin" | "signup";
+
+// Password field with an eye button to show or hide what's typed.
+const PasswordInput: React.FC<{
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  autoComplete: string;
+  shown: boolean;
+  onToggle: () => void;
+  invalid?: boolean;
+}> = ({ value, onChange, placeholder, autoComplete, shown, onToggle, invalid }) => (
+  <div className="relative">
+    <input
+      type={shown ? "text" : "password"}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      aria-invalid={invalid || undefined}
+      required
+      minLength={6}
+      autoComplete={autoComplete}
+      className="w-full py-3 pl-4 pr-11 rounded-[10px] text-sm"
+      style={{ border: `1px solid ${invalid ? '#DC2626' : 'var(--border-light)'}`, fontFamily: 'var(--font-body)', fontSize: '15px' }}
+    />
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={shown ? "Hide password" : "Show password"}
+      className="absolute right-3 top-1/2 -translate-y-1/2 p-1"
+      style={{ color: 'var(--text-tertiary)', background: 'none', border: 'none', cursor: 'pointer' }}
+    >
+      {shown ? <EyeOff size={18} /> : <Eye size={18} />}
+    </button>
+  </div>
+);
 
 const SignIn: React.FC = () => {
   const navigate = useNavigate();
@@ -33,8 +69,15 @@ const SignIn: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState("");
   const [resetSent, setResetSent] = useState(false);
+
+  const passwordsDiffer = activeTab === "signup" && password !== confirmPassword;
+  // Only flag a mismatch once they've started typing the confirmation.
+  const showMismatch = passwordsDiffer && confirmPassword.length > 0;
+  const emailSubmitBlocked = submitting || isLoading || passwordsDiffer;
 
   const forceNavigate = (dest: string) => {
     navigate(dest, { replace: true });
@@ -58,7 +101,7 @@ const SignIn: React.FC = () => {
   }, [location.search]);
 
   const finishAuth = (next: "onboarding" | "home") =>
-    forceNavigate(next === "onboarding" ? "/onboarding" : (returnPath ?? "/home"));
+    forceNavigate(next === "onboarding" ? "/onboarding" : (returnPath ?? "/find"));
 
   useEffect(() => setActiveTab(initialTab), [initialTab]);
 
@@ -81,7 +124,7 @@ const SignIn: React.FC = () => {
     const params = new URLSearchParams(location.search);
     if (params.get("signout") === "true") return;
 
-    forceNavigate(user.needsOnboarding ? "/onboarding" : (returnPath ?? "/home"));
+    forceNavigate(user.needsOnboarding ? "/onboarding" : (returnPath ?? "/find"));
   }, [user, isLoading, location.search, location.pathname, returnPath]);
 
   const handleGoogleAuth = async () => {
@@ -106,7 +149,7 @@ const SignIn: React.FC = () => {
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitting || isLoading) return;
+    if (emailSubmitBlocked) return;
     setSubmitting(true);
     try {
       const next =
@@ -406,17 +449,32 @@ const SignIn: React.FC = () => {
               className="w-full py-3 px-4 rounded-[10px] text-sm"
               style={{ border: '1px solid var(--border-light)', fontFamily: 'var(--font-body)', fontSize: '15px' }}
             />
-            <input
-              type="password"
+            <PasswordInput
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder="Password"
-              required
-              minLength={6}
               autoComplete={activeTab === "signup" ? "new-password" : "current-password"}
-              className="w-full py-3 px-4 rounded-[10px] text-sm"
-              style={{ border: '1px solid var(--border-light)', fontFamily: 'var(--font-body)', fontSize: '15px' }}
+              shown={showPassword}
+              onToggle={() => setShowPassword((v) => !v)}
             />
+            {activeTab === "signup" && (
+              <>
+                <PasswordInput
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  placeholder="Confirm password"
+                  autoComplete="new-password"
+                  shown={showPassword}
+                  onToggle={() => setShowPassword((v) => !v)}
+                  invalid={showMismatch}
+                />
+                {showMismatch && (
+                  <p role="alert" style={{ fontFamily: 'var(--font-body)', fontSize: '13px', color: '#DC2626' }}>
+                    Passwords don't match.
+                  </p>
+                )}
+              </>
+            )}
             {activeTab === "signin" && (
               <div className="text-right">
                 <button
@@ -430,7 +488,7 @@ const SignIn: React.FC = () => {
             )}
             <button
               type="submit"
-              disabled={submitting || isLoading}
+              disabled={emailSubmitBlocked}
               className="w-full py-3.5 rounded-[10px] text-sm font-medium transition-all"
               style={{
                 background: '#2563EB',
@@ -439,8 +497,8 @@ const SignIn: React.FC = () => {
                 fontSize: '15px',
                 fontWeight: 600,
                 border: 'none',
-                cursor: submitting || isLoading ? 'not-allowed' : 'pointer',
-                opacity: submitting || isLoading ? 0.6 : 1,
+                cursor: emailSubmitBlocked ? 'not-allowed' : 'pointer',
+                opacity: emailSubmitBlocked ? 0.6 : 1,
               }}
             >
               {submitting ? "Working..." : activeTab === "signup" ? "Create account" : "Sign in"}

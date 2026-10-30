@@ -515,7 +515,7 @@ export function ReferralDraftModal({
                       size="sm"
                       variant="outline"
                       className="flex-shrink-0"
-                      onClick={() => navigate("/coffee-chat-prep")}
+                      onClick={() => navigate("/contacts")}
                     >
                       <Coffee className="w-3.5 h-3.5 mr-1.5" /> Start prep
                     </Button>
@@ -532,7 +532,7 @@ export function ReferralDraftModal({
                         size="sm"
                         variant="outline"
                         className="flex-shrink-0"
-                        onClick={() => navigate("/coffee-chat-prep")}
+                        onClick={() => navigate("/contacts")}
                       >
                         <Coffee className="w-3.5 h-3.5 mr-1.5" /> Add prep
                       </Button>

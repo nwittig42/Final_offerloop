@@ -25,9 +25,12 @@ from app.services.person_ranker import (
     DEFAULT_RANKED_LIMIT,
     MAX_RANKED_LIMIT,
     _load_user_context,
+    model_version_for,
     rank_people_for_user,
+    ranker_variant,
     suggest_chips,
 )
+from app.services import people_deck_cache
 from app.utils.recommendation_events import log_recommendation_event
 
 # ── Spend guardrails for the deck (2026-09-08) ──────────────────────────
@@ -139,6 +142,76 @@ def _try_refund(uid: str, amount: int, reason: str) -> None:
 # ── Routes ────────────────────────────────────────────────────────────
 
 
+def _ready_first_within_tier_runs(candidates: list, ready_ids: set) -> list:
+    """Email-ready people first inside each consecutive run of one tier,
+    ranker order otherwise."""
+    out: list = []
+    run: list = []
+    for c in candidates:
+        if run and c.get("tier") != run[-1].get("tier"):
+            out += sorted(run, key=lambda x: 0 if (x.get("person") or {}).get("id") in ready_ids else 1)
+            run = []
+        run.append(c)
+    out += sorted(run, key=lambda x: 0 if (x.get("person") or {}).get("id") in ready_ids else 1)
+    return out
+
+
+def _run_in_background(fn, *args, **kwargs) -> None:
+    """Fire-and-forget on a daemon thread (tests patch this to run inline)."""
+    import threading
+    threading.Thread(target=fn, args=args, kwargs=kwargs, daemon=True).start()
+
+
+def _log_deck_served(uid, deck_id, surface, candidates, features, *, company=None, role=None, focus=None) -> None:
+    """One deck_served row: who was shown, where, and why."""
+    try:
+        items = []
+        for rank, c in enumerate(candidates):
+            pid = ((c.get("person") or {}).get("id") or "").strip()
+            if not pid:
+                continue
+            items.append({
+                "id":       pid,
+                "rank":     rank,
+                "company":  (c.get("person") or {}).get("company") or "",
+                "title":    (c.get("person") or {}).get("title") or "",
+                "score":    c.get("score"),
+                "tier":     c.get("tier"),
+                "features": features.get(pid) or {},
+            })
+        log_recommendation_event(
+            event_type="deck_served",
+            uid=uid,
+            model_version=model_version_for(uid),
+            variant=ranker_variant(uid),
+            surface=surface,
+            search_query={"company": company or "", "role": role or "", "focus": focus or ""},
+            attribution_source="ranker_deck",
+            extra={"deck_id": deck_id, "items": items, "count": len(items)},
+            doc_id=f"deck_{uid}_{deck_id}",
+        )
+    except Exception:
+        logger.exception("ranker: deck_served log failed uid=%s", uid)
+
+
+def _swiped_person_fields(db, candidate_id: str) -> dict:
+    """{"company": slug, "title": str} from the warehouse row, or {}."""
+    try:
+        from app.services.firm_cache.schema import FIRM_EMPLOYEES_COLLECTION
+        snap = db.collection(FIRM_EMPLOYEES_COLLECTION).document(candidate_id).get()
+        if not getattr(snap, "exists", False):
+            return {}
+        d = snap.to_dict() or {}
+        out = {}
+        if d.get("company"):
+            out["company"] = d["company"]
+        if d.get("title"):
+            out["title"] = d["title"]
+        return out
+    except Exception:
+        return {}
+
+
 @ranker_bp.route("/candidates", methods=["GET"])
 @require_firebase_auth
 def get_ranked_candidates():
@@ -219,10 +292,21 @@ def get_ranked_candidates():
 
     dig_state = "not_needed"   # not_needed | ran | not_asked | capped
 
-    candidates = rank_people_for_user(
-        uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-        company=company, role=role, focus=focus,
-    )
+    deck_features: dict = {}
+    candidates = None
+    # The general deck (no company / role / focus) is served from the
+    # student's saved list, built in the background after onboarding, so
+    # the page fills instantly (people_deck_cache). Narrow decks stay live.
+    general_deck = not (company or role or focus)
+    if general_deck:
+        served = people_deck_cache.serve(uid, db, limit, exclude_ids)
+        if served:
+            candidates, deck_features = served
+    if candidates is None:
+        candidates = rank_people_for_user(
+            uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
+            company=company, role=role, focus=focus, features_out=deck_features,
+        )
 
     # Dry well? DIG (2026-08-30). "Show more from your targets" rank-orders the
     # warehouse, so a target firm nobody has searched yet (Rylan's well was
@@ -248,8 +332,13 @@ def get_ranked_candidates():
             # (UnboundLocalError on every deck request that had candidates).
             # Removed 2026-10-29.
             _ctx = _load_user_context(uid, db) or {}
-            # A company deck digs that company and nothing else.
+            # A company deck digs that company and nothing else. On v1 the
+            # targets also come from saved jobs.
             _firms = [slugify_company(company)] if company else (_ctx.get("dream_company_slugs") or [])
+            if not company and ranker_variant(uid) == "v1":
+                from app.services.ranking_profile import load_ranking_profile
+                _targets = load_ranking_profile(uid, db, _ctx.get("profile") or {})["targets"]
+                _firms = list(_targets) or _firms
             _firms = [f for f in _firms if f]
             _dig_firm = None
             for _f in _firms:
@@ -266,11 +355,15 @@ def get_ranked_candidates():
             # alumni-first lead-in isn't portable — Coresignal's search credit
             # was separate from its per-collect cost, so school filtering was
             # effectively free. FullEnrich bills per row, so the dig just
-            # fetches the firm and the ranker leans on firm_employees query
-            # ordering (schools array-contains the user's slug) to pull alumni
-            # to the top later.
+            # fetches the firm and person_ranker leans on the firm_employees
+            # query ordering (schools array-contains the user's slug) to pull
+            # alumni to the top later.
             if _dig_firm and fullenrich_search.discovery_enabled(db):
-                _dig_name = company if company else _dig_firm.replace("-", " ")
+                # Hyphen AND underscore both get turned back into spaces so
+                # multi-word firm slugs like "warner_bros_entertainment" OR
+                # "warner-bros-entertainment" display as "warner bros
+                # entertainment" (OFF-?? fix on Nick's branch).
+                _dig_name = company if company else _dig_firm.replace("_", " ").replace("-", " ")
                 _dug, _rl, _sv, _meta = fullenrich_search.search_contacts_from_prompt(
                     {"companies": [{"name": _dig_name}],
                      "title_variations": [role] if role else [],
@@ -296,9 +389,10 @@ def get_ranked_candidates():
                 ]
                 if _dug:
                     cache_pdl_contacts(_dug, shape="app", async_write=False)
+                    deck_features.clear()
                     candidates = rank_people_for_user(
                         uid=uid, db=db, limit=limit, exclude_ids=exclude_ids,
-                        company=company, role=role, focus=focus,
+                        company=company, role=role, focus=focus, features_out=deck_features,
                     )
                     logger.info("ranker dig (fullenrich): %s -> %d returned, %d ranked",
                                 _dig_firm, len(_dug), len(candidates))
@@ -333,17 +427,11 @@ def get_ranked_candidates():
                 ):
                     ready_ids.add(snap.id)
             if ready_ids:
-                # Tier order as the RANKER emitted it, then readiness, then
-                # the ranker's own order as the final stable tiebreak.
-                tier_rank: dict = {}
-                for c in candidates:
-                    tier_rank.setdefault(c.get("tier"), len(tier_rank))
-                original_index = {id(c): i for i, c in enumerate(candidates)}
-                candidates.sort(key=lambda c: (
-                    tier_rank.get(c.get("tier"), 99),
-                    0 if ((c.get("person") or {}).get("id") in ready_ids) else 1,
-                    original_index[id(c)],
-                ))
+                # Runs of one tier in the RANKER's order, then readiness
+                # inside the run, then the ranker's order as the stable
+                # tiebreak. A run ends when the tier changes, so a person
+                # the ranker placed lower never jumps above a different tier.
+                candidates[:] = _ready_first_within_tier_runs(candidates, ready_ids)
         except Exception:
             logger.exception("ranked warm-first ordering failed uid=%s", uid)
 
@@ -351,6 +439,17 @@ def get_ranked_candidates():
     # reveal-email calls so the training row can be joined back to the
     # deck context (features_snapshot, rank).
     deck_id = uuid.uuid4().hex[:16]
+
+    # Server-side impression (OFF-41): one row per deck with every person
+    # shown, their rank, and the features the ranker scored them on. Swipe,
+    # reveal, outreach, reply and meeting rows join back by deck_id and
+    # candidate id, so outcomes can be traced to what the ranker saw.
+    # Written off the request thread so logging never slows the deck.
+    if candidates:
+        _run_in_background(
+            _log_deck_served, uid, deck_id, surface, list(candidates), dict(deck_features),
+            company=company, role=role, focus=focus,
+        )
 
     # FullEnrich prefetch (2026-08-25), same trick the prompt deck ships:
     # one bulk waterfall for the top of the deck, fired while the student
@@ -523,6 +622,7 @@ def post_ranker_feedback():
         try:
             (db.collection("users").document(uid)
                .collection("peoplePreferences").document(candidate_id).delete())
+            people_deck_cache.restore(uid, db, candidate_id)
         except Exception as exc:
             logger.warning("feedback: restore delete failed uid=%s cid=%s: %s", uid, candidate_id, exc)
         try:
@@ -574,7 +674,9 @@ def post_ranker_feedback():
                "last_rank":    rank_int,
                "updated_at":   now.isoformat(),
                "updated_ts":   firestore.SERVER_TIMESTAMP,
+               **_swiped_person_fields(db, candidate_id),
            }))
+        people_deck_cache.remove(uid, db, candidate_id)
     except Exception as exc:
         logger.warning(
             "feedback: peoplePreferences write failed uid=%s cid=%s: %s",
@@ -590,7 +692,8 @@ def post_ranker_feedback():
         contact_id=candidate_id,
         rank=rank_int,
         score=float(score) if isinstance(score, (int, float)) else None,
-        model_version="person_ranker_v0",
+        model_version=model_version_for(uid),
+        variant=ranker_variant(uid),
         surface="ios_swipe_deck",
         features_snapshot={
             "tier":           tier,
@@ -632,8 +735,12 @@ def reveal_candidate_email(candidate_id):
       * Hunter API error / timeout
 
     Request body (optional):
-      {"deck_id": str}      # for cross-endpoint attribution on the
+      {"deck_id": str,      # for cross-endpoint attribution on the
                             # recommendation_events row
+       "use_first_outreach": bool}  # walkthrough: spend the one-time free
+                            # first outreach instead of credits (see
+                            # app.services.first_outreach). Never falls back
+                            # to a charge: 409 when it can't be used.
 
     Response 200 (email found + charge-worthy):
       {email, verified: true, source, confidence, cached: bool, charged: true}
@@ -651,6 +758,7 @@ def reveal_candidate_email(candidate_id):
     data = request.get_json(silent=True) or {}
     deck_id = (data.get("deck_id") or "").strip()
     surface = (str(data.get("surface") or "").strip()[:40]) or "ios_swipe_deck"
+    use_first_outreach = data.get("use_first_outreach") is True
 
     candidate_id = (candidate_id or "").strip()
     if not candidate_id:
@@ -677,6 +785,7 @@ def reveal_candidate_email(candidate_id):
                 "confidence": cached.get("confidence", 0),
                 "cached":     True,
                 "charged":    False,
+                "free":       False,
             })
 
     # ── 2. firm_employees lookup — need first/last/company for Hunter.
@@ -700,17 +809,29 @@ def reveal_candidate_email(candidate_id):
     # falls back to initials. Acceptable until a Perplexity-based URL lookup
     # is wired in (not scoped here).
 
-    # ── 3. Deduct atomically BEFORE any paid work.
-    from app.services.auth import deduct_credits_atomic
+    # ── 3. Pay BEFORE any paid work: the one-time free first outreach when
+    # the walkthrough asks for it, else credits, deducted atomically.
     from app.config import CREDIT_COSTS
     cost = int(CREDIT_COSTS.get("reveal_email", 8))
-    ok, remaining = deduct_credits_atomic(uid, cost, "reveal_email")
-    if not ok:
-        return jsonify({
-            "error":    "insufficient_credits",
-            "required": cost,
-            "have":     remaining,
-        }), 402
+    reservation = None
+    if use_first_outreach:
+        from app.services import first_outreach
+        reservation, why = first_outreach.reserve(db, uid, candidate_id)
+        if reservation is None:
+            # Never a silent charge: the client shows the price and asks.
+            return jsonify({
+                "error":    "free_outreach_in_use" if why == "in_use" else "free_outreach_unavailable",
+                "required": cost,
+            }), 409
+    else:
+        from app.services.auth import deduct_credits_atomic
+        ok, remaining = deduct_credits_atomic(uid, cost, "reveal_email")
+        if not ok:
+            return jsonify({
+                "error":    "insufficient_credits",
+                "required": cost,
+                "have":     remaining,
+            }), 402
 
     email: str | None = None
     verified = False
@@ -822,7 +943,11 @@ def reveal_candidate_email(candidate_id):
                 charge_worthy = True
 
     if not charge_worthy:
-        _try_refund(uid, cost, "reveal_email_refund")
+        if reservation is not None:
+            # A miss never uses up the free first outreach.
+            first_outreach.release(db, uid, reservation)
+        else:
+            _try_refund(uid, cost, "reveal_email_refund")
         return jsonify({
             "email":      email,
             "verified":   verified,
@@ -831,7 +956,11 @@ def reveal_candidate_email(candidate_id):
             "reason":     "no_email_found" if not email else "below_confidence_threshold",
             "cached":     False,
             "charged":    False,
+            "free":       False,
         })
+
+    if reservation is not None:
+        first_outreach.consume(db, uid, reservation, candidate_id)
 
     # ── 5. Charge-worthy: write cache + event. Failures here do NOT
     # cost the user the charge — they got the email in the response and
@@ -878,7 +1007,8 @@ def reveal_candidate_email(candidate_id):
         uid=uid,
         contact_id=candidate_id,
         contact_email=email or "",
-        model_version="person_ranker_v0",
+        model_version=model_version_for(uid),
+        variant=ranker_variant(uid),
         surface=surface,
         features_snapshot={
             "deck_id":    deck_id,
@@ -886,7 +1016,8 @@ def reveal_candidate_email(candidate_id):
             "source":     source,
         },
         attribution_source="ranker_deck",
-        extra={"cost_credits": cost},
+        extra=({"cost_credits": 0, "entitlement": "first_outreach"} if reservation is not None
+               else {"cost_credits": cost}),
         doc_id=f"email_revealed_{uid}_{candidate_id}",
     )
 
@@ -896,8 +1027,51 @@ def reveal_candidate_email(candidate_id):
         "source":     source,
         "confidence": confidence,
         "cached":     False,
-        "charged":    True,
+        "charged":    reservation is None,
+        "free":       reservation is not None,
     })
+
+
+def _apply_confirmed_profile(user_data: dict, user_profile: dict, pre_parsed):
+    """School / major / year the student confirmed in onboarding, written
+    into the sender profile and the stored parse the email writer reads.
+    "Not in school" means no school at all. Returns (pre_parsed, resume_text)
+    with resume_text None so the writer doesn't re-parse the resume."""
+    academics = user_data.get("academics") or {}
+    profile = user_data.get("profile") or {}
+    school = "" if user_data.get("universityOptOut") is True else (academics.get("university") or "").strip()
+    major = (academics.get("major") or "").strip()
+    year = str(academics.get("graduationYear") or "").strip()
+    name = (profile.get("fullName") or "").strip()
+    if name:
+        user_profile["name"] = name
+    user_profile.update({"university": school, "major": major, "year": year, "graduationYear": year})
+    if isinstance(pre_parsed, dict):
+        education = dict(pre_parsed.get("education") or {}) if isinstance(pre_parsed.get("education"), dict) else {}
+        education.update({"university": school, "major": major, "graduation": year})
+        pre_parsed = {**pre_parsed, "education": education}
+    return pre_parsed, None
+
+
+@ranker_bp.route("/first-outreach", methods=["GET"])
+@require_firebase_auth
+def first_outreach_status():
+    """GET /api/ranker/first-outreach -> {eligible, status}
+
+    Whether the one-time free first outreach can be used (so the walkthrough
+    can say "free" before the click). Off for everyone until
+    FIRST_OUTREACH_FREE_SINCE is set.
+    """
+    from app.services import first_outreach
+    uid = request.firebase_user["uid"]
+    db = get_db()
+    if not db:
+        return jsonify({"error": "Database not initialized"}), 500
+    try:
+        return jsonify(first_outreach.status(db, uid))
+    except Exception:
+        logger.exception("first_outreach status failed uid=%s", uid)
+        return jsonify({"eligible": False, "status": "ineligible"})
 
 
 @ranker_bp.route("/candidates/<candidate_id>/outreach", methods=["POST"])
@@ -909,7 +1083,13 @@ def candidate_outreach(candidate_id):
     find-then-draft; here the person is already chosen by hand, so this
     route must never go looking for "someone like them".
 
-    Request body: {"action": "draft"|"send", "deck_id": optional str}
+    Request body: {"action": "draft"|"send", "deck_id": optional str,
+                   "create_gmail_draft": optional bool (default true),
+                   "surface": optional str (event label)}
+
+    create_gmail_draft=false keeps the draft in the app only, even when
+    Gmail is connected: the first-use walkthrough lets the user edit the
+    email before anything reaches Gmail. Ignored for action=send.
 
     Pricing: NO additional charge. The reveal-email swipe already paid
     for "the verification and the written email" (see the reveal_person
@@ -944,6 +1124,8 @@ def candidate_outreach(candidate_id):
     if action not in ("draft", "send"):
         return jsonify({"error": "action must be draft or send"}), 400
     deck_id = (data.get("deck_id") or "").strip()
+    create_gmail_draft = data.get("create_gmail_draft") is not False
+    surface = (str(data.get("surface") or "").strip()[:40]) or "ios_swipe_deck"
 
     candidate_id = (candidate_id or "").strip()
     if not candidate_id:
@@ -997,7 +1179,13 @@ def candidate_outreach(candidate_id):
     contact["EmailVerified"] = bool(reveal.get("verified"))
     contact["EmailConfidenceScore"] = int(reveal.get("confidence") or 0)
 
-    # 3. Generate in the prompt-search voice.
+    # 3. Generate in the prompt-search voice. No model configured is a
+    # server setup problem, not a bad draft: say so instead of "failed".
+    from app.services.openai_client import get_openai_client, get_anthropic_client
+    if not get_openai_client() and not get_anthropic_client():
+        logger.error("outreach: no LLM configured (OPENAI_API_KEY / CLAUDE_API_KEY) uid=%s", uid)
+        return jsonify({"error": "email_generation_not_configured"}), 503
+
     from app.utils.users import get_outreach_email
     from app.routes.runs import _resolve_email_template
     from app.services.reply_generation import (
@@ -1056,13 +1244,22 @@ def candidate_outreach(candidate_id):
             and not (cached_resume_src and cached_resume_src != resume_url)):
         resume_text = cached_resume_text
 
+    # Onboarding v2: the student confirmed (or corrected) their school,
+    # major and year. Those beat a fresh parse of the resume text, which the
+    # writer otherwise prefers; the stored parse still supplies everything
+    # else (experience, activities). Skipping the re-parse also saves a model
+    # call per draft.
+    pre_parsed = user_data.get("resumeParsed")
+    if (user_data.get("onboarding") or {}).get("profileConfirmedAt"):
+        pre_parsed, resume_text = _apply_confirmed_profile(user_data, user_profile, pre_parsed)
+
     try:
         email_results = batch_generate_emails(
             contacts=[contact],
             resume_text=resume_text,
             user_profile=user_profile,
             career_interests=career_interests,
-            pre_parsed_user_info=user_data.get("resumeParsed"),
+            pre_parsed_user_info=pre_parsed,
             template_instructions=template_instructions,
             email_template_purpose=email_template_purpose,
             resume_filename=user_data.get("resumeFileName"),
@@ -1139,7 +1336,7 @@ def candidate_outreach(candidate_id):
             except Exception as exc:
                 logger.warning("outreach: send failed uid=%s cid=%s: %s", uid, candidate_id, exc)
 
-    if creds and not sent:
+    if creds and not sent and (create_gmail_draft or action == "send"):
         try:
             from app.services.gmail_client import create_drafts_parallel
             draft_results = create_drafts_parallel(
@@ -1208,6 +1405,7 @@ def candidate_outreach(candidate_id):
             contact_doc["gmailThreadId"] = gmail_thread_id
     try:
         contact_ref.set(contact_doc)
+        people_deck_cache.remove(uid, db, candidate_id)
     except Exception as exc:
         logger.warning(
             "outreach: contact doc write failed uid=%s cid=%s: %s "
@@ -1221,8 +1419,9 @@ def candidate_outreach(candidate_id):
         uid=uid,
         contact_id=candidate_id,
         contact_email=to_email,
-        model_version="person_ranker_v0",
-        surface="ios_swipe_deck",
+        model_version=model_version_for(uid),
+        variant=ranker_variant(uid),
+        surface=surface,
         features_snapshot={"deck_id": deck_id, "action": action},
         attribution_source="ranker_deck",
         extra={"cost_credits": 0},

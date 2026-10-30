@@ -58,6 +58,9 @@ service cloud.firestore {
         && !('referralRewardPendingAt' in request.resource.data.diff(resource.data).affectedKeys())
         && !('referralBannerDismissedAt' in request.resource.data.diff(resource.data).affectedKeys())
         && !('referralLaunchModalSeenAt' in request.resource.data.diff(resource.data).affectedKeys())
+        // (4b) org alumni directory memberships — written only by
+        // routes/orgs.py; a client write would unlock any org's directory
+        && !('orgMemberships' in request.resource.data.diff(resource.data).affectedKeys())
         // (5) .edu 50% discount — the backend trusts `isStudent`/`eduEmail`
         // when selling the discounted student SKUs. isStudent:true may only be
         // set when the signed-in email actually ends in .edu (setting it false
@@ -72,7 +75,7 @@ service cloud.firestore {
       // bookkeeping fields (admin SDK bypasses rules, so attribution still works).
       // Same .edu truthfulness bar as updates for the discount signals.
       allow create: if request.auth != null && request.auth.uid == userId
-        && !request.resource.data.keys().hasAny(['referralCode', 'referredBy', 'referralQualifiedCount', 'referralRewardClaimed', 'referralRewardClaimedAt', 'referralRewardPendingAt', 'referralBannerDismissedAt', 'referralLaunchModalSeenAt'])
+        && !request.resource.data.keys().hasAny(['referralCode', 'referredBy', 'referralQualifiedCount', 'referralRewardClaimed', 'referralRewardClaimedAt', 'referralRewardPendingAt', 'referralBannerDismissedAt', 'referralLaunchModalSeenAt', 'orgMemberships'])
         && (!('isStudent' in request.resource.data)
             || request.resource.data.isStudent != true
             || request.auth.token.email.lower().matches('.*\\.edu'));

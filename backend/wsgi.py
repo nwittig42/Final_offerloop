@@ -31,6 +31,7 @@ from .app.routes.search_history import search_history_bp
 from .app.routes.parse_prompt import parse_prompt_bp
 from .app.routes.contact_import import contact_import_bp
 from .app.routes.job_board import job_board_bp
+from .app.routes.find_contacts import find_contacts_bp
 from .app.routes.auto_apply import auto_apply_bp
 from .app.routes.alumni_discovery_routes import alumni_discovery_bp
 from .app.routes.scout_assistant import scout_assistant_bp, scout_admin_bp
@@ -56,10 +57,12 @@ from .app.routes.resume_workshop_public import resume_workshop_public_bp
 from .app.routes.meeting_prep_public import meeting_prep_public_bp
 from .app.routes.find_hiring_manager_public import find_hiring_manager_public_bp
 from .app.routes.find_companies_public import find_companies_public_bp
+from .app.routes.orgs import orgs_bp
 from .app.routes.find_jobs_public import find_jobs_public_bp
 from .app.routes.find_people_public import find_people_public_bp
 from .app.routes.shares import shares_bp
 from .app.routes.lifecycle import lifecycle_bp
+from .app.routes.email_tracking import email_tracking_bp
 from .app.routes.beehiiv_webhook import beehiiv_webhook_bp
 from .app.routes.mobile_handoff import mobile_handoff_bp, web_handoff_bp
 from .app.extensions import init_app_extensions
@@ -170,6 +173,12 @@ def create_app() -> Flask:
 
     print("🚀 Initializing app extensions...")
     init_app_extensions(app)
+    try:
+        from .app.config import integration_status
+        missing = [name for name, ok in integration_status().items() if not ok]
+        print("[config] signup -> first email integrations not configured: " + (", ".join(missing) or "none"))
+    except Exception as e:
+        print(f"[config] integration status check failed: {e}")
     print("✅ App extensions initialized")
 
     # Security headers on every response. Enumerated script-src so a compromised
@@ -279,6 +288,7 @@ def create_app() -> Flask:
     app.register_blueprint(parse_prompt_bp)
     app.register_blueprint(contact_import_bp)
     app.register_blueprint(job_board_bp)
+    app.register_blueprint(find_contacts_bp)
     app.register_blueprint(auto_apply_bp)
     app.register_blueprint(alumni_discovery_bp)
     app.register_blueprint(scout_assistant_bp)
@@ -304,9 +314,11 @@ def create_app() -> Flask:
     app.register_blueprint(meeting_prep_public_bp)
     app.register_blueprint(find_hiring_manager_public_bp)
     app.register_blueprint(find_companies_public_bp)
+    app.register_blueprint(orgs_bp)  # Org alumni directories (OFF-42)
     app.register_blueprint(find_jobs_public_bp)
     app.register_blueprint(find_people_public_bp)
     app.register_blueprint(lifecycle_bp)         # /api/lifecycle/tick + unsubscribe
+    app.register_blueprint(email_tracking_bp)    # /api/t/o/<token>.gif (email open pixel, public)
     app.register_blueprint(beehiiv_webhook_bp)   # /api/beehiiv/webhook (inbound unsub sync)
     app.register_blueprint(mobile_handoff_bp)    # /api/mobile/web-handoff (app -> web checkout)
     app.register_blueprint(web_handoff_bp)       # /api/web/handoff-exchange (web burn code -> custom token)

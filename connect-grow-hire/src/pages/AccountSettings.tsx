@@ -1,4 +1,5 @@
-import { ArrowLeft, Upload, Trash2, LogOut, CreditCard, FileText, User, GraduationCap, Briefcase, Rocket, Settings, AlertTriangle, Lock, Eye, RefreshCw, X, CheckCircle, Mail, Target, Star, Gift, Copy, Send } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, LogOut, CreditCard, FileText, User, GraduationCap, Briefcase, Rocket, Settings, AlertTriangle, Lock, Eye, RefreshCw, X, CheckCircle, Mail, Target, Star, Gift, Copy, Send, Users } from "lucide-react";
+import OrganizationsSettings from "@/components/settings/OrganizationsSettings";
 import { ApplicationProfileModal } from "@/components/jobs/ApplicationProfileModal";
 import EmailPreferencesPanel from "@/components/settings/EmailPreferencesPanel";
 import { useNavigate } from "react-router-dom";
@@ -12,6 +13,7 @@ import { DreamCompanyAutocomplete } from "@/components/DreamCompanyAutocomplete"
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { MainContentWrapper } from "@/components/MainContentWrapper";
 import { AppHeader } from "@/components/AppHeader";
+import { ConnectAiAssistantsCard } from "@/components/ConnectAiAssistantsCard";
 import { useFirebaseAuth } from "@/contexts/FirebaseAuthContext";
 import { db, storage, auth } from '@/lib/firebase';
 import { signOut as firebaseSignOut, onAuthStateChanged } from 'firebase/auth';
@@ -20,7 +22,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { apiService, BACKEND_URL } from "@/services/api";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, ChevronRight } from "lucide-react";
 import { ACCEPTED_RESUME_TYPES, isValidResumeFile } from "@/utils/resumeFileTypes";
 
 // Constants for dropdowns
@@ -101,6 +103,7 @@ const locations = [
 // Section navigation items
 const sections = [
   { id: 'personal', label: 'Personal Information', icon: User },
+  { id: 'organizations', label: 'Organizations', icon: Users },
   { id: 'work_background', label: 'Professional Background', icon: Briefcase },
   { id: 'academic', label: 'Education', icon: GraduationCap },
   { id: 'professional', label: 'Professional Profile', icon: Briefcase },
@@ -445,7 +448,8 @@ export default function AccountSettings() {
       // Auto-fill empty profile fields from resume data
       const userSnap = await getDoc(userRef);
       const existing = userSnap.exists() ? userSnap.data() : {};
-      if (!existing.university && !existing.academics?.university && result.data.university) {
+      // ...except a school after the user said they're not in school.
+      if (!existing.university && !existing.academics?.university && !existing.universityOptOut && result.data.university) {
         resumeUpdate.university = result.data.university;
         resumeUpdate['academics.university'] = result.data.university;
         setPersonalInfo(prev => ({ ...prev, university: result.data.university }));
@@ -642,6 +646,22 @@ export default function AccountSettings() {
         degree: academicInfo.currentDegree,
         university: personalInfo.university,
       };
+
+      // The people ranker reads goals.careerTrack / goals.dreamCompanies before
+      // the top-level fields, and onboarding fills both. Keep goals in step so
+      // a change here isn't shadowed by what onboarding inferred, and mark a
+      // changed field as the user's own (fieldProvenance).
+      const existingGoals = existingData?.goals || {};
+      updates['goals.careerTrack'] = goalsInfo.careerTrack;
+      updates['goals.dreamCompanies'] = goalsInfo.dreamCompanies;
+      const prevCompanies = existingGoals.dreamCompanies || existingData?.dreamCompanies || [];
+      if (JSON.stringify(goalsInfo.dreamCompanies) !== JSON.stringify(prevCompanies)) {
+        updates['goals.dreamCompaniesSource'] = 'settings';
+        updates['fieldProvenance.targetCompanies'] = 'explicit';
+      }
+      if (goalsInfo.careerTrack !== (existingGoals.careerTrack || existingData?.careerTrack || '')) {
+        updates['fieldProvenance.careerTrack'] = 'explicit';
+      }
 
       updates.userType = userType;
 
@@ -1026,6 +1046,8 @@ export default function AccountSettings() {
                     Looking to update your profile? Open your profile →
                   </button>
                 </div>
+
+                <ConnectAiAssistantsCard style={{ marginBottom: '28px' }} />
 
                 {/* Profile Completeness */}
                 {(() => {
@@ -1421,6 +1443,16 @@ export default function AccountSettings() {
                         />
                       </div>
                     </div>
+                  </SettingsSection>
+
+                  {/* Organizations (OFF-42): unlocks that org's alumni directory in Find */}
+                  <SettingsSection
+                    id="organizations"
+                    icon={Users}
+                    title="Organizations"
+                    description="Groups you belong to. Members get the full alumni directory in Find."
+                  >
+                    <OrganizationsSettings />
                   </SettingsSection>
 
                   {/* Professional Background Section (working professionals only) */}
@@ -2837,6 +2869,30 @@ export default function AccountSettings() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Click-through to the full Integrations page (moved off the sidebar) */}
+                    <button
+                      type="button"
+                      onClick={() => navigate('/integrations')}
+                      className="flex w-full items-center justify-between gap-4 text-left transition-colors hover:bg-[#F3F6FF]"
+                      style={{
+                        padding: '16px 20px',
+                        borderRadius: '12px',
+                        background: '#FAFBFF',
+                        border: '1px solid rgba(59, 130, 246, 0.06)',
+                        fontFamily: "'DM Sans', system-ui, sans-serif",
+                      }}
+                    >
+                      <span>
+                        <span style={{ display: 'block', fontWeight: 600, color: '#0F172A', fontSize: '15px' }}>
+                          Manage integrations
+                        </span>
+                        <span style={{ display: 'block', fontSize: '14px', color: '#6B7280', marginTop: '2px' }}>
+                          Connect accounts and see what's coming next
+                        </span>
+                      </span>
+                      <ChevronRight className="h-5 w-5 shrink-0" style={{ color: '#94A3B8' }} />
+                    </button>
                     </div>
                   </SettingsSection>
 

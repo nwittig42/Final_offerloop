@@ -28,11 +28,13 @@ interface OnboardingSourceProps {
   onBuild: () => void;
   initialLinkedinUrl?: string;
   submitting?: boolean;
+  // Onboarding dry run: parse without saving the resume to the account.
+  preview?: boolean;
 }
 
 const LINKEDIN_RE = /linkedin\.com\/in\//i;
 
-export const OnboardingSource = ({ onNext, onBuild, initialLinkedinUrl, submitting }: OnboardingSourceProps) => {
+export const OnboardingSource = ({ onNext, onBuild, initialLinkedinUrl, submitting, preview = false }: OnboardingSourceProps) => {
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumePrefill, setResumePrefill] = useState<ResumePrefill | null>(null);
   const [resumeParsing, setResumeParsing] = useState(false);
@@ -60,7 +62,9 @@ export const OnboardingSource = ({ onNext, onBuild, initialLinkedinUrl, submitti
     try {
       const formData = new FormData();
       formData.append("resume", file);
-      const token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
+      // Signed in, parse-resume also saves the file as their resume; the
+      // preview sends it anonymously so it's only parsed.
+      const token = auth.currentUser && !preview ? await auth.currentUser.getIdToken() : null;
       const res = await fetch(`${BACKEND_URL}/api/parse-resume`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -107,7 +111,7 @@ export const OnboardingSource = ({ onNext, onBuild, initialLinkedinUrl, submitti
         setInternalSubmitting(true);
         setPhase("enriching");
         try {
-          const result = await enrichLinkedInOnboarding(linkedinUrl.trim());
+          const result = await enrichLinkedInOnboarding(linkedinUrl.trim(), preview);
           proceed("resume", result ? prefillFromLinkedin(result) : null);
           return;
         } catch {
@@ -129,11 +133,11 @@ export const OnboardingSource = ({ onNext, onBuild, initialLinkedinUrl, submitti
       setPhase("enriching");
       let linkedinPrefill: ResumePrefill = EMPTY_PREFILL;
       try {
-        const result = await enrichLinkedInOnboarding(linkedinUrl.trim());
+        const result = await enrichLinkedInOnboarding(linkedinUrl.trim(), preview);
         if (result) linkedinPrefill = prefillFromLinkedin(result);
         setPhase("writing");
         try {
-          await resumeFromLinkedIn();
+          if (!preview) await resumeFromLinkedIn();
         } catch {
           /* best-effort */
         }

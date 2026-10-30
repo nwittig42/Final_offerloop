@@ -32,7 +32,7 @@ const McpServerPage = () => {
       <div className="flex min-h-screen w-full font-sans" style={{ color: "var(--ink)" }}>
         <AppSidebar />
         <MainContentWrapper>
-          <AppHeader title="MCP Server" />
+          <AppHeader title="Claude & ChatGPT" />
 
           <div className="flex-1 overflow-y-auto" style={{ background: "#FBFCFE" }}>
             <div className="mx-auto w-full max-w-[820px] px-5 py-6 sm:px-10 sm:py-8">
@@ -46,7 +46,7 @@ const McpServerPage = () => {
                   margin: 0,
                 }}
               >
-                MCP Server
+                Connect to Claude and ChatGPT
               </h1>
               <p className="mt-2 text-sm text-muted-foreground">
                 Use Offerloop from your AI assistant. Pick where you want to set it up.

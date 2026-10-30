@@ -4,17 +4,19 @@ Background sync for Outbox: find stale threads and sync them with Gmail.
 import logging
 
 from app.extensions import get_db
+from app.models.pipeline_stages import AWAITING_REPLY_STAGES
 from app.services.outbox_service import sync_contact_thread
 
 logger = logging.getLogger(__name__)
 
-STALE_PIPELINE_STAGES = ("email_sent", "waiting_on_reply", "replied")
+STALE_PIPELINE_STAGES = AWAITING_REPLY_STAGES | frozenset({"replied"})
 
 
 def get_stale_thread_ids(uid, max_threads=10):
     """
     Return contact IDs that are candidates for sync: inOutbox=True,
-    pipelineStage in [email_sent, waiting_on_reply, replied], have gmailThreadId.
+    pipelineStage in [email_sent, waiting_on_reply, email_opened, replied],
+    have gmailThreadId.
     Sorted by lastSyncAt ascending (oldest first). At most max_threads.
     """
     try:
