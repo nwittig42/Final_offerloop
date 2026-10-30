@@ -240,8 +240,13 @@ def get_ranked_candidates():
         dig_state = "ran"
         try:
             from app.services.firm_cache.writer import cache_pdl_contacts
-            from app.services.person_ranker import _load_user_context
             from app.services import fullenrich_search
+            # NOTE: _load_user_context is imported at module scope (line 27).
+            # Previously there was a redundant `from app.services.person_ranker
+            # import _load_user_context` here, which made Python treat the name
+            # as local to the whole function and broke the chips block below
+            # (UnboundLocalError on every deck request that had candidates).
+            # Removed 2026-10-29.
             _ctx = _load_user_context(uid, db) or {}
             # A company deck digs that company and nothing else.
             _firms = [slugify_company(company)] if company else (_ctx.get("dream_company_slugs") or [])

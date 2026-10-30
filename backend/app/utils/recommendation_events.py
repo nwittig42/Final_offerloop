@@ -14,8 +14,16 @@ from app.extensions import get_db
 
 logger = logging.getLogger(__name__)
 
-# Valid event types for the recommendation funnel
+# Valid event types for the recommendation funnel.
+# Prior to 2026-10-29 this set only covered the website Find flow
+# (recommendation_shown through offer_received). The deck ranker (shipped
+# Sep 7 2026 in cdcb3be6) and its reveal/swipe/outreach paths fire several
+# event types that were never added here, so every one of those calls hit
+# the "unknown event_type" guard and silently dropped the event. The
+# "email_revealed" caller additionally passed doc_id= which was never a
+# parameter (TypeError on every reveal). Both bugs are fixed below.
 VALID_REC_EVENT_TYPES = {
+    # Website Find flow — recommendation_events.py's original scope
     "recommendation_shown",     # contact appeared in search results
     "recommendation_clicked",   # user clicked on a contact card
     "email_drafted",            # email generated for contact
@@ -23,6 +31,16 @@ VALID_REC_EVENT_TYPES = {
     "email_replied",            # reply detected (via gmail webhook)
     "meeting_scheduled",        # meeting booked with contact
     "offer_received",           # offer from contact's company
+    # Deck ranker (ranker.py) — person_swipe_* training signals.
+    # Signal values are validated upstream to {right, left, skip, restore}.
+    "person_swipe_right",
+    "person_swipe_left",
+    "person_swipe_skip",
+    "person_swipe_restore",
+    # Deck ranker — reveal / outreach commercial events
+    "email_revealed",           # user spent credits to reveal an email
+    "outreach_sent",            # user sent an outreach via the deck
+    "outreach_drafted",         # user drafted an outreach via the deck
 }
 
 
@@ -41,8 +59,17 @@ def log_recommendation_event(
     features_snapshot: dict | None = None,
     attribution_source: str = "",
     extra: dict | None = None,
+    doc_id: str = "",
 ) -> None:
-    """Write a recommendation event to Firestore. Swallows all errors."""
+    """Write a recommendation event to Firestore. Swallows all errors.
+
+    When `doc_id` is non-empty, the write goes to
+    `recommendation_events/{doc_id}` as a set() — safe to retry, same event
+    stays one row. The reveal-email path uses this to make a credit-spend
+    event idempotent against client retries. When `doc_id` is empty, the
+    write uses .add() for an auto-generated id (impression/feedback
+    events, which are safe to duplicate at low frequency).
+    """
     try:
         if event_type not in VALID_REC_EVENT_TYPES:
             logger.warning("recommendation log called with unknown event_type=%s", event_type)
@@ -90,11 +117,16 @@ def log_recommendation_event(
             **(extra or {}),
         }
 
-        db.collection("recommendation_events").add(doc)
+        if doc_id:
+            # Idempotent write — same doc_id from retries overwrites itself
+            # rather than creating duplicate rows.
+            db.collection("recommendation_events").document(doc_id).set(doc)
+        else:
+            db.collection("recommendation_events").add(doc)
 
         logger.debug(
-            "recommendation event logged: type=%s uid=%s contact=%s",
-            event_type, uid, contact_id,
+            "recommendation event logged: type=%s uid=%s contact=%s doc_id=%s",
+            event_type, uid, contact_id, doc_id or "(auto)",
         )
     except Exception:
         logger.exception(
