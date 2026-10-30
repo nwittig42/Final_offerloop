@@ -258,6 +258,55 @@ def _envelope(source: str, **extras) -> dict:
     return env
 
 
+# Fields a legitimate profile item SHOULD have at least one of. If none are
+# present, the "item" is almost certainly an error payload or a stub, not a
+# real profile. Order matches HarvestAPI's documented schema; a future actor
+# swap can extend this set rather than remove any.
+_APIFY_PROFILE_SIGNATURE_FIELDS = (
+    "firstName", "lastName", "name", "fullName",
+    "headline", "publicIdentifier",
+    "linkedinUrl", "linkedin_url", "profileUrl",
+)
+
+
+def _detect_actor_error(item: dict) -> tuple[bool, str]:
+    """Does this Apify item look like an error payload instead of a profile?
+
+    HarvestAPI's linkedin-profile-scraper (and other pay-per-event LinkedIn
+    actors) return HTTP 200 with a successfully-dispatched run even when the
+    actor itself refuses — most notably the free-tier 50-run cap, which lands
+    as `[{"error": "Free users are limited to 50 runs..."}]`. The platform's
+    402 Payment Required path only fires for Apify-level quota, not for an
+    actor-level refusal. See `docs.apify.com/api/v2/actor-run-sync-get-dataset-items-post`.
+
+    Returns (is_error, error_message). Two shapes are detected:
+      1. Flat:   {"error": "message text"}  (HarvestAPI style)
+      2. Nested: {"error": {"type": "...", "message": "..."}}
+                 (Apify platform style, in case an actor echoes it in-band)
+    An item that has none of the profile signature fields is also treated as
+    an error even without an explicit `error` key — the normalizer downstream
+    would silently emit a hollow profile otherwise, which is what hit us on
+    2026-10-29 when the free-tier cap tripped mid-session.
+    """
+    if not isinstance(item, dict):
+        return False, ""
+
+    err = item.get("error")
+    if isinstance(err, str) and err.strip():
+        return True, err.strip()
+    if isinstance(err, dict):
+        msg = (err.get("message") or err.get("type") or "").strip()
+        if msg:
+            return True, msg
+
+    # No explicit error key — check whether the item has ANY signature of a
+    # real profile. If none, treat it as a dressed-up error.
+    if not any(item.get(k) for k in _APIFY_PROFILE_SIGNATURE_FIELDS):
+        return True, "actor returned no profile fields"
+
+    return False, ""
+
+
 @meter_call("apify", "user_linkedin_profile")
 def enrich_user_linkedin_profile_via_apify(linkedin_url: str) -> dict:
     """Scrape one user's own LinkedIn profile.
@@ -331,6 +380,23 @@ def enrich_user_linkedin_profile_via_apify(linkedin_url: str) -> dict:
             return _envelope(
                 "apify_no_data",
                 error="no_data",
+                actor=APIFY_USER_PROFILE_ACTOR_ID,
+            )
+
+        # Actor-level error detection (2026-10-29). HarvestAPI's free-tier
+        # 50-run cap arrives as HTTP 200 + [{"error": "..."}], and before
+        # this guard every downstream consumer (coffee chat prep, extension
+        # import) silently got an empty "profile" and the sellable_gate
+        # chain lower down couldn't tell the difference between a quota
+        # refusal and a real miss.
+        is_error, err_msg = _detect_actor_error(items[0])
+        if is_error:
+            logger.warning(
+                f"[Apify] User-profile actor refused for {canon}: {err_msg[:200]}"
+            )
+            return _envelope(
+                "apify_actor_error",
+                error=err_msg or "actor_error",
                 actor=APIFY_USER_PROFILE_ACTOR_ID,
             )
 
